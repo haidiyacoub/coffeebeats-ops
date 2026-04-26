@@ -1,0 +1,5 @@
+# Coffee Beats — internal ops portal
+# Not for public indexing
+
+User-agent: *
+Disallow: /

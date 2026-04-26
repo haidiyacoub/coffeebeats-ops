@@ -1,0 +1,15 @@
+# Netlify configuration for coffeebeats.art ops portal
+# Prevents public indexing and sets security headers
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Block all search engine crawlers at the HTTP header level
+    X-Robots-Tag = "noindex, nofollow, noarchive, nosnippet"
+    # Security headers
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=(self)"
+    # Cache: don't cache the app HTML (always serve fresh)
+    Cache-Control = "no-store, no-cache, must-revalidate"
