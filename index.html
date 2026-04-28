@@ -929,9 +929,14 @@ async function doSync() {
         bank_ledger: state.bank_ledger,
         sales: state.sales,
         shifts: state.shifts,
+        shift_closes: state.shift_closes,
+        cleaning_logs: state.cleaning_logs,
+        signin_stamps: state.signin_stamps,
         menu: state.menu,
         salary_config: state.salary_config,
         salary_loans: state.salary_loans,
+        salaries: state.salaries,
+        overtime_logs: state.overtime_logs,
         penalties: state.penalties,
         deleted_penalties: state.deleted_penalties,
         overheads: state.overheads,
@@ -940,6 +945,16 @@ async function doSync() {
         rosters: state.rosters,
         roaster_schedules: state.roaster_schedules,
         maadi_deposits: state.maadi_deposits,
+        photo_log: state.photo_log,
+        assets: state.assets,
+        leaves: state.leaves,
+        purchase_units: state.purchase_units,
+        inventory_alerts: state.inventory_alerts,
+        alert_log: state.alert_log,
+        handbook_recipes: state.handbook_recipes,
+        settings: state.settings,
+        _seeded_ids: state._seeded_ids,
+        _migration_khaled_role_fixed: state._migration_khaled_role_fixed,
       },
     };
     await fetch(state.settings.sync_url, {
@@ -7006,8 +7021,8 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
         });
         // Keep log manageable (latest 500)
         if (state.photo_log.length > 500) state.photo_log.length = 500;
-        // Persist silently
-        try { localStorage.setItem("cb_ops_state", JSON.stringify(state)); } catch (e) {}
+        // Persist and sync to Sheets
+        saveState();
       }
       statusBar.className = "ph-status done";
       badge.style.display = "block";
