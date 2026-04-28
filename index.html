@@ -510,8 +510,8 @@ const IDB = (() => {
 // Uses an "unsigned upload preset" — sign up free at cloudinary.com,
 // create an Upload Preset set to "Unsigned", paste cloud name + preset in Settings.
 const Cloudinary = (() => {
-  const cloudName   = () => (typeof state !== "undefined" && state?.settings?.cloudinary_cloud) || "";
-  const uploadPreset= () => (typeof state !== "undefined" && state?.settings?.cloudinary_preset) || "";
+  const cloudName   = () => (typeof state !== "undefined" && state?.settings?.cloudinary_cloud) || "dbharv4kb";
+  const uploadPreset= () => (typeof state !== "undefined" && state?.settings?.cloudinary_preset) || "coffee-beats-ops";
   const isConfigured= () => !!(cloudName() && uploadPreset());
 
   async function uploadPhoto(blob, filename) {
@@ -522,7 +522,7 @@ const Cloudinary = (() => {
     form.append("folder", "coffee-beats");
     // Store original filename as a tag so it shows in the gallery
     form.append("context", `original_name=${encodeURIComponent(filename)}`);
-    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName()}/image/upload`, {
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName()}/auto/upload`, {
       method: "POST", body: form,
     });
     if (!res.ok) {
@@ -692,6 +692,7 @@ function defaultState() {
     sales: [],
     shifts: [],
     photo_log: [],            // { id, url, name, context, at, form, branch }
+    assets: [],               // { id, at, by, by_name, title, note, url, folder }
     settings: {
       sync_url: "",           // Google Apps Script Web App URL
       sync_secret: "",        // shared secret for Apps Script to verify
@@ -728,36 +729,63 @@ function migrateState(s) {
   const takenPin = (p) => s.users.some(u => u.pin === p);
   const nextPin = () => { for (let i = 1000; i < 9999; i++) { const p = String(i); if (!takenPin(p)) return p; } return "0000"; };
 
+  // Track seeded user IDs so renames don't trigger re-seeding.
+  // We check by PIN (which is stable) in addition to name — if neither the default
+  // name NOR the default PIN exists, the slot is genuinely empty and we seed it.
+  s._seeded_ids = s._seeded_ids || {};
+
+  // Helper: find a user by stored seeded ID, then by name, then by default PIN.
+  function findSeeded(key, defaultName, defaultPin) {
+    if (s._seeded_ids[key]) {
+      const byId = s.users.find(u => u.id === s._seeded_ids[key]);
+      if (byId) return byId;
+    }
+    const byName = s.users.find(u => (u.name||"").toLowerCase() === defaultName.toLowerCase());
+    if (byName) { s._seeded_ids[key] = byName.id; return byName; }
+    const byPin  = s.users.find(u => u.pin === defaultPin);
+    if (byPin)  { s._seeded_ids[key] = byPin.id;  return byPin;  }
+    return null;
+  }
+
   // Seed Khaled + Barista 3 if they don't already exist (for upgrades from older state).
-  // Khaled is a BARISTA (not an owner) — same access as Youssef / Mahmoud / the others.
-  if (!hasName("Khaled")) {
-    s.users.push({ id: uuid(), name: "Khaled", role: "barista", pin: takenPin("7777") ? nextPin() : "7777", branches: ["maadi","zawya"], active: true });
+  // Checks by name OR by default PIN so renaming doesn't cause a duplicate to be seeded.
+  if (!findSeeded("khaled", "Khaled", "7777")) {
+    const u = { id: uuid(), name: "Khaled", role: "barista", pin: takenPin("7777") ? nextPin() : "7777", branches: ["maadi","zawya"], active: true };
+    s.users.push(u); s._seeded_ids.khaled = u.id;
   }
-  if (!hasName("Barista 3")) {
-    s.users.push({ id: uuid(), name: "Barista 3", role: "barista", pin: takenPin("6666") ? nextPin() : "6666", branches: ["maadi","zawya"], active: true });
+  if (!findSeeded("barista3", "Barista 3", "6666")) {
+    const u = { id: uuid(), name: "Barista 3", role: "barista", pin: takenPin("6666") ? nextPin() : "6666", branches: ["maadi","zawya"], active: true };
+    s.users.push(u); s._seeded_ids.barista3 = u.id;
   }
-  // Migration: Khaled is a barista. Previous builds mistakenly set his role to "owner" — this
-  // corrects any stale state on reload. Baristas rotate both branches, no deny/extra overrides.
-  const khaledUser = s.users.find(u => (u.name || "").toLowerCase() === "khaled");
-  if (khaledUser) {
-    khaledUser.role         = "barista";
-    khaledUser.branches     = ["maadi","zawya"];
-    khaledUser.deny_access  = [];
-    khaledUser.extra_access = [];
-    khaledUser.active       = khaledUser.active !== false;
+
+  // One-time migration: Khaled was mistakenly set to "owner" in earlier builds.
+  // Only run once (flag prevents it from fighting any deliberate role change the owner makes).
+  if (!s._migration_khaled_role_fixed) {
+    const khaledUser = findSeeded("khaled", "Khaled", "7777");
+    if (khaledUser && khaledUser.role === "owner") {
+      khaledUser.role         = "barista";
+      khaledUser.branches     = ["maadi","zawya"];
+      khaledUser.deny_access  = [];
+      khaledUser.extra_access = [];
+      khaledUser.active       = khaledUser.active !== false;
+    }
+    s._migration_khaled_role_fixed = true;
   }
 
   // Seed Zawya baristas Bakr & Mohamed if they don't exist yet.
-  if (!hasName("Bakr")) {
-    s.users.push({ id: uuid(), name: "Bakr", role: "barista", pin: takenPin("8888") ? nextPin() : "8888", branches: ["zawya"], active: true });
+  // Same PIN-aware check so renames are safe.
+  if (!findSeeded("bakr", "Bakr", "8888")) {
+    const u = { id: uuid(), name: "Bakr", role: "barista", pin: takenPin("8888") ? nextPin() : "8888", branches: ["zawya"], active: true };
+    s.users.push(u); s._seeded_ids.bakr = u.id;
   } else {
-    const u = s.users.find(u => (u.name||"").toLowerCase() === "bakr");
+    const u = findSeeded("bakr", "Bakr", "8888");
     if (u && !u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
   }
-  if (!hasName("Mohamed")) {
-    s.users.push({ id: uuid(), name: "Mohamed", role: "barista", pin: takenPin("9876") ? nextPin() : "9876", branches: ["zawya"], active: true });
+  if (!findSeeded("mohamed", "Mohamed", "9876")) {
+    const u = { id: uuid(), name: "Mohamed", role: "barista", pin: takenPin("9876") ? nextPin() : "9876", branches: ["zawya"], active: true };
+    s.users.push(u); s._seeded_ids.mohamed = u.id;
   } else {
-    const u = s.users.find(u => (u.name||"").toLowerCase() === "mohamed");
+    const u = findSeeded("mohamed", "Mohamed", "9876");
     if (u && !u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
   }
 
@@ -783,6 +811,7 @@ function migrateState(s) {
   s.cleaning_logs       = s.cleaning_logs || [];
   s.signin_stamps       = s.signin_stamps || [];
   s.photo_log           = s.photo_log     || [];
+  s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
   s.leaves              = s.leaves        || []; // leave requests (annual / sick)
   s.settings.cloudinary_cloud    = s.settings.cloudinary_cloud    || "";
   s.settings.cloudinary_preset   = s.settings.cloudinary_preset   || "";
@@ -1369,6 +1398,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "My Leaves", "View leave history", () => go("leave_list")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
   }
 
   // ── Head barista: full frontline + management extras ──
@@ -1385,6 +1415,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🧹", "Cleaning Log", "Upload checklist photo", () => go("cleaning_log_new")));
     tiles.appendChild(tile("🕐", "Sign-In Stamp", "Clock-in photo", () => go("signin_stamp_new")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
     if (u.branches.includes("maadi")) {
       tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
@@ -1419,6 +1450,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
   }
@@ -1576,6 +1608,10 @@ routes.waste_new = function (u) {
       el("div", { class: "small muted", style: { marginTop: "6px", textAlign: "center" } }, `Will reduce ${it.name} at ${branch} by ${qty || 0} ${it.unit}.`),
     ]));
   }
+  // ── Photo evidence (multi-image, auto-uploads to Cloudinary) ──
+  const wastePhotoField = makePhotoField({ label: "Evidence photo(s)", multiple: true, formLabel: "Record Waste" });
+  wrap.appendChild(wastePhotoField.el);
+
   search.addEventListener("input", update);
   update();
 
@@ -1583,15 +1619,19 @@ routes.waste_new = function (u) {
     const it = state.items.find(x => x.id === itemId);
     if (!it || !qty || qty <= 0) { toast("Pick an item and qty > 0", "error"); return; }
     const s = stamp();
+    const photoUrls = wastePhotoField.getCloudUrls().filter(Boolean);
     state.waste.push({
       id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
       branch,
       inv_item_id: itemId, item_name: it.name, unit: it.unit,
       qty_canonical: qty,
       reason, note,
+      photos: photoUrls,
+      image_url: photoUrls[0] || "",
     });
     saveState();
-    toast("Waste recorded");
+    const photoMsg = photoUrls.length ? ` · ${photoUrls.length} photo${photoUrls.length > 1 ? "s" : ""} saved` : "";
+    toast("Waste recorded" + photoMsg);
     go("waste_list");
   }
 
@@ -1607,12 +1647,26 @@ routes.waste_list = function (u) {
     .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
   if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, "No entries yet."));
   for (const w of mine) {
+    const photoCount = (w.photos || []).length;
+    const titleNode = el("div", { class: "title" });
+    titleNode.appendChild(document.createTextNode(`${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`));
+    if (photoCount) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "12px", color: "var(--ok)", fontWeight: "600" } }, `📷 ${photoCount}`));
+    const growParts = [
+      titleNode,
+      el("div", { class: "sub" }, `${w.branch} · ${w.reason}${w.note ? ` · ${w.note}` : ""}`),
+      el("div", { class: "sub" }, `by ${w.by_name} · ${fmtDate(w.at)}`),
+    ];
+    if (photoCount) {
+      const thumbRow = el("div", { style: { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } });
+      (w.photos || []).forEach(url => {
+        const thumb = el("img", { src: url, style: { width: "56px", height: "56px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)", cursor: "pointer" } });
+        thumb.addEventListener("click", () => { const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; a.click(); });
+        thumbRow.appendChild(thumb);
+      });
+      growParts.push(thumbRow);
+    }
     list.appendChild(el("div", { class: "row" }, [
-      el("div", { class: "grow" }, [
-        el("div", { class: "title" }, `${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`),
-        el("div", { class: "sub" }, `${w.branch} · ${w.reason}${w.note?` · ${w.note}`:""}`),
-        el("div", { class: "sub" }, `by ${w.by_name} · ${fmtDate(w.at)}`),
-      ]),
+      el("div", { class: "grow" }, growParts),
       el("span", { class: "pill" }, w.branch),
     ]));
   }
@@ -2035,6 +2089,7 @@ routes.snapshot_new = function (u) {
       id: snapId, as_of: asOf, branch, created_at: s.at, created_by: s.by, created_by_name: s.by_name, device: s.device,
       entries,
       notes: `${branch} count`,
+      image_url: "",
     });
     undoStack.push(snapId);
     saveState();
@@ -2050,6 +2105,129 @@ routes.snapshot_new = function (u) {
     renderUndo();
     draw();
   }
+
+  // ── Manage Items panel (owner + head_barista only) ──────────────
+  if (["owner", "head_barista"].includes(u.role)) {
+    let panelOpen = false;
+    let showInactive = false;
+
+    const panelBody = el("div", { style: { display: "none", marginTop: "12px" } });
+
+    // Add-item form
+    const nameIn = el("input", { type: "text", placeholder: "Item name (e.g. Oat Milk)" });
+    const unitIn = el("input", { type: "text", placeholder: "Unit (e.g. ml, g, pcs, kg)" });
+    const catIn  = el("input", { type: "text", placeholder: "Category (e.g. Milk, Syrup, Packaging)" });
+
+    const mgmtList = el("div", { class: "list", style: { marginTop: "12px" } });
+
+    function drawMgmt() {
+      mgmtList.innerHTML = "";
+      let items = state.items.filter(i =>
+        showInactive || i.active
+      ).slice().sort((a, b) => {
+        if (a.active !== b.active) return a.active ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      if (!items.length) {
+        mgmtList.appendChild(el("div", { class: "muted", style: { padding: "12px 4px" } }, "No items."));
+        return;
+      }
+      for (const it of items) {
+        const badge = el("span", {
+          style: {
+            padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: "700",
+            background: it.active ? "#dcfce7" : "#f3f4f6",
+            color: it.active ? "#16a34a" : "#9ca3af",
+            marginLeft: "6px",
+          }
+        }, it.active ? "Active" : "Inactive");
+        const toggleBtn = el("button", {
+          class: "btn ghost",
+          style: { padding: "5px 12px", fontSize: "12px", color: it.active ? "var(--bad,#dc2626)" : "var(--good,#16a34a)" },
+          onClick: () => {
+            const msg = it.active
+              ? `Deactivate "${it.name}"? It will no longer appear in counts.`
+              : `Restore "${it.name}"? It will reappear in counts.`;
+            if (!confirm(msg)) return;
+            it.active      = !it.active;
+            it.modified_by = currentUser() ? currentUser().name : "—";
+            it.modified_at = now();
+            saveState();
+            toast(`"${it.name}" ${it.active ? "restored ✓" : "deactivated ✓"}`);
+            drawMgmt();
+            draw(); // refresh the count list above
+          }
+        }, it.active ? "Deactivate" : "Restore");
+        mgmtList.appendChild(el("div", { class: "row", style: { opacity: it.active ? "1" : "0.5" } }, [
+          el("div", { class: "grow" }, [
+            el("div", { class: "title" }, [it.name, badge]),
+            el("div", { class: "sub" }, `${it.category || "—"} · ${it.unit}`),
+          ]),
+          toggleBtn,
+        ]));
+      }
+    }
+
+    function addMgmtItem() {
+      const name = nameIn.value.trim();
+      const unit = unitIn.value.trim();
+      const cat  = catIn.value.trim();
+      if (!name) { toast("Enter an item name", "error"); return; }
+      if (!unit) { toast("Enter a unit (e.g. ml, g, pcs)", "error"); return; }
+      if (state.items.some(i => i.name.toLowerCase() === name.toLowerCase())) {
+        toast("An item with that name already exists.", "error"); return;
+      }
+      state.items.push({
+        id: "inv_" + String(Date.now()),
+        name, unit,
+        category: cat || "Other",
+        active: true,
+        added_by: currentUser() ? currentUser().name : "—",
+        added_at: now(),
+      });
+      saveState();
+      nameIn.value = ""; unitIn.value = ""; catIn.value = "";
+      toast(`"${name}" added ✓`);
+      drawMgmt();
+      draw(); // refresh count list above
+    }
+
+    const toggleInactiveBtn = el("button", {
+      class: "btn ghost",
+      style: { fontSize: "12px", marginTop: "8px" },
+      onClick: () => {
+        showInactive = !showInactive;
+        toggleInactiveBtn.textContent = showInactive ? "Hide inactive items" : "Show inactive items";
+        drawMgmt();
+      }
+    }, "Show inactive items");
+
+    panelBody.appendChild(el("div", { class: "card", style: { marginBottom: "8px" } }, [
+      el("div", { class: "muted", style: { textTransform: "uppercase", letterSpacing: "1px", fontSize: "11px", marginBottom: "10px", fontWeight: "700" } }, "Add new item"),
+      el("div", { class: "form-field" }, [ el("label", {}, "Name"), nameIn ]),
+      el("div", { class: "form-field" }, [ el("label", {}, "Unit"), unitIn ]),
+      el("div", { class: "form-field" }, [ el("label", {}, "Category"), catIn ]),
+      el("button", { class: "btn", style: { marginTop: "8px" }, onClick: addMgmtItem }, "＋ Add item"),
+    ]));
+    panelBody.appendChild(toggleInactiveBtn);
+    panelBody.appendChild(mgmtList);
+
+    const togglePanelBtn = el("button", {
+      class: "btn ghost",
+      style: { marginTop: "24px", width: "100%", borderStyle: "dashed", fontSize: "13px" },
+      onClick: () => {
+        panelOpen = !panelOpen;
+        panelBody.style.display = panelOpen ? "block" : "none";
+        togglePanelBtn.textContent = panelOpen ? "▲ Hide item management" : "🗂️ Manage items (add / remove)";
+        if (panelOpen) drawMgmt();
+      }
+    }, "🗂️ Manage items (add / remove)");
+
+    wrap.appendChild(togglePanelBtn);
+    wrap.appendChild(panelBody);
+  }
+  // ── end Manage Items ────────────────────────────────────────────
+
   return wrap;
 };
 
@@ -2353,6 +2531,7 @@ routes.purchase_new = function (u) {
       receipt_photo_ids: photoIds,
       receipt_photo_names: photoNames,
       receipt_drive_ids: receiptPhotoField.getDriveIds(),
+      image_url: (receiptPhotoField.getCloudUrls().filter(Boolean)[0]) || "",
     };
     state.purchases.push(purch);
     // ledger side-effects
@@ -4745,10 +4924,11 @@ routes.users = function (u) {
   const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
   btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => addUser() }, "➕ Add user"));
   btnRow.appendChild(el("button", { class: "btn ghost", onClick: () => {
-    // Re-run migration — idempotent; adds Khaled/Barista 3 if not already there.
+    // Re-run migration — idempotent; adds any missing default baristas if not already there.
+    // Won't overwrite renamed users — lookup is by ID/PIN, not name.
     migrateState(state);
     saveState();
-    toast("Missing baristas seeded (Khaled, Barista 3)");
+    toast("Missing baristas seeded");
     render();
   } }, "🔄 Seed missing baristas"));
   wrap.appendChild(btnRow);
@@ -5366,11 +5546,11 @@ routes.settings = function (u) {
   ]));
 
   gd.appendChild(el("label", {}, "Cloud Name"));
-  const gdCloud = el("input", { type: "text", value: state.settings.cloudinary_cloud || "", placeholder: "e.g. my-coffee-beats" });
+  const gdCloud = el("input", { type: "text", value: state.settings.cloudinary_cloud || "dbharv4kb", placeholder: "e.g. my-coffee-beats" });
   gd.appendChild(gdCloud);
 
   gd.appendChild(el("label", {}, "Upload Preset (Unsigned)"));
-  const gdPreset = el("input", { type: "text", value: state.settings.cloudinary_preset || "", placeholder: "e.g. coffee_beats_unsigned" });
+  const gdPreset = el("input", { type: "text", value: state.settings.cloudinary_preset || "coffee-beats-ops", placeholder: "e.g. coffee_beats_unsigned" });
   gd.appendChild(gdPreset);
 
   const gdRow = el("div", { class: "btn-row", style: { marginTop: "10px" } });
@@ -6446,6 +6626,164 @@ routes.handbook = function (u) {
 // ==============================================================
 // PHOTO GALLERY (Cloudinary)
 // ==============================================================
+// ==============================================================
+// ASSETS — upload and store files/documents with title & notes
+// ==============================================================
+routes.assets_new = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Upload Asset", "Store a file or document with a title and note."));
+
+  let pendingUrl = "";
+  let title = "";
+  let note = "";
+  let folder = "assets";
+
+  const card = el("div", { class: "card" });
+
+  // Title input
+  card.appendChild(el("label", {}, "Title *"));
+  const titleIn = el("input", { type: "text", placeholder: "e.g. Lease agreement, Equipment manual…" });
+  titleIn.addEventListener("input", () => { title = titleIn.value.trim(); });
+  card.appendChild(titleIn);
+
+  // Note input
+  card.appendChild(el("label", { style: { marginTop: "10px" } }, "Note (optional)"));
+  const noteIn = el("input", { type: "text", placeholder: "Any additional context…" });
+  noteIn.addEventListener("input", () => { note = noteIn.value.trim(); });
+  card.appendChild(noteIn);
+
+  // Photo/file upload using existing makePhotoField
+  const assetPhotoField = makePhotoField({ label: "File / Photo *", required: true, multiple: false, formLabel: "Asset Upload" });
+  card.appendChild(assetPhotoField.el);
+
+  // Submit
+  const submitBtn = el("button", { class: "btn", style: { marginTop: "14px" } }, "Save Asset");
+  submitBtn.addEventListener("click", () => {
+    const urls = assetPhotoField.getCloudUrls().filter(Boolean);
+    if (!title) { toast("Enter a title first", "error"); return; }
+    if (!urls.length) { toast("Upload a file first", "error"); return; }
+    const s = stamp();
+    state.assets = state.assets || [];
+    state.assets.unshift({
+      id: uuid(),
+      at: s.at,
+      by: s.by,
+      by_name: s.by_name,
+      title,
+      note,
+      url: urls[0],
+      folder: "assets",
+      image_url: urls[0],
+    });
+    saveState();
+    toast("Asset saved ✓");
+    go("assets_list");
+  });
+  card.appendChild(submitBtn);
+  wrap.appendChild(card);
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+routes.assets_list = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Assets", "Uploaded files and documents."));
+
+  const addBtn = el("div", { class: "fab-row", style: { marginBottom: "12px" } }, [
+    el("button", { class: "btn", onClick: () => go("assets_new") }, "+ Upload Asset"),
+  ]);
+  wrap.appendChild(addBtn);
+
+  state.assets = state.assets || [];
+  const list = state.assets.slice().sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+
+  if (!list.length) {
+    wrap.appendChild(el("div", { class: "card", style: { textAlign: "center", padding: "30px 14px" } }, [
+      el("div", { style: { fontSize: "40px", marginBottom: "10px" } }, "📁"),
+      el("div", { style: { fontWeight: "600", marginBottom: "6px" } }, "No assets yet"),
+      el("div", { class: "muted small" }, "Upload files, documents or photos using the button above."),
+    ]));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  const listEl = el("div", { class: "list" });
+  for (const asset of list) {
+    const isImage = asset.url && /\.(jpg|jpeg|png|gif|webp|heic)/i.test(asset.url.split("?")[0]);
+    const rowTag = asset.url ? "a" : "div";
+    const rowAttrs = {
+      style: {
+        display: "flex", alignItems: "center", gap: "12px",
+        padding: "12px", background: "var(--surface)",
+        border: "1px solid var(--border)", borderRadius: "12px",
+        textDecoration: "none", color: "var(--ink)", cursor: asset.url ? "pointer" : "default",
+        marginBottom: "8px",
+      },
+    };
+    if (asset.url) { rowAttrs.href = asset.url; rowAttrs.target = "_blank"; rowAttrs.rel = "noopener"; }
+    const row = el(rowTag, rowAttrs);
+
+    // Thumbnail
+    const thumb = el("div", {
+      style: {
+        flexShrink: "0", width: "56px", height: "56px", borderRadius: "8px",
+        overflow: "hidden", background: "var(--surface-2)", border: "1px solid var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px",
+      },
+    });
+    if (asset.url && isImage) {
+      const thumbUrl = asset.url.replace("/upload/", "/upload/w_112,h_112,c_fill/");
+      thumb.appendChild(el("img", {
+        src: thumbUrl, loading: "lazy",
+        style: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
+      }));
+    } else {
+      thumb.textContent = asset.url ? "📄" : "📁";
+    }
+    row.appendChild(thumb);
+
+    // Info
+    const info = el("div", { style: { flex: "1", minWidth: "0" } });
+    info.appendChild(el("div", {
+      style: { fontWeight: "600", fontSize: "14px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    }, asset.title || "Untitled"));
+    if (asset.note) {
+      info.appendChild(el("div", { class: "muted small", style: { marginTop: "3px" } }, asset.note));
+    }
+    info.appendChild(el("div", { class: "muted small", style: { marginTop: "3px" } },
+      `${asset.by_name || "Unknown"} · ${fmtDate(asset.at)}`));
+    if (asset.url) {
+      info.appendChild(el("div", { style: { fontSize: "11px", color: "var(--accent)", marginTop: "4px", fontWeight: "600" } }, "Open ↗"));
+    }
+    row.appendChild(info);
+
+    // Delete button (owner only)
+    if (u.role === "owner") {
+      const del = el("button", {
+        style: {
+          flexShrink: "0", background: "none", border: "none", fontSize: "18px",
+          cursor: "pointer", color: "var(--bad)", padding: "4px 8px",
+        },
+      }, "🗑");
+      del.addEventListener("click", e => {
+        e.preventDefault(); e.stopPropagation();
+        if (confirm(`Delete "${asset.title}"?`)) {
+          state.assets = (state.assets || []).filter(a => a.id !== asset.id);
+          saveState();
+          render();
+        }
+      });
+      row.appendChild(del);
+    }
+
+    listEl.appendChild(row);
+  }
+
+  wrap.appendChild(listEl);
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
 routes.photo_gallery = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Photo Gallery", "All photos uploaded from this app — sorted by date."));
@@ -6789,6 +7127,7 @@ function exportAllCSVZip() {
     "menu.csv": toCSV(state.menu.map(({ branches, ...rest }) => ({ ...rest, branches: (branches||[]).join("|") }))),
     "snapshots.csv": toCSV(state.snapshots.flatMap(s => s.entries.map(e => ({ snapshot_id: s.id, as_of: s.as_of, created_at: s.created_at, created_by: s.created_by_name||s.created_by, branch: e.branch, item_id: e.item_id, qty: e.qty })))),
     "waste.csv": toCSV(state.waste),
+    "assets.csv": toCSV(state.assets || []),
     "purchases_header.csv": toCSV(state.purchases.map(({ lines, ...rest }) => rest)),
     "purchases_lines.csv": toCSV(state.purchases.flatMap(p => p.lines.map(l => ({ purchase_id: p.id, date: p.date, branch: p.branch, supplier: p.supplier, ...l })))),
     "petty_cash.csv": toCSV(state.petty_cash),
