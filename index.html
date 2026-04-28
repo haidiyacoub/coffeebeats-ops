@@ -5568,14 +5568,21 @@ routes.settings = function (u) {
   gdTestBtn.addEventListener("click", async () => {
     if (!gdCloud.value.trim() || !gdPreset.value.trim()) { toast("Enter Cloud Name and Preset first", "error"); return; }
     gdTestBtn.disabled = true; gdTestBtn.textContent = "Testing…";
-    // Quick test: ping the Cloudinary ping endpoint
+    // Verify by uploading a tiny 1×1 transparent PNG — this is the only reliable
+    // browser-side test since Cloudinary's /ping endpoint blocks cross-origin requests.
     try {
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${gdCloud.value.trim()}/ping`);
+      const tiny = await fetch("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==").then(r => r.blob());
+      const form = new FormData();
+      form.append("file", tiny, "test.png");
+      form.append("upload_preset", gdPreset.value.trim());
+      form.append("folder", "coffee-beats/_test");
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${gdCloud.value.trim()}/image/upload`, { method: "POST", body: form });
       const data = await res.json();
-      if (data.status === "ok") {
-        toast("✓ Cloudinary connected! Photos will sync automatically.");
+      if (data.secure_url) {
+        toast("✓ Cloudinary connected! Cloud name and preset are working.");
       } else {
-        toast("Cloud name not found — check spelling.", "error");
+        const msg = data.error?.message || "Check your Cloud Name and Upload Preset.";
+        toast("Connection failed: " + msg, "error");
       }
     } catch (e) {
       toast("Connection failed: " + e.message, "error");
@@ -6932,7 +6939,15 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
     if (!Cloudinary.isConfigured()) return;
     statusBar.className = "ph-status uploading";
     try {
-      const filename = `${formLabel ? formLabel.replace(/\s+/g,"_") + "_" : ""}${Date.now()}_${file.name}`;
+      // Build filename: April28_CleaningLog_Seif
+      const _now = new Date();
+      const _months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      const _dateStamp = _months[_now.getMonth()] + _now.getDate();
+      const _uploader = (typeof currentUser === "function" && currentUser()?.name)
+        ? currentUser().name.split(" ")[0]
+        : "Unknown";
+      const _label = formLabel ? formLabel.replace(/\s+/g,"") : "Upload";
+      const filename = `${_dateStamp}_${_label}_${_uploader}`;
       const data = await Cloudinary.uploadPhoto(file, filename);
       cloudUrls[idx] = data.secure_url;
       // Log to state for gallery
