@@ -1,3 +1,6 @@
+HTTP 200 
+Content-Type: text/html; charset=UTF-8
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -485,6 +488,7 @@ function makeBranchPicker(branches, getCurrent, onPick) {
 // ----- storage -----
 const STORAGE_KEY = "cb.v1.state";
 const DEVICE_KEY = "cb.device";
+const BOOTSTRAP_SYNC_URL = "https://script.google.com/macros/s/AKfycbytZdJs8cr-v13qRBMZ8lfpSMijTHQtZwu5AatqhWCBYRBvpA6kNXN7fJOTqW25xm6VTA/exec"; // auto-bootstrap sync on any new device
 const deviceId = (() => {
   let id = localStorage.getItem(DEVICE_KEY);
   if (!id) { id = uuid(); localStorage.setItem(DEVICE_KEY, id); }
@@ -694,7 +698,7 @@ function defaultState() {
     photo_log: [],            // { id, url, name, context, at, form, branch }
     assets: [],               // { id, at, by, by_name, title, note, url, folder }
     settings: {
-      sync_url: "",           // Google Apps Script Web App URL
+      sync_url: BOOTSTRAP_SYNC_URL, // Google Apps Script Web App URL
       sync_secret: "",        // shared secret for Apps Script to verify
       currency: "EGP",
       branches: ["maadi", "zawya"],
@@ -818,6 +822,7 @@ function migrateState(s) {
   s.settings.team_code           = s.settings.team_code           || "coffeeteam2026";
   s.settings.head_barista_email  = s.settings.head_barista_email  || "";
   s.settings.owner_email         = s.settings.owner_email         || "coffeebeats@haidiyacoub.com";
+  if (!s.settings.sync_url) s.settings.sync_url = BOOTSTRAP_SYNC_URL; // backfill on any existing device that never had it
 
   // Strip items that were removed from the menu (per Haïdi, April 2026):
   // Coffee Type 4 and Spiced Turkish Coffee should no longer appear anywhere.
