@@ -776,21 +776,30 @@ function migrateState(s) {
     s._migration_khaled_role_fixed = true;
   }
 
-  // Seed Zawya baristas Bakr & Mohamed if they don't exist yet.
+  // Seed Zawya staff Bakr (helper) & Mohamed (manager) if they don't exist yet.
   // Same PIN-aware check so renames are safe.
+  // Both are Zawya-only with no app access but appear in the barista drink allowance list.
   if (!findSeeded("bakr", "Bakr", "8888")) {
-    const u = { id: uuid(), name: "Bakr", role: "barista", pin: takenPin("8888") ? nextPin() : "8888", branches: ["zawya"], active: true };
+    const u = { id: uuid(), name: "Bakr", role: "helper", pin: takenPin("8888") ? nextPin() : "8888", branches: ["zawya"], active: true, deny_access: [] };
     s.users.push(u); s._seeded_ids.bakr = u.id;
   } else {
     const u = findSeeded("bakr", "Bakr", "8888");
-    if (u && !u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+    if (u) {
+      if (!u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+      // Upgrade role to helper (Zawya-only, no app access)
+      if (u.role === "barista") { u.role = "helper"; u.deny_access = []; }
+    }
   }
   if (!findSeeded("mohamed", "Mohamed", "9876")) {
-    const u = { id: uuid(), name: "Mohamed", role: "barista", pin: takenPin("9876") ? nextPin() : "9876", branches: ["zawya"], active: true };
+    const u = { id: uuid(), name: "Mohamed", role: "manager", pin: takenPin("9876") ? nextPin() : "9876", branches: ["zawya"], active: true, deny_access: [] };
     s.users.push(u); s._seeded_ids.mohamed = u.id;
   } else {
     const u = findSeeded("mohamed", "Mohamed", "9876");
-    if (u && !u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+    if (u) {
+      if (!u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+      // Upgrade role to manager (Zawya-only, no app access)
+      if (u.role === "barista") { u.role = "manager"; u.deny_access = []; }
+    }
   }
 
   // Ensure handbook_recipes collection exists (seeded with full menu on first run).
@@ -1248,6 +1257,9 @@ const ROLE_ACCESS = {
                  "leave_new","leave_list"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
   barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list"],
+  // Zawya-only roles — no app access, kept in list for barista drink allowance tracking
+  manager: [],
+  helper:  [],
 };
 function canAccess(routeName, u) {
   if (!u) return false;
@@ -1288,7 +1300,7 @@ function render() {
 }
 
 function topbar(u) {
-  const roleLabel = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista" }[u.role] || u.role;
+  const roleLabel = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" }[u.role] || u.role;
   const t = el("div", { class: "topbar" }, [
     el("img", { class: "logo", src: CB_LOGO_SRC, alt: "Coffee Beats", style: { height: "52px" } }),
     el("div", { style: { flex: "1" } }),
@@ -1330,7 +1342,7 @@ function loginView() {
   const people = state.users.filter(u => u.active);
   for (const u of people) {
     const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
-    const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista" };
+    const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
     const branchLabel = u.role === "barista" ? "rotates" : (u.role === "accountant" ? "all branches" : u.branches.join(", "));
     const r = el("div", { class: "row", onClick: () => selectUser(u) }, [
       el("div", { class: "icon", style: { fontSize: "22px" } }, icon),
@@ -1429,6 +1441,13 @@ routes.home = function (u) {
     tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
+  }
+
+  // ── Manager / Helper (Zawya only): no app tiles — drink allowance tracking only ──
+  if (u.role === "manager" || u.role === "helper") {
+    tiles.appendChild(el("div", {
+      style: { gridColumn: "1 / -1", textAlign: "center", padding: "32px 16px", color: "var(--ink-dim)", fontSize: "14px" },
+    }, "No app access — contact the owner if you need assistance."));
   }
 
   // ── Owner + Accountant: full operational visibility ──
@@ -1702,7 +1721,7 @@ routes.shift_close_new = function (u) {
   // Returns all active baristas/head-baristas assigned to the current branch.
   function getBaristaList() {
     return state.users
-      .filter(x => x.active && (x.role === "barista" || x.role === "head_barista") && x.branches.includes(branch))
+      .filter(x => x.active && (x.role === "barista" || x.role === "head_barista" || x.role === "manager" || x.role === "helper") && x.branches.includes(branch))
       .map(x => x.name);
   }
   let baristaAllowanceDrinks = [{ who: "", drink: "" }];
@@ -6896,6 +6915,26 @@ routes.photo_gallery = function (u) {
         info.appendChild(el("div", { class: "muted small", style: { marginTop: "4px", fontSize: "11px" } }, "Saved locally · not synced to cloud"));
       }
       row.appendChild(info);
+
+      // Delete button — owner only
+      if (u.role === "owner") {
+        const delBtn = el("button", {
+          style: {
+            flexShrink: "0", background: "none", border: "none", cursor: "pointer",
+            color: "var(--bad)", fontSize: "18px", padding: "8px", lineHeight: "1",
+          },
+          title: "Delete photo",
+          onClick: (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!confirm(`Delete "${ph.name || "this photo"}"? This only removes it from the log — the file on Cloudinary is unaffected.`)) return;
+            state.photo_log = (state.photo_log || []).filter(p => p !== ph);
+            saveState();
+            toast("Photo removed from log");
+            go("photo_gallery");
+          },
+        }, "🗑️");
+        row.appendChild(delBtn);
+      }
 
       listEl.appendChild(row);
     }
