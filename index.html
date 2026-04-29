@@ -823,6 +823,10 @@ function migrateState(s) {
   s.shift_closes        = s.shift_closes  || [];
   s.cleaning_logs       = s.cleaning_logs || [];
   s.signin_stamps       = s.signin_stamps || [];
+  s.branch_opening_times = s.branch_opening_times || {
+    maadi: { morning: "10:00", night: "16:00" },
+    zawya: { morning: "12:00", night: "18:00" },
+  };
   s.photo_log           = s.photo_log     || [];
   s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
   s.leaves              = s.leaves        || []; // leave requests (annual / sick)
@@ -4335,12 +4339,24 @@ function parseSalesCSVFromMapping(lines, headerRaw, defaultBranch, fallbackMonth
 // day (mon..sun), user_id, user_name, by, by_name, at, photo_id? }.
 // Head barista + owner edit; everyone else reads.
 // ==============================================================
+// Format a Date as YYYY-MM-DD using LOCAL time (not UTC).
+// toISOString() returns UTC which is offset by Cairo's UTC+2/+3, causing
+// dates to appear one day behind. This helper fixes that everywhere.
+function localISODate(d) {
+  const y  = d.getFullYear();
+  const m  = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
 function mondayOf(dateStr) {
-  const d = dateStr ? new Date(dateStr) : new Date();
+  // Parse date-only strings as LOCAL noon to avoid DST / UTC-offset shifts.
+  const d = dateStr
+    ? new Date(dateStr.length === 10 ? dateStr + "T12:00:00" : dateStr)
+    : new Date();
   // JS: Sunday=0, Monday=1, ..., Saturday=6. Shift so Monday is start.
   const dow = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - dow);
-  return d.toISOString().slice(0, 10);
+  return localISODate(d);
 }
 const ROSTER_DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
 const ROSTER_DAY_LABELS = { mon:"Mon", tue:"Tue", wed:"Wed", thu:"Thu", fri:"Fri", sat:"Sat", sun:"Sun" };
@@ -4359,6 +4375,41 @@ routes.roster = function (u) {
   weekPicker.addEventListener("input", () => { weekOf = mondayOf(weekPicker.value); draw(); });
   wrap.appendChild(el("label", {}, "Week starting (we snap to Monday)"));
   wrap.appendChild(weekPicker);
+
+  // ── Attendance Opening Times ────────────────────────────────
+  state.branch_opening_times = state.branch_opening_times || {
+    maadi: { morning: "10:00", night: "16:00" },
+    zawya: { morning: "12:00", night: "18:00" },
+  };
+  const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
+  otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
+  otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    "Sign-in stamps are checked against these times. >15 min late = ½ day deduction · >2 h = 1 day · No stamp = 2 days. Deductions show automatically in each barista's salary."));
+  for (const otBranch of ["maadi", "zawya"]) {
+    const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
+    otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
+    for (const otShift of ["morning", "night"]) {
+      const shLabel = otShift[0].toUpperCase() + otShift.slice(1);
+      const currentVal = (state.branch_opening_times[otBranch] || {})[otShift] || "";
+      const otRow = el("div", { class: "kv", style: { alignItems: "center" } });
+      otRow.appendChild(el("div", { class: "k" }, shLabel + " shift start"));
+      if (canEdit) {
+        const otInp = el("input", { type: "time", value: currentVal, style: { maxWidth: "130px" } });
+        otInp.addEventListener("change", () => {
+          if (!state.branch_opening_times[otBranch]) state.branch_opening_times[otBranch] = {};
+          state.branch_opening_times[otBranch][otShift] = otInp.value;
+          saveState();
+          toast(`${brLabel} ${shLabel} opening time updated → ${otInp.value}`);
+        });
+        otRow.appendChild(el("div", { class: "v" }, [otInp]));
+      } else {
+        otRow.appendChild(el("div", { class: "v" }, currentVal || "—"));
+      }
+      otCard.appendChild(otRow);
+    }
+  }
+  wrap.appendChild(otCard);
+  // ────────────────────────────────────────────────────────────
 
   const body = el("div", { class: "stack" });
   wrap.appendChild(body);
@@ -4388,9 +4439,12 @@ routes.roster = function (u) {
     body.innerHTML = "";
     if (canEdit) {
       body.appendChild(el("div", { class: "banner-arch" },
-        "Head barista/owner: assign baristas per day. Each day shows Maadi Morning, Maadi Night, Zawya Morning, Zawya Night. Changes save instantly."));
+        "Assign baristas per shift per day — changes save instantly and take effect immediately. " +
+        "You can update mid-week at any time (sick calls, emergencies). " +
+        "⚠ The morning shift barista is the one responsible for the sign-in stamp. " +
+        "If you swap the morning assignment, the penalty system picks up the new name automatically."));
     } else {
-      body.appendChild(el("div", { class: "banner-arch" }, "Read-only — your weekly schedule. Ask the head barista if anything looks off."));
+      body.appendChild(el("div", { class: "banner-arch" }, "Read-only — your weekly schedule. The morning shift barista is responsible for the daily sign-in stamp. Ask the head barista if anything looks off."));
     }
 
     const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
@@ -4402,16 +4456,16 @@ routes.roster = function (u) {
         .map(l => l.user_id);
     }
 
-    // Week start as a Date (weekOf is a Monday ISO string)
-    const weekStart = new Date(weekOf + "T00:00:00");
+    // Week start as local noon — avoids UTC-offset shifts when we reformat
+    const weekStart = new Date(weekOf + "T12:00:00");
 
     // Group by DAY → then branch+shift (Mon → Maadi Morning / Night, Zawya Morning / Night)
     for (let di = 0; di < ROSTER_DAYS.length; di++) {
       const day = ROSTER_DAYS[di];
-      // Compute the actual calendar date for this roster day
+      // Compute the actual calendar date for this roster day using local time
       const dayDate = new Date(weekStart);
       dayDate.setDate(dayDate.getDate() + di);
-      const dayDateStr = dayDate.toISOString().slice(0, 10);
+      const dayDateStr = localISODate(dayDate); // local, not UTC
       const onLeave = onLeaveIds(dayDateStr);
 
       const card = el("div", { class: "card", style: { marginTop: "10px" } });
@@ -4495,6 +4549,13 @@ routes.roster = function (u) {
     } else {
       summary.appendChild(el("div", { class: "muted small" }, "You have no shifts assigned this week."));
     }
+    // Last-edit note — shows head barista exactly when the schedule was last changed
+    const weekEntries = state.rosters.filter(r => r.week_of === weekOf);
+    if (weekEntries.length) {
+      const lastEdit = weekEntries.slice().sort((a,b) => (b.at||"").localeCompare(a.at||""))[0];
+      summary.appendChild(el("div", { class: "muted small", style: { marginTop: "10px", borderTop: "1px solid var(--border)", paddingTop: "8px" } },
+        `Last schedule update: ${fmtDate(lastEdit.at)} by ${lastEdit.by_name || "—"}`));
+    }
     body.appendChild(summary);
 
     if (canEdit) {
@@ -4506,8 +4567,8 @@ routes.roster = function (u) {
         } }, "🗑 Clear this week"),
         el("button", { class: "btn ghost", onClick: () => {
           // Copy last week's roster to this week
-          const prev = new Date(weekOf); prev.setDate(prev.getDate() - 7);
-          const prevKey = prev.toISOString().slice(0,10);
+          const prev = new Date(weekOf + "T12:00:00"); prev.setDate(prev.getDate() - 7);
+          const prevKey = localISODate(prev);
           const src = state.rosters.filter(r => r.week_of === prevKey);
           if (!src.length) return toast("No schedule found for last week", "error");
           for (const r of src) {
@@ -5927,7 +5988,64 @@ routes.signin_stamp_new = function (u) {
           drive_ids: stampPhotoField.getDriveIds(),
           note: note.trim(),
         });
-        saveState();
+
+        // ── Auto late-penalty from photo upload timestamp ─────
+        (function() {
+          const submitTime = new Date(s.at);
+          const todayStr   = localISODate(submitTime); // local date, not UTC
+          const dayIndex   = (submitTime.getDay() + 6) % 7; // 0=Mon … 6=Sun
+          const dayKey     = ROSTER_DAYS[dayIndex];
+          const weekOf     = mondayOf(todayStr);
+
+          // Sign-in stamp = morning shift only.
+          // Only penalise if this barista is currently assigned to the morning shift
+          // at this branch today — checked live so mid-week swaps take effect immediately.
+          const morningEntry = (state.rosters || []).find(r =>
+            r.week_of === weekOf &&
+            r.branch  === branch.toLowerCase() &&
+            r.day     === dayKey &&
+            r.shift   === "morning" &&
+            r.user_id === u.id
+          );
+          if (!morningEntry) return; // not today's morning barista — no penalty
+
+          // Get morning opening time for this branch from the schedule config
+          const bot      = state.branch_opening_times || {};
+          const openStr  = ((bot[branch.toLowerCase()] || {})["morning"])
+                           || (branch.toLowerCase() === "maadi" ? "10:00" : "12:00");
+          const openingMs = new Date(todayStr + "T" + openStr + ":00").getTime();
+          const minsLate  = Math.round((submitTime.getTime() - openingMs) / 60000);
+
+          if (minsLate <= 15) return; // on time or within grace period
+
+          // Prevent duplicate auto-penalty for same person on same date
+          const already = (state.penalties || []).find(p =>
+            p.auto_late && p.user_id === u.id && p.date === todayStr
+          );
+          if (already) return;
+
+          const kind    = minsLate > 120 ? "full_day" : "half_day";
+          const salary  = Number(((state.salary_config || {})[u.id] || {}).monthly_salary || 0);
+          const amount  = penaltyAmount(kind, salary);
+          const kLabel  = kind === "full_day" ? "Full day" : "Half day";
+
+          state.penalties = state.penalties || [];
+          state.penalties.push({
+            id: uuid(), at: s.at, by: s.by, by_name: s.by_name,
+            user_id: u.id, barista: u.name,
+            kind, reason: "late",
+            date: todayStr,
+            month: todayStr.slice(0, 7),
+            branch,
+            amount,
+            note: `Auto: ${minsLate} min late — ${kLabel} deducted (sign-in stamp)`,
+            auto_late: true,
+          });
+          saveState();
+          toast(`⚠ ${minsLate} min late — ${kLabel} deducted from ${u.name}'s salary`, "warn");
+        })();
+        // ─────────────────────────────────────────────────────
+
         showPhotoConfirm({
           title: "Clock-in recorded!",
           names: photoNames,
