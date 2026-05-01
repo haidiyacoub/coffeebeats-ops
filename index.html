@@ -820,6 +820,13 @@ function migrateState(s) {
   s.alert_log           = s.alert_log || [];
   s.rosters             = s.rosters || []; // weekly shift rosters
   s.roaster_schedules   = s.roaster_schedules || []; // weekly roaster — head barista posts to whole team
+  s.kpi_logs      = s.kpi_logs      || []; // kept for migration only — scores now derived from source tiles
+  s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork, training
+  s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
+  s.kpi_settings  = s.kpi_settings  || {
+    weights: { punctuality:15, waste:15, cleanliness:15, craft:20, upselling:10, customer:15, teamwork:5, training:5 }
+  };
+
   s.shift_closes        = s.shift_closes  || [];
   s.cleaning_logs       = s.cleaning_logs || [];
   s.signin_stamps       = s.signin_stamps || [];
@@ -1273,9 +1280,10 @@ const ROLE_ACCESS = {
                  "petty_cash","salaries","penalties","maadi_deposits","roster",
                  "shift_close_new","shift_close_list","cleaning_log_new","cleaning_log_list",
                  "signin_stamp_new","signin_stamp_list",
-                 "leave_new","leave_list"],
+                 "leave_new","leave_list",
+                 "scorecard","my_scorecard","my_jd"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list"],
+  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd"],
   // Zawya-only roles — no app access, kept in list for barista drink allowance tracking
   manager: [],
   helper:  [],
@@ -1427,6 +1435,7 @@ routes.home = function (u) {
   if (u.role === "barista") {
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · read only", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
     tiles.appendChild(tile("🔒", "Shift Close", "End-of-shift summary", () => go("shift_close_new")));
     tiles.appendChild(tile("🕐", "Sign-In Stamp", "Clock-in photo", () => go("signin_stamp_new")));
@@ -1435,12 +1444,15 @@ routes.home = function (u) {
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "My Leaves", "View leave history", () => go("leave_list")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
+    tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
   }
 
   // ── Head barista: full frontline + management extras ──
   if (u.role === "head_barista") {
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
     tiles.appendChild(tile("📋", "Waste Log", "View recent entries", () => go("waste_list")));
     tiles.appendChild(tile("📦", "Inventory Count", "Monthly / adjust", () => go("snapshot_new")));
@@ -1460,6 +1472,9 @@ routes.home = function (u) {
     tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
+    tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance dashboard", () => go("scorecard")));
+    tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
   }
 
   // ── Manager / Helper (Zawya only): no app tiles — drink allowance tracking only ──
@@ -1473,6 +1488,7 @@ routes.home = function (u) {
   if (u.role === "owner" || u.role === "accountant") {
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
     tiles.appendChild(tile("📋", "Waste Log", "View recent entries", () => go("waste_list")));
     tiles.appendChild(tile("📋", "My Shifts", "History", () => go("shifts")));
@@ -1489,6 +1505,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
+    tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
@@ -1673,6 +1690,7 @@ routes.waste_new = function (u) {
       image_url: photoUrls[0] || "",
     });
     saveState();
+    // KPI waste score is derived live in kpiGetUserScores() from state.waste — no extra storage needed
     const photoMsg = photoUrls.length ? ` · ${photoUrls.length} photo${photoUrls.length > 1 ? "s" : ""} saved` : "";
     toast("Waste recorded" + photoMsg);
     go("waste_list");
@@ -5870,11 +5888,72 @@ routes.cleaning_log_new = function (u) {
   dInput.addEventListener("input", () => date = dInput.value);
   wrap.appendChild(dInput);
 
-  const cleaningPhotoField = makePhotoField({ label: "Cleaning checklist photos", required: true, formLabel: "Cleaning Log" });
+  // ── Cleaning checklist ──────────────────────────────────────────────────────
+  const isAR_clean = u.role === "barista" || u.role === "head_barista";
+  const CLEAN_ITEMS_EN_LOC = [
+    "Espresso machine group heads backflushed & flushed with water",
+    "Steam wands purged & wiped with dedicated cloth after every use ✓",
+    "Portafilters scrubbed, rinsed & dried — no coffee residue",
+    "Bar counter cleared, sanitised & free of spills",
+    "Milk fridge wiped down, FIFO labels checked, no expired product",
+    "Drip trays emptied, rinsed & dried",
+    "Grinder hopper, chute & doser brushed — no build-up",
+    "Back bar and syrup shelf cleaned & organised",
+    "Floor swept and wet-mopped in bar area",
+    "Cups, glasses & tools restocked and polished",
+  ];
+  const CLEAN_ITEMS_AR_LOC = [
+    "ظهر الإسبريسو: عمل backflush ثم شطف بالماء",
+    "عصا البخار: تنقية ومسح بقماش مخصص بعد كل استخدام ✓",
+    "الـ portafilters: تنظيف، شطف وتجفيف — لا بقايا قهوة",
+    "كاونتر البار: تفريغ، تعقيم وخلوّه من البقع",
+    "ثلاجة الحليب: مسح، مراجعة تواريخ FIFO، لا منتجات منتهية",
+    "صينية التصريف: تفريغ، شطف وتجفيف",
+    "الطاحونة: فرشاة الحوض والمجرى والدوزر — لا تراكمات",
+    "الجزء الخلفي للبار وخانة الشراب: تنظيف وترتيب",
+    "الأرضية: كنس وتمسيح منطقة البار",
+    "الأكواب والأدوات: إعادة تعبئة وتلميع",
+  ];
+  const cleanItems = isAR_clean ? CLEAN_ITEMS_AR_LOC : CLEAN_ITEMS_EN_LOC;
+  let checkedItems = new Array(cleanItems.length).fill(false);
+
+  const checklistCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+  checklistCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "8px", fontSize: "15px" } },
+    isAR_clean ? "🧹 قائمة مهام النظافة" : "🧹 Cleaning Checklist"));
+  checklistCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    isAR_clean
+      ? "✅ كل بند محقق = نقاط في بطاقة أدائك. إكمال ١٠٠٪ يُحقق شارة 'نظافة مثالية'!"
+      : "✅ Each checked item scores points. 100% earns a Clean Sweep badge!"));
+
+  const scoreDisplay = el("div", { style: { fontWeight: "700", marginBottom: "10px", color: "var(--accent)" } },
+    isAR_clean ? "النقاط: ٠/١٠٠" : "Score: 0/100");
+
+  cleanItems.forEach((item, i) => {
+    const lbl = el("label", { style: {
+      display: "flex", alignItems: "flex-start", gap: "10px",
+      padding: "9px 0", borderBottom: "1px solid var(--border)",
+      fontSize: "13.5px", cursor: "pointer", lineHeight: "1.5",
+      direction: isAR_clean ? "rtl" : "ltr",
+    }});
+    const chk = el("input", { type: "checkbox", style: { width: "18px", height: "18px", marginTop: "2px", flexShrink: "0", accentColor: "var(--accent)" } });
+    chk.addEventListener("change", () => {
+      checkedItems[i] = chk.checked;
+      const pct = Math.round(checkedItems.filter(Boolean).length / cleanItems.length * 100);
+      scoreDisplay.textContent = isAR_clean ? `النقاط: ${pct}/١٠٠` : `Score: ${pct}/100`;
+      scoreDisplay.style.color = pct >= 80 ? "var(--ok)" : pct >= 50 ? "var(--warn)" : "var(--bad)";
+    });
+    lbl.appendChild(chk);
+    lbl.appendChild(el("span", {}, item));
+    checklistCard.appendChild(lbl);
+  });
+  checklistCard.appendChild(scoreDisplay);
+  wrap.appendChild(checklistCard);
+
+  const cleaningPhotoField = makePhotoField({ label: isAR_clean ? "صورة البار بعد التنظيف (مطلوبة)" : "Cleaning photo(s) — bar after cleaning (required)", required: true, formLabel: "Cleaning Log" });
   wrap.appendChild(cleaningPhotoField.el);
 
-  wrap.appendChild(el("label", {}, "Note (optional)"));
-  const noteInput = el("input", { type: "text", placeholder: "e.g. Floor mopped twice, hood filter replaced" });
+  wrap.appendChild(el("label", {}, isAR_clean ? "ملاحظة (اختياري)" : "Note (optional)"));
+  const noteInput = el("input", { type: "text", placeholder: isAR_clean ? "مثال: تم تغيير فلتر الهود، غسيل عميق للإسبريسو" : "e.g. Floor mopped twice, hood filter replaced" });
   noteInput.addEventListener("input", () => note = noteInput.value);
   wrap.appendChild(noteInput);
 
@@ -5883,7 +5962,8 @@ routes.cleaning_log_new = function (u) {
       class: "btn",
       onClick: async () => {
         const photoBlobs = cleaningPhotoField.getBlobs();
-        if (!photoBlobs.length) return toast("Please attach at least one photo", "error");
+        if (!photoBlobs.length) return toast(isAR_clean ? "أرفق صورة واحدة على الأقل" : "Please attach at least one photo", "error");
+        const checklist_score = Math.round(checkedItems.filter(Boolean).length / cleanItems.length * 100);
         const photoNames = photoBlobs.map(f => f.name);
         const s = stamp();
         const photoIds = photoBlobs.map(() => uuid());
@@ -5897,17 +5977,19 @@ routes.cleaning_log_new = function (u) {
           photo_ids: photoIds, photo_names: photoNames,
           drive_ids: cleaningPhotoField.getDriveIds(),
           note: note.trim(),
+          checklist_score,
+          checklist_items: checkedItems.map((v,i) => ({ item: CLEAN_ITEMS_EN_LOC[i], checked: v })),
         });
         saveState();
         showPhotoConfirm({
-          title: "Cleaning log submitted!",
+          title: isAR_clean ? "سجل النظافة تم!" : "Cleaning log submitted!",
           names: photoNames,
           driveIds: cleaningPhotoField.getDriveIds(),
           onDone: () => go("cleaning_log_list"),
         });
       },
-    }, "Submit cleaning log"),
-    el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, "← Back to home"),
+    }, isAR_clean ? "✅ إرسال سجل النظافة" : "Submit cleaning log"),
+    el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, isAR_clean ? "← الرئيسية" : "← Back to home"),
   ]));
   return wrap;
 };
@@ -6043,6 +6125,23 @@ routes.signin_stamp_new = function (u) {
           });
           saveState();
           toast(`⚠ ${minsLate} min late — ${kLabel} deducted from ${u.name}'s salary`, "warn");
+        })();
+        // ─────────────────────────────────────────────────────
+
+        // ── KPI: auto-score punctuality from this stamp ───────
+        (function() {
+          try {
+            const submitTime = new Date(s.at);
+            const todayStr   = localISODate(submitTime);
+            const bot        = state.branch_opening_times || {};
+            const openStr    = ((bot[branch?.toLowerCase()] || {})["morning"])
+                               || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
+            const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
+            const diffMins    = Math.round((submitTime.getTime() - scheduledMs) / 60000);
+            const pScore      = diffMins <= 0 ? 100 : diffMins <= 5 ? 95 : diffMins <= 15 ? 80 : diffMins <= 30 ? 60 : diffMins <= 60 ? 40 : 20;
+            // Store in kpi_manual for this month as punctuality entry stub
+            // (actual derivation in kpiGetUserScores uses signin_stamps directly)
+          } catch(e) {}
         })();
         // ─────────────────────────────────────────────────────
 
@@ -7296,6 +7395,1371 @@ function openPrompt({ title, fields, onSubmit, extraButtons }) {
 }
 
 // ==============================================================
+// APP GUIDE — Bilingual barista operations handbook (EN + AR)
+// ==============================================================
+routes.app_guide = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("App Guide", "How to use the Coffee Beats Operations app."));
+
+  // ── Language toggle ──
+  let lang = "en";
+  const langRow = el("div", { style: { display: "flex", gap: "8px", marginBottom: "18px" } });
+  const btnEn = el("button", { class: "btn", style: { flex: "1", background: "var(--ink)", color: "var(--accent)" } }, "🇬🇧 English");
+  const btnAr = el("button", { class: "btn secondary", style: { flex: "1" } }, "🇪🇬 العربية");
+  langRow.appendChild(btnEn);
+  langRow.appendChild(btnAr);
+  wrap.appendChild(langRow);
+
+  const guideBody = el("div", {});
+  wrap.appendChild(guideBody);
+
+  // ── Content definition ──
+  const sections = [
+    {
+      icon: "🔑",
+      en_title: "Signing In",
+      ar_title: "تسجيل الدخول",
+      en_steps: [
+        "Open <strong>ops.coffeebeats.art</strong> in your phone's browser.",
+        "The app will ask for the <strong>team code</strong> the first time — enter it once and you're set.",
+        "You'll see the staff list. Tap your name.",
+        "Enter your <strong>4-digit PIN</strong>. If you forgot it, ask the head barista or owner.",
+        "You are now signed in. The app will remember you until the shift ends (auto-logout after 8 hours).",
+      ],
+      ar_steps: [
+        "افتح <strong>ops.coffeebeats.art</strong> في متصفح هاتفك.",
+        "في أول مرة، سيطلب منك التطبيق <strong>كود الفريق</strong> — أدخله مرة واحدة وانتهى.",
+        "ستظهر لك قائمة الموظفين. اضغط على اسمك.",
+        "أدخل <strong>الـ PIN المكون من 4 أرقام</strong>. لو نسيت الكود، اسأل رئيس البريستا أو المالك.",
+        "أنت الآن مسجّل الدخول. التطبيق يتذكرك حتى نهاية الشيفت (تسجيل خروج تلقائي بعد 8 ساعات).",
+      ],
+    },
+    {
+      icon: "🕐",
+      en_title: "Sign-In Stamp (Clock In)",
+      ar_title: "بصمة الحضور (الوصول)",
+      en_steps: [
+        "Tap <strong>Sign-In Stamp</strong> from the home screen <em>as soon as you arrive</em>.",
+        "Select your branch: <strong>Maadi</strong> or <strong>Zawya</strong>.",
+        "Take a <strong>selfie or photo</strong> — this is your proof of arrival. Make sure it's clear.",
+        "Tap <strong>Submit clock-in</strong>.",
+        "<strong>⚠ Important:</strong> Maadi morning shift — arrive by <strong>10:00</strong>. After 10:15 = half-day deduction. After 12:00 = full-day deduction. Zawya — arrive by <strong>12:00</strong>. After 12:15 = half-day. After 14:00 = full-day. These deductions are automatic.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
+        "اختر الفرع: <strong>المعادي</strong> أو <strong>زاوية</strong>.",
+        "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك. تأكد أنها واضحة.",
+        "اضغط <strong>تسجيل الحضور</strong>.",
+        "<strong>⚠ مهم:</strong> شيفت الصباح بالمعادي — الوصول قبل <strong>10:00</strong>. بعد 10:15 = خصم نصف يوم. بعد 12:00 = خصم يوم كامل. زاوية — الوصول قبل <strong>12:00</strong>. بعد 12:15 = نصف يوم. بعد 14:00 = يوم كامل. الخصومات تتم تلقائيًا.",
+      ],
+    },
+    {
+      icon: "🗑️",
+      en_title: "Record Waste",
+      ar_title: "تسجيل الهدر",
+      en_steps: [
+        "Tap <strong>Record Waste</strong> — do this <em>every time</em> something is wasted during your shift.",
+        "Select your <strong>branch</strong>.",
+        "Search for the item (e.g. milk, espresso, syrup) and select it.",
+        "Enter the <strong>quantity wasted</strong> and the <strong>unit</strong> (ml, g, or unit).",
+        "Select a <strong>reason</strong>: Spilled, Expired, Returned by customer, Staff drink (comp), Quality issue, Training/calibration, or Other.",
+        "You can take a photo as proof — optional but recommended.",
+        "Tap <strong>Save waste entry</strong>. The inventory is updated automatically.",
+        "⚠ Do NOT skip waste recording. All waste must be logged — even small amounts.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>تسجيل الهدر</strong> — افعل هذا <em>في كل مرة</em> يُهدر فيها شيء خلال الشيفت.",
+        "اختر <strong>الفرع</strong>.",
+        "ابحث عن العنصر (مثلاً: حليب، إسبريسو، شراب) واختره.",
+        "أدخل <strong>الكمية المهدرة</strong> و<strong>الوحدة</strong> (مل، جرام، أو وحدة).",
+        "اختر <strong>السبب</strong>: انسكاب، انتهاء صلاحية، إرجاع من عميل، مشروب الموظف، مشكلة جودة، تدريب/معايرة، أو أخرى.",
+        "يمكنك التقاط صورة كدليل — اختياري لكن مُستحسن.",
+        "اضغط <strong>حفظ</strong>. يتم تحديث المخزون تلقائيًا.",
+        "⚠ لا تتجاهل تسجيل الهدر. يجب تسجيل كل الهدر — حتى الكميات الصغيرة.",
+      ],
+    },
+    {
+      icon: "🔒",
+      en_title: "Shift Close",
+      ar_title: "إغلاق الشيفت",
+      en_steps: [
+        "At the end of your shift, tap <strong>Shift Close</strong>.",
+        "Select your <strong>branch</strong>.",
+        "Fill in the <strong>closing cash</strong> (the money in the till at close).",
+        "Record any <strong>management drinks</strong> given out (manager/owner comps).",
+        "Add any notes about the shift — unusual events, issues, or handover info.",
+        "Tap <strong>Save shift close</strong>.",
+        "⚠ The shift close must be done before you leave — never skip it.",
+      ],
+      ar_steps: [
+        "في نهاية شيفتك، اضغط على <strong>إغلاق الشيفت</strong>.",
+        "اختر <strong>الفرع</strong>.",
+        "أدخل <strong>الكاش الختامي</strong> (المبلغ في الكاشير عند الإغلاق).",
+        "سجّل أي <strong>مشروبات إدارة</strong> تم توزيعها (مشروبات مجانية للمدير/المالك).",
+        "أضف أي ملاحظات عن الشيفت — أحداث غير عادية أو مشاكل أو معلومات للتسليم.",
+        "اضغط <strong>حفظ</strong>.",
+        "⚠ يجب إتمام إغلاق الشيفت قبل مغادرتك — لا تتجاوزه أبدًا.",
+      ],
+    },
+    {
+      icon: "🧹",
+      en_title: "Cleaning Log",
+      ar_title: "سجل النظافة",
+      en_steps: [
+        "Tap <strong>Cleaning Log</strong>.",
+        "Select your <strong>branch</strong>.",
+        "Take a <strong>photo of the cleaned area</strong> (bar, counter, machine, etc.).",
+        "Add a note describing what was cleaned.",
+        "Tap <strong>Submit</strong>.",
+        "Cleaning logs are reviewed by the owner — keep them accurate and honest.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>سجل النظافة</strong>.",
+        "اختر <strong>الفرع</strong>.",
+        "التقط <strong>صورة للمنطقة التي تم تنظيفها</strong> (البار، الكاونتر، الماكينة، إلخ).",
+        "أضف ملاحظة تصف ما تم تنظيفه.",
+        "اضغط <strong>إرسال</strong>.",
+        "يراجع المالك سجلات النظافة — كن دقيقاً وصادقاً.",
+      ],
+    },
+    {
+      icon: "📅",
+      en_title: "Weekly Schedule",
+      ar_title: "الجدول الأسبوعي",
+      en_steps: [
+        "Tap <strong>Weekly Schedule</strong> to see your shifts for the week.",
+        "The schedule shows Maadi and Zawya shifts side by side, day by day.",
+        "You can see who's working the morning and night shifts each day.",
+        "If you see an error in your schedule, contact the head barista or owner.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>الجدول الأسبوعي</strong> لمعرفة شيفتاتك خلال الأسبوع.",
+        "الجدول يُظهر شيفتات المعادي وزاوية جنباً إلى جنب، يوماً بيوم.",
+        "يمكنك رؤية من يعمل في الشيفت الصباحي والليلي كل يوم.",
+        "إذا لاحظت خطأ في جدولك، تواصل مع رئيس البريستا أو المالك.",
+      ],
+    },
+    {
+      icon: "📖",
+      en_title: "Barista Handbook (Recipes)",
+      ar_title: "دليل البريستا (الوصفات)",
+      en_steps: [
+        "Tap <strong>Barista Handbook</strong> to access the drink recipes guide.",
+        "Use the <strong>category tabs</strong> (Iced Coffee, Hot, etc.) to filter drinks.",
+        "Use the <strong>search bar</strong> to find a specific recipe quickly.",
+        "Each recipe card shows <strong>Ingredients</strong> and <strong>Step-by-step preparation</strong>.",
+        "Head baristas and owners can add or edit recipes.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>دليل البريستا</strong> للوصول إلى وصفات المشروبات.",
+        "استخدم <strong>تبويبات الفئات</strong> (قهوة باردة، ساخنة، إلخ) للفرز.",
+        "استخدم <strong>شريط البحث</strong> للعثور على وصفة محددة بسرعة.",
+        "كل بطاقة وصفة تعرض <strong>المكونات</strong> و<strong>خطوات التحضير</strong>.",
+        "رؤساء البريستا والملاك يمكنهم إضافة وصفات أو تعديلها.",
+      ],
+    },
+    {
+      icon: "🌴",
+      en_title: "Request Leave",
+      ar_title: "طلب إجازة",
+      en_steps: [
+        "Tap <strong>Request Leave</strong>.",
+        "Select the type: <strong>Annual Leave</strong> or <strong>Sick Leave</strong>.",
+        "Choose the <strong>start date</strong> and <strong>end date</strong>.",
+        "Write a short <strong>reason</strong>.",
+        "Tap <strong>Submit</strong> — an email is sent automatically to the head barista for approval.",
+        "You can track your request status in <strong>My Leaves</strong>.",
+        "⚠ Leave is not confirmed until you receive approval.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>طلب إجازة</strong>.",
+        "اختر النوع: <strong>إجازة سنوية</strong> أو <strong>إجازة مرضية</strong>.",
+        "اختر <strong>تاريخ البدء</strong> و<strong>تاريخ الانتهاء</strong>.",
+        "اكتب <strong>سبباً</strong> مختصراً.",
+        "اضغط <strong>إرسال</strong> — يُرسل بريد إلكتروني تلقائياً لرئيس البريستا للموافقة.",
+        "يمكنك متابعة حالة طلبك في <strong>إجازاتي</strong>.",
+        "⚠ الإجازة غير مؤكدة حتى تحصل على موافقة.",
+      ],
+    },
+
+
+
+    {
+      icon: "⚠️",
+      en_title: "Key Rules — Must Follow",
+      ar_title: "قواعد أساسية — يجب الالتزام بها",
+      en_steps: [
+        "<strong>🕐 Sign-In Stamp</strong>: Always stamp in the moment you arrive. Never stamp for someone else.",
+        "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small.",
+        "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
+        "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
+        "<strong>🔐 PIN</strong>: Never share your PIN with anyone. Each person logs in with their own PIN only.",
+      ],
+      ar_steps: [
+        "<strong>🕐 بصمة الحضور</strong>: دائماً قم بالبصمة فور وصولك. لا تبصّم لأحد آخر.",
+        "<strong>🗑️ سجل الهدر</strong>: سجّل كل هدر خلال شيفتك — بغض النظر عن الكمية.",
+        "<strong>🔒 إغلاق الشيفت</strong>: أكمل إغلاق الشيفت دائماً قبل المغادرة. لا تتجاوزه أبداً.",
+        "<strong>🧹 سجل النظافة</strong>: سجّل النظافة بصورة في كل شيفت.",
+        "<strong>🔐 الـ PIN</strong>: لا تشارك الـ PIN مع أحد. كل شخص يسجّل الدخول بـ PIN خاص به فقط.",
+      ],
+    },
+  ];
+
+  function renderGuide() {
+    guideBody.innerHTML = "";
+
+    // Intro card
+    const intro = el("div", { class: "card", style: { marginBottom: "14px", background: "var(--ink)", color: "var(--accent-2)" } });
+    intro.appendChild(el("div", { style: { fontSize: "28px", marginBottom: "8px", textAlign: "center" } }, "☕"));
+    intro.appendChild(el("div", { style: { fontWeight: "700", fontSize: "16px", marginBottom: "6px", textAlign: "center" } },
+      lang === "en" ? "Coffee Beats Operations App" : "تطبيق عمليات Coffee Beats"));
+    intro.appendChild(el("div", { style: { fontSize: "13px", textAlign: "center", opacity: "0.85" } },
+      lang === "en"
+        ? "This guide explains how to use every feature. Read it once, keep it as a reference."
+        : "هذا الدليل يشرح كيفية استخدام كل ميزة. اقرأه مرة واحدة واحتفظ به كمرجع."));
+    guideBody.appendChild(intro);
+
+    sections.forEach(sec => {
+      const card = el("div", { class: "card", style: { marginBottom: "12px" } });
+
+      // Section header
+      const hd = el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" } });
+      hd.appendChild(el("span", { style: { fontSize: "24px" } }, sec.icon));
+      hd.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px" } },
+        lang === "en" ? sec.en_title : sec.ar_title));
+      card.appendChild(hd);
+
+      // Steps
+      const steps = lang === "en" ? sec.en_steps : sec.ar_steps;
+      const ol = el("ol", { style: {
+        margin: "0", paddingInlineStart: "20px",
+        direction: lang === "ar" ? "rtl" : "ltr",
+        textAlign: lang === "ar" ? "right" : "left",
+        fontSize: "13.5px", lineHeight: "1.7", color: "var(--ink)"
+      }});
+      steps.forEach(step => {
+        const li = el("li", { style: { marginBottom: "7px" } });
+        li.innerHTML = step; // safe — we control the content
+        ol.appendChild(li);
+      });
+      card.appendChild(ol);
+      guideBody.appendChild(card);
+    });
+
+    guideBody.appendChild(el("div", { class: "card", style: { textAlign: "center", marginTop: "6px", background: "var(--surface-2)", border: "1px dashed var(--border)" } }, [
+      el("div", { style: { fontSize: "20px", marginBottom: "4px" } }, "💬"),
+      el("div", { style: { fontSize: "13px", color: "var(--ink-dim)" } },
+        lang === "en"
+          ? "Questions? Contact the head barista or owner. The app syncs to all devices in real time."
+          : "أسئلة؟ تواصل مع رئيس البريستا أو المالك. التطبيق يُزامن مع كل الأجهزة في الوقت الفعلي."),
+    ]));
+  }
+
+  // Language button handlers
+  btnEn.addEventListener("click", () => {
+    lang = "en";
+    btnEn.style.background = "var(--ink)"; btnEn.style.color = "var(--accent)";
+    btnAr.style.background = "var(--surface-2)"; btnAr.style.color = "var(--ink)";
+    renderGuide();
+  });
+  btnAr.addEventListener("click", () => {
+    lang = "ar";
+    btnAr.style.background = "var(--ink)"; btnAr.style.color = "var(--accent)";
+    btnEn.style.background = "var(--surface-2)"; btnEn.style.color = "var(--ink)";
+    renderGuide();
+  });
+
+  renderGuide();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+
+// ==============================================================
+
+// ==============================================================
+// KPI SCORECARD SYSTEM
+// ==============================================================
+
+// ─── Shared helpers ──────────────────────────────────────────────────────────
+const KPI_W = () => state.kpi_settings.weights;
+function save() { saveState(); }  // KPI module alias
+const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", training:"Training" };
+const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", training:"التدريب والتطور" };
+const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", training:"🌱" };
+const CLEAN_AR = [
+  "تنظيف رأس الإسبريسو وشطف الماكينة",
+  "مسح عصا البخار وتنقيتها بعد كل استخدام ✓",
+  "تنظيف الـ portafilters وتجفيفها",
+  "تنظيف كاونتر البار ومسحه",
+  "تنظيم ثلاجة الحليب بنظام FIFO",
+  "تفريغ وتنظيف صينية التصريف",
+  "تنظيف الطاحونة وفرشاة الحبوب",
+  "تنظيم وتعقيم الجزء الخلفي للبار",
+  "كنس الأرضية / مسحها بالماء",
+  "إعادة تعبئة الأكواب وتلميعها",
+];
+const CLEAN_EN = [
+  "Espresso machine group heads cleaned & flushed",
+  "Steam wands wiped & purged after every use ✓",
+  "Portafilters cleaned & dried",
+  "Bar counter cleared and wiped down",
+  "Milk fridge organized with FIFO dates",
+  "Drip tray emptied and cleaned",
+  "Grinder doser and burrs brushed",
+  "Back bar organized and sanitized",
+  "Floor swept / wet mopped",
+  "Cups and glasses restocked and polished",
+];
+
+function kpiCalcTotal(scores) {
+  const w = KPI_W();
+  return Object.keys(w).reduce((sum, k) => sum + ((scores||{})[k]||0) * w[k] / 100, 0);
+}
+function kpiScoreColor(n) { return n>=85?"var(--ok)":n>=65?"var(--warn)":"var(--bad)"; }
+function kpiGrade(n, isHead) {
+  const t = isHead?85:75;
+  if (n>=90) return "🥇 ذهبي";
+  if (n>=80) return "🥈 فضي";
+  if (n>=70) return "🥉 برونزي";
+  if (n>=t)  return "✅ ضمن الهدف";
+  return "📈 في تطور";
+}
+function kpiGradeEn(n) {
+  if (n>=90) return "🥇 Gold";
+  if (n>=80) return "🥈 Silver";
+  if (n>=70) return "🥉 Bronze";
+  return "📈 Rising";
+}
+
+// ─── Auto-score helpers ────────────────────────────────────────────────────
+function kpiLocalDateStr(ts) {
+  // Returns YYYY-MM-DD in local timezone from a timestamp or ISO string
+  const d = new Date(ts);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function kpiPunctualityScore(userId, cutoff) {
+  const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
+  if (!stamps.length) return null;
+  const scores = stamps.map(s => {
+    try {
+      const submitTime  = new Date(s.at);
+      const todayStr    = kpiLocalDateStr(submitTime);
+      const branch      = (s.branch || "maadi").toLowerCase();
+      const bot         = state.branch_opening_times || {};
+      const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+      const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
+      const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
+      return diff <= 0 ? 100 : diff <= 5 ? 95 : diff <= 15 ? 80 : diff <= 30 ? 60 : diff <= 60 ? 40 : 20;
+    } catch(e) { return 70; }
+  });
+  return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+}
+function kpiWasteScore(userId, cutoff) {
+  const entries = (state.waste||[]).filter(w => w.by === userId && new Date(w.at).getTime() >= cutoff);
+  if (!entries.length) return null;
+  // Group by calendar day
+  const byDay = {};
+  entries.forEach(w => {
+    const d = kpiLocalDateStr(new Date(w.at));
+    if (!byDay[d]) byDay[d] = [];
+    byDay[d].push(w);
+  });
+  const dayScores = Object.values(byDay).map(items => {
+    if (items.every(i => i.item_name === "— No waste —")) return 100;
+    let score = 100;
+    items.filter(w => w.item_name !== "— No waste —").forEach(w => {
+      const name = (w.item_name||"").toLowerCase();
+      const qty  = w.qty_canonical || 0;
+      const reason = (w.reason||"").toLowerCase();
+      const isCal = reason.includes("training") || reason.includes("calibr");
+      if (name.includes("espresso")||name.includes("shot")||name.includes("coffee")||name.includes("bean")) {
+        score -= isCal ? qty*2 : qty*6;           // 6 pts per shot (SCA: ≤3 shots/shift target)
+      } else if (name.includes("milk")||name.includes("oat")||name.includes("almond")||name.includes("soy")||name.includes("cream")) {
+        const ml = (w.unit==="L"||(w.unit||"").toLowerCase()==="litre") ? qty*1000 : qty;
+        score -= isCal ? Math.floor(ml/200)*3 : Math.floor(ml/100)*5; // 5 pts per 100ml (SCA: ≤100ml/shift)
+      } else {
+        score -= isCal ? qty*1 : qty*3;
+      }
+    });
+    return Math.max(Math.round(score), 10);
+  });
+  return Math.round(dayScores.reduce((a,b)=>a+b,0)/dayScores.length);
+}
+function kpiCleanlinessScore(userId, cutoff) {
+  const logs = (state.cleaning_logs||[]).filter(l => l.by === userId && new Date(l.at).getTime() >= cutoff);
+  if (!logs.length) return null;
+  const scores = logs.map(l => l.checklist_score != null ? l.checklist_score : 65); // legacy logs without checklist get 65
+  return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+}
+function kpiCustomerScore(userId) {
+  const user     = (state.users||[]).find(u => u.id === userId);
+  const userName = (user?.name || "").toLowerCase().trim();
+  const cutoff   = Date.now() - 30*24*60*60*1000; // rolling 30 days, same as other KPI categories
+
+  const feedbacks = (state.customer_feedback||[]).filter(f => {
+    // Match by user_id / barista_id (internal) OR by barista_name string (from coffeebeats.art)
+    const byId   = f.user_id === userId || f.barista_id === userId;
+    const bName  = (f.barista_name || "").toLowerCase().trim();
+    const byName = userName && bName && (bName === userName || bName.startsWith(userName) || userName.startsWith(bName));
+    const inWindow = (f.at ? new Date(f.at).getTime() : 0) >= cutoff;
+    return (byId || byName) && inWindow;
+  });
+
+  if (!feedbacks.length) return null;
+  const avg = feedbacks.reduce((s,f) => s + (f.rating||0), 0) / feedbacks.length;
+  return Math.round(avg * 20); // convert 0–5 stars to 0–100
+}
+
+// Pull the latest state from the sync URL to refresh customer_feedback without a full reload
+async function kpiFetchFeedback() {
+  const url    = state.settings?.sync_url;
+  const secret = state.settings?.sync_secret;
+  if (!url || !secret) return toast("Sync URL not configured — go to Settings → Sync to set it up.", "error");
+  try {
+    const res  = await fetch(url + "?action=pull&secret=" + encodeURIComponent(secret));
+    const data = await res.json();
+    if (!data.ok) return toast("Sync error: " + (data.err||"unknown"), "error");
+    if (Array.isArray(data.state?.customer_feedback)) {
+      state.customer_feedback = data.state.customer_feedback;
+      saveState();
+      toast("✅ Customer feedback refreshed — " + data.state.customer_feedback.length + " entries loaded.");
+      render(); // re-render to update scores
+    } else {
+      toast("No feedback data in sync yet.");
+    }
+  } catch(e) {
+    toast("Fetch failed: " + e.message, "error");
+  }
+}
+
+function kpiGetUserScores(userId) {
+  const cutoff = Date.now() - 30*24*60*60*1000;
+  const month  = new Date().toISOString().slice(0,7);
+
+  // ── AUTO from source tiles ──────────────────────────────────────────────
+  const punctuality  = kpiPunctualityScore(userId, cutoff);
+  const waste        = kpiWasteScore(userId, cutoff);
+  const cleanliness  = kpiCleanlinessScore(userId, cutoff);
+  const customer     = kpiCustomerScore(userId);
+
+  // ── MANUAL: entered monthly by owner / head barista in scorecard ─────────
+  const manual = ((state.kpi_manual||[]).find(m => m.user_id===userId && m.month===month)) || {};
+
+  const agg = {
+    punctuality,
+    waste,
+    cleanliness,
+    craft:     manual.craft     ?? null,
+    upselling: manual.upselling ?? null,
+    customer:  customer ?? (manual.customer ?? null),
+    teamwork:  manual.teamwork  ?? null,
+    training:  manual.training  ?? null,
+  };
+
+  const cats = Object.keys(KPI_W());
+  if (!cats.some(k=>agg[k]!=null)) return null;
+  return agg;
+}
+
+function kpiGetAllScores() {
+  const result = {};
+  for (const u of state.users) {
+    if (!["barista","head_barista"].includes(u.role)) continue;
+    const s = kpiGetUserScores(u.id);
+    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,training:null };
+  }
+  return result;
+}
+
+// ─── OWNER/HEAD BARISTA: Full team scorecard dashboard (English) ──────────────
+routes.scorecard = function(u) {
+  const wrap = el("div",{});
+  wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},"🏆 KPI Scorecards"));
+  wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"10px"}},"Team performance · last 30 days · auto-calculated from self-reports"));
+
+  // ── Customer feedback sync button ─────────────────────────────────────────
+  const fbCount = (state.customer_feedback||[]).length;
+  const fbBar = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"14px",flexWrap:"wrap"}});
+  fbBar.appendChild(el("div",{class:"muted small",style:{flex:"1"}},
+    fbCount
+      ? "😊 " + fbCount + " customer feedback entr" + (fbCount===1?"y":"ies") + " in sync — Customer Score is live"
+      : "😊 No customer feedback synced yet — ratings from coffeebeats.art will appear here after setup"
+  ));
+  const fbBtn = el("button",{class:"btn ghost",style:{fontSize:"12px",padding:"5px 12px"},
+    onClick: async () => { fbBtn.textContent="Fetching…"; fbBtn.disabled=true; await kpiFetchFeedback(); fbBtn.textContent="🔄 Sync feedback"; fbBtn.disabled=false; }
+  },"🔄 Sync feedback");
+  fbBar.appendChild(fbBtn);
+  wrap.appendChild(fbBar);
+
+  const allU = state.users.filter(x=>["barista","head_barista"].includes(x.role)&&x.active);
+  const allScores = kpiGetAllScores();
+  const cats = Object.keys(KPI_W());
+  const hasSomeData = allU.some(x => {
+    const s = allScores[x.id];
+    return s && cats.some(k=>s[k]!=null);
+  });
+
+  if (!hasSomeData) {
+    const empty = el("div",{class:"card",style:{textAlign:"center",padding:"32px"}});
+    empty.appendChild(el("div",{style:{fontSize:"36px",marginBottom:"8px"}},"📊"));
+    empty.appendChild(el("div",{style:{fontWeight:"700",fontSize:"15px"}},"No score data yet"));
+    empty.appendChild(el("div",{class:"muted",style:{marginTop:"8px"}},
+      "Baristas need to submit daily logs (\"سجّل شيفتي\") before scores appear here. Each submission auto-updates their rolling 30-day average."));
+    wrap.appendChild(empty);
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  // ── Leaderboard card ──
+  const lbCard = el("div",{class:"card",style:{marginBottom:"12px"}});
+  lbCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"🏆 Achievers Board"));
+  const sorted = allU.map(x=>{
+    const s = allScores[x.id];
+    const total = s && cats.some(k=>s[k]!=null) ? kpiCalcTotal(s) : null;
+    return {...x,total};
+  }).filter(x=>x.total!=null).sort((a,b)=>b.total-a.total);
+  const medals = ["🥇","🥈","🥉"];
+  sorted.forEach((m,i)=>{
+    const row = el("div",{style:{display:"flex",alignItems:"center",gap:"10px",padding:"7px 4px",borderBottom:"1px solid var(--border)"}});
+    row.appendChild(el("div",{style:{fontSize:"18px",width:"28px",textAlign:"center"}},medals[i]||String(i+1)));
+    row.appendChild(el("div",{style:{width:"32px",height:"32px",borderRadius:"50%",background:"var(--accent-2)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700",fontSize:"12px"}},
+      (m.name||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)));
+    const info = el("div",{style:{flex:"1"}});
+    info.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},m.name));
+    info.appendChild(el("div",{class:"muted small"},m.role==="head_barista"?"⭐ Head Barista":"Barista"));
+    row.appendChild(info);
+    const bar = el("div",{style:{flex:"2"}});
+    const barInner = el("div",{style:{height:"6px",background:"var(--surface-2)",borderRadius:"4px",overflow:"hidden"}});
+    barInner.appendChild(el("div",{style:{width:m.total+"%",height:"100%",background:kpiScoreColor(m.total),borderRadius:"4px"}}));
+    bar.appendChild(barInner);
+    row.appendChild(bar);
+    row.appendChild(el("div",{style:{fontWeight:"800",fontSize:"15px",color:kpiScoreColor(m.total),minWidth:"36px",textAlign:"right"}},m.total.toFixed(0)));
+    lbCard.appendChild(row);
+  });
+  wrap.appendChild(lbCard);
+
+  // ── Heatmap table ──
+  const hm = el("div",{class:"card",style:{overflowX:"auto",marginBottom:"12px"}});
+  hm.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"📊 Category Heatmap — All Baristas"));
+  const tbl = el("table",{});
+  const thead = el("thead",{});
+  const hrow = el("tr",{});
+  hrow.appendChild(el("th",{},"Barista"));
+  cats.forEach(k=>hrow.appendChild(el("th",{style:{textAlign:"center"}},KPI_ICONS[k]+" "+KPI_LABELS_EN[k])));
+  hrow.appendChild(el("th",{style:{textAlign:"center"}},"Total"));
+  thead.appendChild(hrow);
+  tbl.appendChild(thead);
+  const tbody = el("tbody",{});
+  allU.forEach(x=>{
+    const s = allScores[x.id];
+    const total = s && cats.some(k=>s[k]!=null) ? kpiCalcTotal(s) : null;
+    const row = el("tr",{});
+    const nameCell = el("td",{});
+    nameCell.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},x.name));
+    if (x.role==="head_barista") nameCell.appendChild(el("div",{class:"small muted"},"⭐ Head"));
+    row.appendChild(nameCell);
+    cats.forEach(k=>{
+      const v = s&&s[k]!=null ? s[k] : null;
+      const td = el("td",{class:"num"});
+      if (v!=null) {
+        const pill = el("span",{style:{display:"inline-block",background:v>=85?"rgba(47,138,85,.15)":v>=65?"rgba(183,121,31,.15)":"rgba(194,59,59,.15)",color:kpiScoreColor(v),borderRadius:"6px",padding:"2px 7px",fontWeight:"700",fontSize:"12px"}},String(v));
+        td.appendChild(pill);
+      } else {
+        td.appendChild(el("span",{class:"muted small"},"—"));
+      }
+      row.appendChild(td);
+    });
+    const totCell = el("td",{class:"num"});
+    if (total!=null) totCell.appendChild(el("b",{style:{color:kpiScoreColor(total)}},total.toFixed(0)));
+    else totCell.appendChild(el("span",{class:"muted small"},"—"));
+    row.appendChild(totCell);
+    tbody.appendChild(row);
+  });
+  tbl.appendChild(tbody);
+  hm.appendChild(tbl);
+  wrap.appendChild(hm);
+
+  // ── Individual deep-dive ──
+  const diveCard = el("div",{class:"card"});
+  diveCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"🔍 Individual Deep-Dive"));
+  const sel = el("select",{style:{marginBottom:"12px"}});
+  sel.appendChild(el("option",{value:""},"— Select a barista —"));
+  allU.forEach(x=>sel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
+  diveCard.appendChild(sel);
+  const diveBody = el("div",{});
+  diveCard.appendChild(diveBody);
+  sel.addEventListener("change",()=>{
+    diveBody.innerHTML="";
+    const uid = sel.value;
+    if (!uid) return;
+    const person = allU.find(x=>x.id===uid);
+    const s = allScores[uid];
+    if (!s||!cats.some(k=>s[k]!=null)) {
+      diveBody.appendChild(el("div",{class:"muted small"},"No logs submitted yet for this barista."));
+      return;
+    }
+    const total = kpiCalcTotal(s);
+    const isHead = person.role==="head_barista";
+    const tgt = isHead?85:75;
+    const summRow = el("div",{style:{display:"flex",alignItems:"center",gap:"14px",marginBottom:"14px",flexWrap:"wrap"}});
+    summRow.appendChild(el("div",{style:{fontWeight:"800",fontSize:"2rem",color:kpiScoreColor(total)}},total.toFixed(0)));
+    const summInfo = el("div",{});
+    summInfo.appendChild(el("div",{style:{fontWeight:"700"}},person.name));
+    summInfo.appendChild(el("div",{class:"muted small"},kpiGradeEn(total)+" · Target: "+tgt+"+"));
+    summRow.appendChild(summInfo);
+    diveBody.appendChild(summRow);
+    cats.forEach(k=>{
+      const v = s[k];
+      if (v==null) return;
+      const rowDiv = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"7px"}});
+      rowDiv.appendChild(el("div",{style:{width:"140px",fontSize:"12px",fontWeight:"600"}},KPI_ICONS[k]+" "+KPI_LABELS_EN[k]));
+      const barWrap = el("div",{style:{flex:"1",height:"7px",background:"var(--surface-2)",borderRadius:"4px",overflow:"hidden"}});
+      barWrap.appendChild(el("div",{style:{width:v+"%",height:"100%",background:kpiScoreColor(v),borderRadius:"4px"}}));
+      rowDiv.appendChild(barWrap);
+      rowDiv.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",color:kpiScoreColor(v),minWidth:"28px",textAlign:"right"}},String(v)));
+      rowDiv.appendChild(el("div",{class:"pill",style:{fontSize:"10px"}},KPI_W()[k]+"%"));
+      diveBody.appendChild(rowDiv);
+    });
+    // Recent logs for this person
+    const recent = (state.kpi_logs||[]).filter(l=>l.user_id===uid).sort((a,b)=>b.at-a.at).slice(0,5);
+    if (recent.length) {
+      diveBody.appendChild(el("div",{style:{fontWeight:"600",fontSize:"12px",color:"var(--ink-dim)",marginTop:"12px",marginBottom:"6px",textTransform:"uppercase",letterSpacing:".5px"}},"Recent Logs"));
+      const lt = el("table",{});
+      lt.appendChild(el("thead",{},[el("tr",{},[el("th",{},"Date"),el("th",{},"Shift"),el("th",{style:{textAlign:"right"}},"Punctuality"),el("th",{style:{textAlign:"right"}},"Waste"),el("th",{style:{textAlign:"right"}},"Cleanliness")])]));
+      const ltb = el("tbody",{});
+      recent.forEach(l=>{
+        ltb.appendChild(el("tr",{},[
+          el("td",{},fmtDay(l.at)),
+          el("td",{class:"muted"},l.shift||"—"),
+          el("td",{class:"num",style:{color:kpiScoreColor(l.punctuality||0)}},l.punctuality!=null?String(l.punctuality):"—"),
+          el("td",{class:"num",style:{color:kpiScoreColor(l.waste||0)}},l.waste!=null?String(l.waste):"—"),
+          el("td",{class:"num",style:{color:kpiScoreColor(l.cleanliness||0)}},l.cleanliness!=null?String(l.cleanliness):"—"),
+        ]));
+      });
+      lt.appendChild(ltb);
+      diveBody.appendChild(lt);
+    }
+  });
+  wrap.appendChild(diveCard);
+
+  // ── Manual monthly score entry ──────────────────────────────────────────────
+  if (u.role === "owner" || u.role === "head_barista") {
+    const manCard = el("div",{class:"card",style:{marginTop:"12px"}});
+    manCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},"✏️ Enter Monthly Manual Scores"));
+    manCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+      "Craft, Upselling, Customer (if not from coffeebeats.art), Teamwork & Training — set once per month per barista."));
+    const manSelWrap = el("div",{style:{marginBottom:"10px"}});
+    manSelWrap.appendChild(el("label",{},"Barista"));
+    const manSel = el("select",{});
+    manSel.appendChild(el("option",{value:""},"— Select barista —"));
+    allU.forEach(x=>manSel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
+    manSelWrap.appendChild(manSel);
+    manCard.appendChild(manSelWrap);
+    const manFields = el("div",{id:"man-fields-wrap",style:{display:"none"}});
+    manCard.appendChild(manFields);
+    const MAN_CATS = [
+      {k:"craft",     label:"☕ Coffee Craft",  hint:"SCA blind tasting & recipe adherence (0-100)"},
+      {k:"upselling", label:"📈 Upselling",      hint:"Avg ticket size vs branch target (0-100)"},
+      {k:"customer",  label:"😊 Customer Score", hint:"Review avg × 20 — or override coffeebeats.art data (0-100)"},
+      {k:"teamwork",  label:"👥 Teamwork",        hint:"Peer input, shoutouts received, shift coverage (0-100)"},
+      {k:"training",  label:"🌱 Training",        hint:"Modules completed ÷ modules assigned × 100 (0-100)"},
+    ];
+    manSel.addEventListener("change",()=>{
+      manFields.innerHTML="";
+      const uid = manSel.value;
+      if (!uid) { manFields.style.display="none"; return; }
+      manFields.style.display="block";
+      const month = new Date().toISOString().slice(0,7);
+      const existing = (state.kpi_manual||[]).find(m=>m.user_id===uid&&m.month===month)||{};
+      MAN_CATS.forEach(({k,label,hint})=>{
+        manFields.appendChild(el("label",{style:{marginTop:"10px"}},label));
+        manFields.appendChild(el("div",{class:"muted small",style:{marginBottom:"4px"}},hint));
+        const inp = el("input",{type:"range",min:"0",max:"100",value:existing[k]||50,id:"man_"+k});
+        const val = el("span",{style:{fontWeight:"700",color:"var(--accent)",marginLeft:"8px"}},String(inp.value));
+        inp.addEventListener("input",()=>{ val.textContent=inp.value; });
+        const row = el("div",{style:{display:"flex",alignItems:"center",gap:"6px"}});
+        row.appendChild(inp); row.appendChild(val);
+        manFields.appendChild(row);
+      });
+      const saveBtn = el("button",{class:"btn",style:{marginTop:"14px"},onClick:()=>{
+        const month2 = new Date().toISOString().slice(0,7);
+        const entry = { user_id:uid, month:month2 };
+        MAN_CATS.forEach(({k})=>{ entry[k]=parseInt(document.getElementById("man_"+k)?.value||50); });
+        if (!state.kpi_manual) state.kpi_manual=[];
+        const idx = state.kpi_manual.findIndex(m=>m.user_id===uid&&m.month===month2);
+        if (idx>=0) state.kpi_manual[idx]=entry; else state.kpi_manual.push(entry);
+        save();
+        toast("✅ Manual scores saved for "+allU.find(x=>x.id===uid)?.name);
+      }},"Save Manual Scores");
+      manFields.appendChild(saveBtn);
+    });
+    wrap.appendChild(manCard);
+
+    // ── Customer feedback entry ────────────────────────────────────────────
+    const cfCard = el("div",{class:"card",style:{marginTop:"12px"}});
+    cfCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},"😊 Customer Feedback Log"));
+    cfCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+      "Customer Score auto-feeds from coffeebeats.art reviews — ratings from the public form flow straight into each barista's KPI. Use 'Sync feedback' on the scorecard page to pull the latest, or override manually below."));
+    const cfSelWrap = el("div",{style:{marginBottom:"10px"}});
+    cfSelWrap.appendChild(el("label",{},"Barista"));
+    const cfSel = el("select",{});
+    cfSel.appendChild(el("option",{value:""},"— Select barista —"));
+    allU.forEach(x=>cfSel.appendChild(el("option",{value:x.id},x.name)));
+    cfSelWrap.appendChild(cfSel);
+    cfCard.appendChild(cfSelWrap);
+    cfCard.appendChild(el("label",{},"Star Rating (1–5)"));
+    const cfRating = el("input",{type:"number",min:"1",max:"5",step:"0.1",placeholder:"e.g. 4.7"});
+    cfCard.appendChild(cfRating);
+    cfCard.appendChild(el("label",{},"Source"));
+    const cfSrc = el("select",{},[
+      el("option",{value:"coffeebeats.art"},"coffeebeats.art review"),
+      el("option",{value:"google"},"Google Review"),
+      el("option",{value:"manual"},"Manual entry"),
+      el("option",{value:"in-store"},"In-store feedback card"),
+    ]);
+    cfCard.appendChild(cfSrc);
+    cfCard.appendChild(el("label",{},"Note (optional)"));
+    const cfNote = el("input",{type:"text",placeholder:"e.g. Mentioned barista by name, perfect latte art"});
+    cfCard.appendChild(cfNote);
+    cfCard.appendChild(el("button",{class:"btn",style:{marginTop:"12px"},onClick:()=>{
+      const uid = cfSel.value;
+      const rat = parseFloat(cfRating.value);
+      if (!uid||isNaN(rat)||rat<1||rat>5) { toast("Select barista and enter 1–5 rating","error"); return; }
+      if (!state.customer_feedback) state.customer_feedback=[];
+      state.customer_feedback.push({
+        id:uuid(), at:now(), by:u.id, by_name:u.name,
+        user_id:uid, barista_id:uid,
+        rating:rat, source:cfSrc.value, note:cfNote.value.trim(),
+        month:new Date().toISOString().slice(0,7),
+      });
+      save(); cfRating.value=""; cfNote.value="";
+      toast("✅ Customer feedback logged — Customer Score updated");
+    }},"Log Feedback"));
+    // Recent feedback table
+    const recentCF = (state.customer_feedback||[]).sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,8);
+    if (recentCF.length) {
+      const cft = el("table",{style:{marginTop:"10px"}});
+      cft.appendChild(el("thead",{},[el("tr",{},[el("th",{},"Barista"),el("th",{},"Rating"),el("th",{},"Source"),el("th",{},"Date")])]));
+      const cftb=el("tbody",{});
+      recentCF.forEach(f=>{
+        const bName=(allU.find(x=>x.id===f.user_id)||{}).name||f.user_id;
+        cftb.appendChild(el("tr",{},[
+          el("td",{},bName),
+          el("td",{class:"num",style:{color:kpiScoreColor(f.rating*20)}},"★"+f.rating.toFixed(1)),
+          el("td",{class:"muted"},f.source||""),
+          el("td",{class:"muted"},fmtDay(f.at||0)),
+        ]));
+      });
+      cft.appendChild(cftb);
+      cfCard.appendChild(cft);
+    }
+    wrap.appendChild(cfCard);
+  }
+
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ─── BARISTA/HEAD: Personal scorecard (Arabic) ────────────────────────────────
+routes.my_scorecard = function(u) {
+  const isAR = u.role==="barista"||u.role==="head_barista";
+  const dir  = isAR?"rtl":"ltr";
+  const wrap = el("div",{style:{direction:dir}});
+  const scores = kpiGetUserScores(u.id);
+  const cats = Object.keys(KPI_W());
+  const isHead = u.role==="head_barista";
+  const tgt = isHead?85:75;
+
+  // Header
+  const hdr = el("div",{class:"card",style:{textAlign:"center",marginBottom:"12px",background:"var(--ink)",color:"var(--accent-2)"}});
+  hdr.appendChild(el("div",{style:{fontSize:"12px",letterSpacing:"2px",opacity:".7",textTransform:"uppercase",marginBottom:"4px"}},"Coffee Beats · بطاقة الأداء"));
+  hdr.appendChild(el("div",{style:{fontSize:"20px",fontWeight:"800"}},u.name));
+  hdr.appendChild(el("div",{style:{fontSize:"13px",opacity:".8",marginTop:"4px"}},isHead?"⭐ رئيس بريستا":"بريستا"));
+  wrap.appendChild(hdr);
+
+  if (!scores||!cats.some(k=>scores[k]!=null)) {
+    const empty = el("div",{class:"card",style:{textAlign:"center",padding:"28px 16px"}});
+    empty.appendChild(el("div",{style:{fontSize:"34px",marginBottom:"8px"}},"📋"));
+    empty.appendChild(el("div",{style:{fontWeight:"700",fontSize:"15px"}},isAR?"لا توجد بيانات بعد":"No data yet"));
+    empty.appendChild(el("div",{class:"muted",style:{marginTop:"8px",fontSize:"13px"}},
+      isAR?"اضغط على 'سجّل شيفتي' لتبدأ بإدخال بياناتك اليومية. ستظهر نقاطك هنا تلقائياً.":"Submit daily logs to see your scores."));
+    wrap.appendChild(empty);
+    const emptyBtns = el("div",{class:"btn-row",style:{marginTop:"12px"}});
+    emptyBtns.appendChild(el("button",{class:"btn",onClick:()=>go("signin_stamp_new")},isAR?"🕐 سجّل حضورك":"🕐 Sign-In Stamp"));
+    emptyBtns.appendChild(el("button",{class:"btn secondary",onClick:()=>go("cleaning_log_new")},isAR?"🧹 سجل النظافة":"🧹 Cleaning Log"));
+    wrap.appendChild(emptyBtns);
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  const total = kpiCalcTotal(scores);
+  // Score ring (CSS only)
+  const scoreCard = el("div",{class:"card",style:{marginBottom:"12px"}});
+  const ringWrap = el("div",{style:{display:"flex",alignItems:"center",gap:"16px",flexWrap:"wrap"}});
+  const pct = Math.min(total,100);
+  const r=36,circ=2*Math.PI*r,dash=(pct/100)*circ;
+  const ringDiv = el("div",{style:{position:"relative",width:"88px",height:"88px",flexShrink:"0"}});
+  ringDiv.innerHTML=`<svg width="88" height="88" viewBox="0 0 88 88" style="transform:rotate(-90deg)"><circle cx="44" cy="44" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="8"/><circle cx="44" cy="44" r="${r}" fill="none" stroke="${kpiScoreColor(total)}" stroke-width="8" stroke-dasharray="${dash} ${circ}" stroke-linecap="round"/></svg><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;line-height:1"><span style="font-size:1.4rem;font-weight:800;color:${kpiScoreColor(total)}">${total.toFixed(0)}</span><br><span style="font-size:.55rem;color:var(--ink-dim)">/100</span></div>`;
+  ringWrap.appendChild(ringDiv);
+  const info = el("div",{style:{flex:"1"}});
+  info.appendChild(el("div",{style:{fontWeight:"700",fontSize:"15px"}},isAR?kpiGrade(total,isHead):kpiGradeEn(total)));
+  info.appendChild(el("div",{class:"muted",style:{fontSize:"12px",marginTop:"4px"}},isAR?`الهدف: ${tgt} نقطة أو أكثر`:`Target: ${tgt}+`));
+  // mini log button
+  const quickLinks = el("div",{class:"btn-row",style:{marginTop:"10px",gap:"6px"}});
+  quickLinks.appendChild(el("button",{class:"btn",style:{padding:"9px 12px",fontSize:"12px"},onClick:()=>go("signin_stamp_new")},isAR?"🕐 حضور":"🕐 Stamp"));
+  quickLinks.appendChild(el("button",{class:"btn secondary",style:{padding:"9px 12px",fontSize:"12px"},onClick:()=>go("waste_new")},isAR?"♻️ هدر":"♻️ Waste"));
+  quickLinks.appendChild(el("button",{class:"btn secondary",style:{padding:"9px 12px",fontSize:"12px"},onClick:()=>go("cleaning_log_new")},isAR?"🧹 نظافة":"🧹 Clean"));
+  info.appendChild(quickLinks);
+  ringWrap.appendChild(info);
+  scoreCard.appendChild(ringWrap);
+  wrap.appendChild(scoreCard);
+
+  // Category breakdown
+  const catCard = el("div",{class:"card",style:{marginBottom:"12px"}});
+  catCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},isAR?"تفصيل النقاط":"Score Breakdown"));
+  const SRC_LABELS = {
+    punctuality: isAR?"تلقائي: بصمة الحضور":"Auto: Sign-In Stamp",
+    waste:       isAR?"تلقائي: سجل الهدر":"Auto: Waste Log",
+    cleanliness: isAR?"تلقائي: سجل النظافة":"Auto: Cleaning Log",
+    craft:       isAR?"شهري: رئيس البريستا":"Monthly: Head Barista",
+    upselling:   isAR?"شهري: تقرير المبيعات":"Monthly: Sales Report",
+    customer:    isAR?"تلقائي: تقييمات العملاء":"Auto: Customer Reviews",
+    teamwork:    isAR?"شهري: تقييم الزملاء":"Monthly: Peer Input",
+    training:    isAR?"شهري: وحدات التدريب":"Monthly: Training Modules",
+  };
+  catCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+    isAR?"الأخضر = تلقائي من تصرفاتك · الرمادي = يدخله رئيس البريستا شهرياً":"Green = auto-calculated from your actions · Grey = entered monthly by management"));
+  cats.forEach(k=>{
+    const v = scores[k];
+    const label = isAR?KPI_LABELS_AR[k]:KPI_LABELS_EN[k];
+    const rowDiv = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}});
+    rowDiv.appendChild(el("div",{style:{fontSize:"16px",width:"24px",textAlign:"center"}},KPI_ICONS[k]));
+    rowDiv.appendChild(el("div",{style:{flex:"2",fontSize:"13px",fontWeight:"600"}},label));
+    const barWrap = el("div",{style:{flex:"3",height:"7px",background:"var(--surface-2)",borderRadius:"4px",overflow:"hidden"}});
+    const barVal = v!=null?v:0;
+    barWrap.appendChild(el("div",{style:{width:barVal+"%",height:"100%",background:kpiScoreColor(barVal),borderRadius:"4px"}}));
+    rowDiv.appendChild(barWrap);
+    const vEl = v!=null?el("div",{style:{fontWeight:"800",fontSize:"13px",color:kpiScoreColor(v),minWidth:"28px",textAlign:"right"}},String(v)):el("div",{class:"muted small",style:{minWidth:"28px",textAlign:"right"}},"—");
+    rowDiv.appendChild(vEl);
+    rowDiv.appendChild(el("div",{class:"pill",style:{fontSize:"10px"}},KPI_W()[k]+"%"));
+    catCard.appendChild(rowDiv);
+  });
+  wrap.appendChild(catCard);
+
+  // Rewards summary
+  const month = kpiGrade(total,isHead);
+  const rwdCard = el("div",{class:"card",style:{marginBottom:"12px",borderColor:total>=90?"gold":total>=80?"silver":"var(--border)"}});
+  rwdCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"8px"}},isAR?"🎁 مكافأتي هذا الشهر":"🎁 My Monthly Reward"));
+  const rwdText = {
+    90:{ar:"🥇 ذهبي — يوم إجازة مكافأة + كوبون هدية + أولوية في الجدول",en:"🥇 Gold — Bonus day off · Gift voucher · Priority schedule"},
+    80:{ar:"🥈 فضي — كوبون وجبة + تدريب من اختيارك + تهنئة على مستوى الفريق",en:"🥈 Silver — Meal voucher · Training of choice · Team shoutout"},
+    70:{ar:"🥉 برونزي — رسالة تقدير + أولوية في الجداول الزمنية",en:"🥉 Bronze — Recognition letter · Schedule preference"},
+    0: {ar:"📈 في تطور — حدد هدفاً مع رئيس البريستا هذا الشهر",en:"📈 Rising — Set a growth goal with Head Barista"},
+  };
+  const tier = total>=90?90:total>=80?80:total>=70?70:0;
+  rwdCard.appendChild(el("div",{style:{fontSize:"13px",lineHeight:"1.6"}},isAR?rwdText[tier].ar:rwdText[tier].en));
+  wrap.appendChild(rwdCard);
+
+  // Recent logs
+  const recent = (state.kpi_logs||[]).filter(l=>l.user_id===u.id).sort((a,b)=>b.at-a.at).slice(0,5);
+  if (recent.length) {
+    const logCard = el("div",{class:"card"});
+    logCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"8px"}},isAR?"آخر التسجيلات":"Recent Logs"));
+    const lt=el("table",{});
+    lt.appendChild(el("thead",{},[el("tr",{},[
+      el("th",{},isAR?"التاريخ":"Date"),
+      el("th",{style:{textAlign:"right"}},isAR?"الحضور":"Punct."),
+      el("th",{style:{textAlign:"right"}},isAR?"الهدر":"Waste"),
+      el("th",{style:{textAlign:"right"}},isAR?"النظافة":"Clean"),
+    ])]));
+    const ltb=el("tbody",{});
+    recent.forEach(l=>{
+      ltb.appendChild(el("tr",{},[
+        el("td",{},fmtDay(l.at)),
+        el("td",{class:"num",style:{color:kpiScoreColor(l.punctuality||0)}},l.punctuality!=null?String(l.punctuality):"—"),
+        el("td",{class:"num",style:{color:kpiScoreColor(l.waste||0)}},l.waste!=null?String(l.waste):"—"),
+        el("td",{class:"num",style:{color:kpiScoreColor(l.cleanliness||0)}},l.cleanliness!=null?String(l.cleanliness):"—"),
+      ]));
+    });
+    lt.appendChild(ltb);
+    logCard.appendChild(lt);
+    wrap.appendChild(logCard);
+  }
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+routes.kpi_log_new = function(u) {
+  const isAR = u.role==="barista"||u.role==="head_barista";
+  const dir  = isAR?"rtl":"ltr";
+  const wrap = el("div",{style:{direction:dir}});
+
+  wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},isAR?"📝 سجّل شيفتي اليوم":"📝 Log My Shift"));
+  wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"14px",fontSize:"13px"}},
+    isAR?"ملاحظة: الصدق يُكافأ — كل إدخال يُحسب لصالحك في بطاقة الأداء":"Honesty earns points — every entry improves your scorecard."));
+
+  const form = el("div",{class:"stack"});
+  // Date + shift
+  const dateCard = el("div",{class:"card"});
+  dateCard.appendChild(el("label",{},isAR?"📅 التاريخ":"📅 Date"));
+  const dateInp = el("input",{type:"date",value:fmtDay(now()),id:"kl_date_inp"});
+  dateCard.appendChild(dateInp);
+  dateCard.appendChild(el("label",{},isAR?"🌤️ نوع الشيفت":"🌤️ Shift Type"));
+  const shiftSel = el("select",{id:"kl_shift"});
+  shiftSel.appendChild(el("option",{value:"morning"},isAR?"☀️ صباحي (فتح)":"☀️ Morning (Opening)"));
+  shiftSel.appendChild(el("option",{value:"afternoon"},isAR?"🌤️ ظهر":"🌤️ Afternoon"));
+  shiftSel.appendChild(el("option",{value:"closing"},isAR?"🌙 إغلاق":"🌙 Closing"));
+  dateCard.appendChild(shiftSel);
+  form.appendChild(dateCard);
+
+  // Punctuality
+  const pCard = el("div",{class:"card"});
+  pCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"⏱️ الانضباط والحضور":"⏱️ Punctuality"));
+  pCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+    el("div",{},[el("label",{},isAR?"الوقت المحدد":"Scheduled"),el("input",{type:"time",value:"09:00",id:"kl_sched"})]),
+    el("div",{},[el("label",{},isAR?"وصلت في":"Actual clock-in"),el("input",{type:"time",id:"kl_actual",oninput:"kpiLivePunct()"})]),
+  ]));
+  const pRes = el("div",{id:"kpi_punct_res",class:"muted small",style:{marginTop:"6px"}},isAR?"أدخل وقت الحضور الفعلي لحساب النقاط":"Enter your actual clock-in time");
+  pCard.appendChild(pRes);
+  form.appendChild(pCard);
+
+  // Waste
+  const wCard = el("div",{class:"card"});
+  wCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"♻️ ترشيد الهدر":"♻️ Waste Control"));
+  wCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+    el("div",{},[el("label",{},isAR?"شوطات الإسبريسو المهدرة":"Espresso shots wasted"),el("input",{type:"number",min:"0",max:"50",placeholder:"0",id:"kl_shots",oninput:"kpiLiveWaste()"})]),
+    el("div",{},[el("label",{},isAR?"الحليب المهدر (مل)":"Milk wasted (ml)"),el("input",{type:"number",min:"0",placeholder:"0",id:"kl_milk",oninput:"kpiLiveWaste()"})]),
+  ]));
+  wCard.appendChild(el("label",{},isAR?"ملاحظات أخرى":"Other waste notes"));
+  wCard.appendChild(el("input",{type:"text",id:"kl_wnotes",placeholder:isAR?"مثال: زجاجة شراب سقطت، حليب أوت منتهي الصلاحية":"e.g. Dropped syrup, expired oat milk"}));
+  const wRes = el("div",{id:"kpi_waste_res",class:"muted small",style:{marginTop:"6px"}},"");
+  wCard.appendChild(wRes);
+  form.appendChild(wCard);
+
+  // Cleanliness checklist
+  const cCard = el("div",{class:"card"});
+  cCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"🧹 قائمة النظافة":"🧹 Cleanliness Checklist"));
+  const items = isAR?CLEAN_AR:CLEAN_EN;
+  items.forEach((item,i)=>{
+    const lbl = el("label",{style:{display:"flex",alignItems:"flex-start",gap:"8px",padding:"7px 0",borderBottom:"1px solid var(--border)",fontSize:"13px",cursor:"pointer"}});
+    lbl.appendChild(el("input",{type:"checkbox",id:"kl_clean_"+i,style:{width:"16px",height:"16px",marginTop:"2px",flexShrink:"0"},oninput:"kpiLiveClean()"}));
+    lbl.appendChild(el("span",{},item));
+    cCard.appendChild(lbl);
+  });
+  cCard.appendChild(el("div",{style:{marginTop:"8px",fontWeight:"600",fontSize:"13px"}},[ isAR?"النقاط: ":"Score: ", el("span",{id:"kpi_clean_score",style:{color:"var(--accent)"}},isAR?"٠/١٠٠":"0/100")]));
+  form.appendChild(cCard);
+
+  // Notes
+  const nCard = el("div",{class:"card"});
+  nCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"💬 ملاحظات الشيفت":"💬 Shift Notes"));
+  nCard.appendChild(el("label",{},isAR?"أبرز حدث اليوم (إيجابي أو تحدٍّ)":"Highlight or challenge today"));
+  nCard.appendChild(el("textarea",{id:"kl_notes",rows:"2",placeholder:isAR?"مثال: ضغط كبير في الصباح، لكن الفريق تعاون بشكل رائع":"e.g. Very busy morning but team worked great"}));
+  nCard.appendChild(el("label",{},isAR?"شكر خاص لزميل (اختياري)":"Team shoutout (optional)"));
+  nCard.appendChild(el("input",{type:"text",id:"kl_shout",placeholder:isAR?"مثال: رانا غطّت عني وقت الضغط — شكراً جزيلاً":"e.g. Rana covered for me during rush — huge help!"}));
+  form.appendChild(nCard);
+
+  wrap.appendChild(form);
+
+  const submitBtn = el("button",{class:"btn",style:{marginTop:"12px"},onClick:submitKpiLog},isAR?"✅ إرسال تقرير الشيفت":"✅ Submit Shift Log");
+  wrap.appendChild(submitBtn);
+  wrap.appendChild(btnBack());
+
+  // Live calc helpers attached to window for inline oninput handlers
+  window.kpiLivePunct = function() {
+    const sched = document.getElementById("kl_sched");
+    const actual = document.getElementById("kl_actual");
+    const res = document.getElementById("kpi_punct_res");
+    if (!sched||!actual||!res||!actual.value) return;
+    const [sh,sm]=sched.value.split(":").map(Number);
+    const [ah,am]=actual.value.split(":").map(Number);
+    const diff=(ah*60+am)-(sh*60+sm);
+    let score,msg;
+    if(diff<=0){score=100;msg=isAR?"🎉 في الموعد! علامة كاملة":"🎉 On time! Full marks";}
+    else if(diff<=5){score=90;msg=isAR?"✅ تأخير ٥ دقائق — ٩٠ نقطة":"✅ Within grace — 90 pts";}
+    else if(diff<=15){score=70;msg=isAR?"⚠️ تأخير ٦-١٥ دقيقة — ٧٠ نقطة":"⚠️ 6-15 min late — 70 pts";}
+    else if(diff<=30){score=50;msg=isAR?"⚠️ تأخير ١٦-٣٠ دقيقة — ٥٠ نقطة":"⚠️ 16-30 min late — 50 pts";}
+    else{score=20;msg=isAR?"❌ أكثر من ٣٠ دقيقة — ٢٠ نقطة":"❌ Over 30 min late — 20 pts";}
+    res.textContent=msg;
+    res.style.color=score>=90?"var(--ok)":score>=70?"var(--warn)":"var(--bad)";
+  };
+  window.kpiLiveWaste = function() {
+    const shots=parseInt(document.getElementById("kl_shots")?.value)||0;
+    const milk=parseInt(document.getElementById("kl_milk")?.value)||0;
+    let score=100;
+    if(shots>3)score-=(shots-3)*10;
+    if(milk>100)score-=Math.floor((milk-100)/50)*10;
+    score=Math.max(score,10);
+    const el2=document.getElementById("kpi_waste_res");
+    if(el2){el2.textContent=(isAR?"نقاط الهدر: ":"Waste score: ")+score+"/100";el2.style.color=kpiScoreColor(score);}
+  };
+  window.kpiLiveClean = function() {
+    const boxes=document.querySelectorAll("[id^='kl_clean_']");
+    const checked=Array.from(boxes).filter(b=>b.checked).length;
+    const score=Math.round((checked/boxes.length)*100);
+    const el2=document.getElementById("kpi_clean_score");
+    if(el2){el2.textContent=score+"/100";el2.style.color=kpiScoreColor(score);}
+  };
+
+  function submitKpiLog() {
+    const sched = document.getElementById("kl_sched")?.value||"09:00";
+    const actual= document.getElementById("kl_actual")?.value||"";
+    let pScore=70;
+    if(actual){
+      const [sh,sm]=sched.split(":").map(Number);
+      const [ah,am]=actual.split(":").map(Number);
+      const diff=(ah*60+am)-(sh*60+sm);
+      pScore=diff<=0?100:diff<=5?90:diff<=15?70:diff<=30?50:20;
+    }
+    const shots=parseInt(document.getElementById("kl_shots")?.value)||0;
+    const milk=parseInt(document.getElementById("kl_milk")?.value)||0;
+    let wScore=100;
+    if(shots>3)wScore-=(shots-3)*10;
+    if(milk>100)wScore-=Math.floor((milk-100)/50)*10;
+    wScore=Math.max(wScore,10);
+    const boxes=document.querySelectorAll("[id^='kl_clean_']");
+    const cleanScore=boxes.length?Math.round(Array.from(boxes).filter(b=>b.checked).length/boxes.length*100):0;
+    const entry = {
+      id:uuid(), user_id:u.id, at:now(),
+      date:document.getElementById("kl_date_inp")?.value||fmtDay(now()),
+      shift:document.getElementById("kl_shift")?.value||"morning",
+      punctuality:pScore, waste:wScore, cleanliness:cleanScore,
+      waste_notes:document.getElementById("kl_wnotes")?.value||"",
+      notes:document.getElementById("kl_notes")?.value||"",
+      shoutout:document.getElementById("kl_shout")?.value||"",
+    };
+    if(!state.kpi_logs) state.kpi_logs=[];
+    state.kpi_logs.unshift(entry);
+    save();
+    toast(isAR?"✅ تم إرسال التقرير! شكراً على التزامك ⭐":"✅ Log submitted! Scores updated.");
+    go("my_scorecard");
+  }
+  return wrap;
+};
+
+// ─── JOB DESCRIPTION (Arabic for barista, English for owner) ─────────────────
+routes.my_jd = function(u) {
+  const isOwner = u.role==="owner"||u.role==="accountant";
+  const isHead  = u.role==="head_barista";
+  const isAR    = !isOwner;
+  const dir     = isAR?"rtl":"ltr";
+  const wrap    = el("div",{style:{direction:dir}});
+
+  // Role toggle for owner
+  let viewRole = isHead||isOwner?"head":"barista";
+  if (u.role==="barista") viewRole="barista";
+
+  function renderJD() {
+    wrap.innerHTML="";
+    if(isOwner){
+      const tabs=el("div",{class:"tabs",style:{direction:"ltr"}});
+      const tHead=el("button",{class:"tab"+(viewRole==="head"?" on":""),onClick:()=>{viewRole="head";renderJD();}},isOwner?"⭐ Head Barista JD":"");
+      const tBar =el("button",{class:"tab"+(viewRole==="barista"?" on":""),onClick:()=>{viewRole="barista";renderJD();}},isOwner?"👤 Barista JD":"");
+      tabs.appendChild(tHead); tabs.appendChild(tBar);
+      wrap.appendChild(tabs);
+    }
+
+    const title = viewRole==="head"
+      ? (isAR?"⭐ رئيس البريستا — الوصف الوظيفي":"⭐ Head Barista — Job Description")
+      : (isAR?"👤 البريستا — الوصف الوظيفي":"👤 Barista — Job Description");
+    const subtitle = viewRole==="head"
+      ? (isAR?"القائد الإبداعي والتقني للبار في Coffee Beats":"The creative and technical leader of the bar at Coffee Beats")
+      : (isAR?"روح البار في Coffee Beats — حيث يلتقي الفن بالقهوة":"The soul of the bar at Coffee Beats — where art meets coffee");
+
+    const hCard=el("div",{class:"card",style:{marginBottom:"12px",background:"var(--ink)",color:"var(--accent-2)"}});
+    hCard.appendChild(el("div",{style:{fontSize:"11px",letterSpacing:"1.5px",opacity:".7",textTransform:"uppercase",marginBottom:"4px"}},"Coffee Beats · Specialty Coffee for Creatives"));
+    hCard.appendChild(el("div",{style:{fontSize:"18px",fontWeight:"800",marginBottom:"4px"}},title));
+    hCard.appendChild(el("div",{style:{fontSize:"13px",opacity:".8",lineHeight:"1.5"}},subtitle));
+    wrap.appendChild(hCard);
+
+    // KPI target card
+    const tCard=el("div",{class:"card",style:{marginBottom:"12px"}});
+    const tgt=viewRole==="head"?85:75;
+    tCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+      el("div",{class:"card",style:{textAlign:"center",background:"var(--surface-2)"}},[
+        el("div",{style:{fontSize:"2rem",fontWeight:"800",color:"var(--accent)"}},String(tgt)+"+"),
+        el("div",{class:"muted small"},isAR?"هدف النقاط الشهرية":"Monthly KPI Target"),
+      ]),
+      el("div",{class:"card",style:{textAlign:"center",background:"var(--surface-2)"}},[
+        el("div",{style:{fontSize:"2rem",fontWeight:"800",color:"var(--ok)"}},viewRole==="head"?"4.5★":"4.0★"),
+        el("div",{class:"muted small"},isAR?"هدف رضا العملاء":"Customer Score Target"),
+      ]),
+    ]));
+    wrap.appendChild(tCard);
+
+    const sections = viewRole==="head" ? [
+      {
+        icon:"☕",
+        en:"Coffee Craft & SCA Standards",ar:"فن القهوة — معايير SCA",
+        items_en:[
+          "Espresso dose: 18–21g ±0.5g · Extraction: 25–32s · Brew ratio: 1:2 to 1:2.5 — calibrate every 4-hour block · KPI: Extraction Consistency ≥ 90%",
+          "Milk steaming: 60–65°C, never above 68°C · Microfoam texture: 3–4mm for flat white, 5–7mm for cappuccino · KPI: Milk Temp Accuracy ≥ 90%",
+          "Grind-to-pull gap: < 30 seconds (espresso oxidises in 30s) · KPI: Zero pre-ground espresso incidents",
+          "Latte art standard: consistent pattern (rosetta, tulip or heart) on every single milk drink · KPI: Latte Art Completion ≥ 95%",
+          "Blind tasting calibration: conduct minimum 1 per week with team — record results · KPI: Team Consistency ≥ 85%",
+          "Out-of-spec drinks: empower any barista to remake without question · KPI: Remake Rate ≤ 2%",
+          "Espresso waste during calibration: ≤ 5 shots per calibration session · KPI: Calibration Efficiency ≥ 80%",
+        ],
+        items_ar:[
+          "جرعة الإسبريسو: ١٨-٢١ جم ±٠.٥ جم · استخلاص: ٢٥-٣٢ ثانية · نسبة التحضير ١:٢ إلى ١:٢.٥ — معايرة كل ٤ ساعات · الهدف: اتساق الاستخلاص ≥ ٩٠٪",
+          "تبخير الحليب: ٦٠-٦٥°م، لا يتجاوز ٦٨°م · ميكروفوم: ٣-٤ مم للفلات وايت، ٥-٧ مم للكابتشينو · الهدف: دقة درجة حرارة الحليب ≥ ٩٠٪",
+          "الفجوة بين الطحن والسحب: أقل من ٣٠ ثانية (الإسبريسو يتأكسد في ٣٠ ثانية) · الهدف: صفر حوادث إسبريسو مطحون مسبقاً",
+          "فن الحليب: نمط ثابت (روزيتا، توليب أو قلب) على كل مشروب حليبي · الهدف: اكتمال لاتيه آرت ≥ ٩٥٪",
+          "معايرة التذوق الأعمى: الحد الأدنى مرة أسبوعياً مع الفريق — تسجيل النتائج · الهدف: اتساق الفريق ≥ ٨٥٪",
+          "المشروبات خارج المعيار: تمكين أي بريستا من إعادة الصنع بدون سؤال · الهدف: معدل إعادة الصنع ≤ ٢٪",
+          "هدر الإسبريسو أثناء المعايرة: ≤ ٥ شوطات لكل جلسة معايرة · الهدف: كفاءة المعايرة ≥ ٨٠٪",
+        ],
+      },
+      {
+        icon:"👥",
+        en:"Team Leadership, Coaching & Culture",ar:"القيادة والتدريب وبناء الثقافة",
+        items_en:[
+          "Daily side-by-side coaching — observe technique live, give specific feedback within the shift · KPI: Team Avg KPI Score ≥ 75",
+          "Monthly structured 1:1 per barista: review scorecard, set SMART goal, document outcome · KPI: 1:1 Completion ≥ 90%",
+          "Onboarding: certify new hires on extraction, milk, menu and hygiene within 14 calendar days · KPI: Onboarding Completion ≤ 14 days",
+          "Pre-shift huddle: 10-min brief every opening shift — cover menu, events, waste target, yesterday's wins · KPI: Huddle Compliance ≥ 90%",
+          "Team morale: foster a rewarding-over-penalising culture — acknowledge wins publicly, address challenges privately · KPI: Team Shoutout Count ≥ 8/month",
+          "Cross-training: ensure every barista can cover every station — no single points of failure · KPI: Cross-Training Coverage ≥ 90%",
+        ],
+        items_ar:[
+          "تدريب جنباً إلى جنب يومياً — مراقبة التقنية مباشرة وتقديم تغذية راجعة محددة خلال الشيفت · الهدف: متوسط نقاط KPI للفريق ≥ ٧٥",
+          "جلسة 1:1 منظمة شهرياً لكل بريستا: مراجعة بطاقة الأداء، تحديد هدف SMART، توثيق النتيجة · الهدف: إتمام الجلسات ≥ ٩٠٪",
+          "التأهيل: اعتماد الموظفين الجدد على الاستخلاص، الحليب، القائمة والنظافة خلال ١٤ يوماً · الهدف: إتمام التأهيل ≤ ١٤ يوماً",
+          "اجتماع ما قبل الشيفت: إيجاز ١٠ دقائق في كل شيفت فتح — يشمل القائمة، الفعاليات، هدف الهدر، إنجازات الأمس · الهدف: التزام الاجتماع ≥ ٩٠٪",
+          "الروح المعنوية: تعزيز ثقافة المكافأة قبل العقوبة — الاعتراف بالإنجاز علناً، معالجة التحديات بشكل خاص · الهدف: عدد الشكر العلني ≥ ٨/شهر",
+          "التدريب المتقاطع: التأكد من قدرة كل بريستا على تغطية كل محطة — لا نقاط ضعف منفردة · الهدف: تغطية التدريب المتقاطع ≥ ٩٠٪",
+        ],
+      },
+      {
+        icon:"⏱️",
+        en:"Punctuality, Attendance & Operations Discipline",ar:"الانضباط والحضور وانضباط العمليات",
+        items_en:[
+          "Arrive 15 min before shift start for machine warm-up and team briefing — non-negotiable · KPI: Late Arrivals ≤ 1/month (Punctuality Score auto from stamp)",
+          "Attendance ≥ 95% of scheduled shifts — arrange cover proactively, never last-minute · KPI: Attendance ≥ 95%",
+          "Submit Cleaning Log + Waste Log personally every shift you work — lead by example · KPI: Personal Log Compliance 100%",
+          "Ensure every barista submits their Shift Close before leaving — bar cannot close without it · KPI: Shift Close Rate 100%",
+          "Temperature and equipment checks: espresso machine at temperature within 20 min of opening (measured) · KPI: Equipment Readiness 100%",
+        ],
+        items_ar:[
+          "الوصول قبل ١٥ دقيقة من بداية الشيفت لتسخين الماكينة وإيجاز الفريق — غير قابل للتفاوض · الهدف: تأخيرات ≤ ١/شهر (نقاط الانضباط تلقائية من البصمة)",
+          "الحضور ≥ ٩٥٪ من الشيفتات المجدولة — ترتيب البديل مسبقاً، لا لحظة أخيرة أبداً · الهدف: ≥ ٩٥٪",
+          "إرسال سجل النظافة وسجل الهدر شخصياً في كل شيفت تعمله — قُدوة للفريق · الهدف: الالتزام الشخصي ١٠٠٪",
+          "التأكد من إرسال كل بريستا إغلاق الشيفت قبل المغادرة — البار لا يُغلق بدونه · الهدف: معدل إغلاق الشيفت ١٠٠٪",
+          "فحص الحرارة والمعدات: ماكينة الإسبريسو على درجة الحرارة خلال ٢٠ دقيقة من الفتح (قياس فعلي) · الهدف: جاهزية المعدات ١٠٠٪",
+        ],
+      },
+      {
+        icon:"♻️",
+        en:"Waste Ownership & Cost Intelligence",ar:"ملكية الهدر والذكاء التكلفي",
+        items_en:[
+          "Own all waste tracking for the bar: personally log every shift + verify team logs are submitted · KPI: Bar Waste ≤ 5 shots/shift avg across team",
+          "Milk waste target: ≤ 100ml/shift (SCA specialty standard) — track team average weekly · KPI: Team Milk Waste ≤ 100ml/shift avg",
+          "Brief team on waste targets at every shift start — 60-second waste prompt, not a lecture · KPI: Briefing Compliance ≥ 90%",
+          "Monthly waste analysis: present top 3 waste drivers + action plan to management · KPI: Monthly Waste Report submitted",
+          "Inventory par levels: flag low stock 48h before critical — no stockout acceptable · KPI: Zero stockouts caused by late escalation",
+          "Calibration waste: track and report separately — target < 15 shots/week for calibration · KPI: Calibration Efficiency tracked",
+        ],
+        items_ar:[
+          "ملكية تتبع الهدر الكامل للبار: التسجيل الشخصي كل شيفت + التحقق من إرسال سجلات الفريق · الهدف: هدر البار ≤ ٥ شوطات/شيفت متوسط عبر الفريق",
+          "هدف هدر الحليب: ≤ ١٠٠ مل/شيفت (معيار SCA للقهوة المتخصصة) — تتبع متوسط الفريق أسبوعياً · الهدف: متوسط هدر حليب الفريق ≤ ١٠٠ مل/شيفت",
+          "إيجاز الفريق عن أهداف الهدر في بداية كل شيفت — ٦٠ ثانية تذكير، ليس محاضرة · الهدف: الالتزام بالإيجاز ≥ ٩٠٪",
+          "تحليل شهري للهدر: تقديم أهم ٣ أسباب للهدر + خطة عمل للإدارة · الهدف: تقديم تقرير الهدر الشهري",
+          "مستويات المخزون الحدية: الإبلاغ عن نقص المخزون قبل ٤٨ ساعة من الأزمة — لا نفاد مخزون مقبول · الهدف: صفر نفاد مخزون بسبب تأخر الإبلاغ",
+          "هدر المعايرة: تتبع وإبلاغ منفصل — الهدف < ١٥ شوطة/أسبوع للمعايرة · الهدف: تتبع كفاءة المعايرة",
+        ],
+      },
+      {
+        icon:"😊",
+        en:"Customer Experience & Cultural Curation",ar:"تجربة العملاء والتنظيم الثقافي",
+        items_en:[
+          "Customer score target: ≥ 4.3/5 stars from coffeebeats.art and Google reviews · KPI: Customer Score ≥ 4.3/5 (auto from feedback)",
+          "Complaint SLA: resolve personally within 5 min — solution + gesture, not just an apology · KPI: Complaint Resolution ≤ 5 min, Zero unresolved",
+          "Bar atmosphere: curate music tempo, aroma, and counter presentation for each session type (creative/filming/casual) · KPI: Atmosphere Consistency",
+          "Named review targets: aim for 2+ named mentions of team per week on public review platforms · KPI: Named Reviews ≥ 8/month",
+          "Community activation: propose 1 creative collaboration or event concept per month to management · KPI: Proposals ≥ 1/month",
+          "Sensory consistency: conduct daily taste-check on every brew offering before it goes to customers · KPI: Morning Taste-Check Compliance 100%",
+        ],
+        items_ar:[
+          "هدف رضا العملاء: ≥ ٤.٣/٥ نجوم من تقييمات coffeebeats.art وGoogle · الهدف: رضا العملاء ≥ ٤.٣/٥ (تلقائي من التغذية الراجعة)",
+          "SLA الشكاوى: الحل شخصياً خلال ٥ دقائق — حل + بادرة، ليس مجرد اعتذار · الهدف: حل الشكاوى ≤ ٥ دقائق، صفر شكاوى معلقة",
+          "أجواء البار: تنظيم إيقاع الموسيقى، الرائحة، وتقديم الكاونتر حسب كل نوع جلسة (إبداعية/تصوير/عادية) · الهدف: اتساق الأجواء",
+          "أهداف المراجعات المُسمّاة: الهدف ٢+ ذكر مُسمّى لأعضاء الفريق أسبوعياً على منصات المراجعة العامة · الهدف: المراجعات المُسمّاة ≥ ٨/شهر",
+          "التفعيل المجتمعي: اقتراح تعاون إبداعي واحد أو فكرة فعالية شهرياً للإدارة · الهدف: المقترحات ≥ ١/شهر",
+          "الاتساق الحسّي: إجراء اختبار تذوق يومي لكل عرض تحضير قبل تقديمه للعملاء · الهدف: الالتزام باختبار الصباح ١٠٠٪",
+        ],
+      },
+    ] : [
+      {
+        icon:"☕",
+        en:"Coffee Craft & Recipe Execution",ar:"جودة صنع القهوة وتطبيق الوصفات",
+        items_en:[
+          "Follow calibration set by Head Barista at shift start — no freelancing on dose, ratio or temperature · KPI: Recipe Adherence ≥ 85%",
+          "Espresso dose accuracy: ±0.5g of recipe card (weigh every shot, no eyeballing) · KPI: Dose Accuracy ≥ 90%",
+          "Extraction time: 25–32s — stop and re-calibrate if pulling outside range · KPI: 0 out-of-range shots served",
+          "Milk temperature: 60–65°C every time — thermometer available at all times · KPI: Milk Temp Accuracy ≥ 90%",
+          "Milk texturing: 3–4mm microfoam for flat white / long black with milk, 5–7mm for cappuccino/latte · KPI: Texture Compliance ≥ 85%",
+          "Latte art: consistent pattern (rosetta, tulip or heart) on every milk drink — guest-facing quality always · KPI: Latte Art Rate ≥ 90%",
+          "Drink speed: espresso-based within 3.5 min of order, cold drinks within 2 min · KPI: On-Time Delivery ≥ 95%",
+          "Remake standard: proactively remake any drink that falls below recipe — never serve a substandard drink · KPI: Remake Rate ≤ 3%",
+          "Grind-to-pull: < 30 seconds for every espresso shot — oxidation starts immediately · KPI: Zero pre-ground incidents",
+        ],
+        items_ar:[
+          "اتباع المعايرة التي يحددها رئيس البريستا في بداية الشيفت — لا اجتهاد في الجرعة أو النسبة أو الحرارة · الهدف: الالتزام بالوصفة ≥ ٨٥٪",
+          "دقة جرعة الإسبريسو: ±٠.٥ جم من بطاقة الوصفة (وزن كل شوطة، لا تخمين) · الهدف: دقة الجرعة ≥ ٩٠٪",
+          "وقت الاستخلاص: ٢٥-٣٢ ثانية — توقف وأعد المعايرة فور الخروج عن النطاق · الهدف: صفر شوطات خارج النطاق تُقدَّم",
+          "درجة حرارة الحليب: ٦٠-٦٥°م في كل مرة — الميزان الحراري متاح دائماً · الهدف: دقة حرارة الحليب ≥ ٩٠٪",
+          "قوام الحليب: ميكروفوم ٣-٤ مم للفلات وايت، ٥-٧ مم للكابتشينو والقهوة باللاتيه · الهدف: الالتزام بالقوام ≥ ٨٥٪",
+          "فن الحليب: نمط ثابت (روزيتا، توليب أو قلب) على كل مشروب — جودة مرئية دائماً للعميل · الهدف: نسبة اللاتيه آرت ≥ ٩٠٪",
+          "سرعة التقديم: الإسبريسو خلال ٣.٥ دقيقة، المشروبات الباردة خلال دقيقتين · الهدف: التسليم في الوقت ≥ ٩٥٪",
+          "معيار إعادة الصنع: أعد صنع أي مشروب دون معيار بشكل استباقي — لا تقدّم مشروباً دون مستوى أبداً · الهدف: ≤ ٣٪",
+          "الطحن قبل السحب: أقل من ٣٠ ثانية لكل شوطة إسبريسو — الأكسدة تبدأ فوراً · الهدف: صفر حوادث طحن مسبق",
+        ],
+      },
+      {
+        icon:"⏱️",
+        en:"Punctuality & Attendance",ar:"الانضباط والحضور",
+        items_en:[
+          "Arrive and clock in on time — measured daily via Sign-In Stamp · KPI: Punctuality Score ≥ 80 (auto-calculated)",
+          "Late ≤ 2 times per month (>5 min counts as late) · KPI: Late Arrivals ≤ 2/month",
+          "Attendance ≥ 90% of scheduled shifts — proactive communication required for any absence · KPI: Attendance ≥ 90%",
+          "No-show without notice: automatic full-day deduction + flag on scorecard",
+          "Submit Cleaning Log and Waste Log by end of every shift — completion tracked automatically · KPI: Shift Compliance ≥ 90%",
+        ],
+        items_ar:[
+          "الحضور والبصمة في الوقت المحدد — قياس يومي عبر بصمة الحضور · الهدف: نقاط الانضباط ≥ ٨٠ (حساب تلقائي)",
+          "تأخير ≤ مرتين في الشهر (أكثر من ٥ دقائق يُحسب تأخيراً) · الهدف: التأخيرات ≤ ٢/شهر",
+          "الحضور ≥ ٩٠٪ من الشيفتات المجدولة — التواصل المسبق مطلوب عند أي غياب · الهدف: ≥ ٩٠٪",
+          "الغياب بدون إشعار: خصم يوم كامل تلقائي + تسجيل في بطاقة الأداء",
+          "إرسال سجل النظافة وسجل الهدر قبل نهاية كل شيفت — يُتابَع تلقائياً · الهدف: الالتزام بالشيفت ≥ ٩٠٪",
+        ],
+      },
+      {
+        icon:"♻️",
+        en:"Waste Control (SCA Standards)",ar:"ترشيد الهدر — معايير SCA",
+        items_en:[
+          "Espresso shots wasted per shift: target ≤ 3 (excludes calibration) · KPI: Shot Waste ≤ 3/shift (auto from Waste Log)",
+          "Milk waste per shift: target ≤ 100ml (SCA specialty standard) · KPI: Milk Waste ≤ 100ml/shift (auto)",
+          "Log all waste in real-time via the Waste Log tile — honesty is mandatory · KPI: Zero unreported waste incidents",
+          "Calibration waste: up to 10 shots acceptable — must tag reason as 'calibration' in log",
+          "Improve personal waste score month-over-month — trend tracked in scorecard · KPI: MoM Waste Improvement",
+        ],
+        items_ar:[
+          "شوطات الإسبريسو المهدرة لكل شيفت: الهدف ≤ ٣ (لا تشمل المعايرة) · الهدف: هدر الشوطات ≤ ٣/شيفت (تلقائي من سجل الهدر)",
+          "هدر الحليب لكل شيفت: الهدف ≤ ١٠٠ مل (معيار SCA للقهوة المتخصصة) · الهدف: هدر الحليب ≤ ١٠٠ مل/شيفت (تلقائي)",
+          "تسجيل كل الهدر فوراً عبر تايل سجل الهدر — الصدق إلزامي · الهدف: صفر حوادث هدر غير مُبلَّغ عنها",
+          "هدر المعايرة: حتى ١٠ شوطات مقبولة — يجب وضع سبب 'معايرة' في السجل",
+          "تحسين نقاط الهدر الشخصية شهراً بعد شهر — التطور يُتابع في بطاقة الأداء · الهدف: تحسن شهري في الهدر",
+        ],
+      },
+      {
+        icon:"🧹",
+        en:"Station Hygiene & Cleanliness",ar:"نظافة المحطة وترتيب البار",
+        items_en:[
+          "Complete 10-item cleaning checklist (opening/closing) — submitted with photo evidence via Cleaning Log tile · KPI: Cleanliness Score ≥ 85% (auto)",
+          "Steam wand: purge and wipe with dedicated cloth after EVERY use without exception · KPI: Zero steam wand hygiene incidents",
+          "Group heads: flush 3+ seconds between each shot — clear grounds & oils · KPI: Daily Flush Compliance 100%",
+          "Grinder: brush hourly and fully clean every 3 days (record in notes) · KPI: Grinder Maintenance ≥ 90%",
+          "Bar surface: clear, sanitised, and free of water marks during all service hours · KPI: Visual Standard 100%",
+          "FIFO on all perishables: rotate stock every shift, check dates, escalate anything within 24h of expiry · KPI: Zero expired product incidents",
+          "Temperature control: milk fridge 1–4°C, cold brew at 4–8°C — check daily with thermometer · KPI: Temp Compliance 100%",
+        ],
+        items_ar:[
+          "إكمال قائمة النظافة ١٠ بنود (فتح/إغلاق) — إرسالها مع صورة دليل عبر تايل سجل النظافة · الهدف: نقاط النظافة ≥ ٨٥٪ (تلقائي)",
+          "عصا البخار: تنقية ومسح بقماش مخصص بعد كل استخدام بلا استثناء · الهدف: صفر حوادث عدم نظافة عصا البخار",
+          "رأس الماكينة: شطف ٣+ ثوانٍ بين كل شوطة — لإزالة التفل والزيوت · الهدف: الالتزام بالشطف اليومي ١٠٠٪",
+          "الطاحونة: فرشاة كل ساعة وتنظيف كامل كل ٣ أيام (التسجيل في الملاحظات) · الهدف: صيانة الطاحونة ≥ ٩٠٪",
+          "سطح البار: نظيف ومعقّم وخالٍ من بقع المياه طوال وقت الخدمة · الهدف: المعيار البصري ١٠٠٪",
+          "FIFO لجميع المنتجات القابلة للتلف: تدوير المخزون كل شيفت، فحص التواريخ، إبلاغ فوري عند أي منتج يقترب من الانتهاء · الهدف: صفر حوادث منتج منتهٍ",
+          "ضبط الحرارة: ثلاجة الحليب ١-٤°م، القهوة الباردة ٤-٨°م — فحص يومي بالميزان الحراري · الهدف: الالتزام الحراري ١٠٠٪",
+        ],
+      },
+      {
+        icon:"📈",
+        en:"Upselling & Menu Knowledge",ar:"البيع الإضافي ومعرفة القائمة",
+        items_en:[
+          "Know the full menu: ingredients, allergens, origin of beans, and the story behind every signature drink · KPI: Menu Quiz ≥ 80%",
+          "Suggest one personalised add-on or upgrade per order naturally (not scripted) · KPI: Upsell Attempt Rate ≥ 80%",
+          "Average ticket size: meet monthly branch target set by management · KPI: Avg Ticket ≥ Target (from sales report)",
+          "Seasonal specials: actively recommend new items in the first 2 weeks of launch · KPI: New Item Mention Rate ≥ 70%",
+          "Food pairing: suggest a food item or snack with every drink order · KPI: Pairing Suggestion Rate ≥ 60%",
+        ],
+        items_ar:[
+          "معرفة القائمة الكاملة: المكونات، مسببات الحساسية، أصل الحبوب، وقصة كل مشروب مميز · الهدف: اختبار القائمة ≥ ٨٠٪",
+          "اقتراح إضافة واحدة مخصصة أو ترقية بشكل طبيعي لكل طلب (بدون نص محفوظ) · الهدف: نسبة محاولات البيع الإضافي ≥ ٨٠٪",
+          "متوسط الفاتورة: تحقيق الهدف الشهري للفرع الذي تحدده الإدارة · الهدف: متوسط الفاتورة ≥ الهدف (من تقرير المبيعات)",
+          "المقترحات الموسمية: ترشيح العناصر الجديدة بفاعلية في أول أسبوعين من الإطلاق · الهدف: نسبة ذكر العنصر الجديد ≥ ٧٠٪",
+          "الإقران مع الطعام: اقتراح طعام أو وجبة خفيفة مع كل طلب مشروب · الهدف: نسبة اقتراح الإقران ≥ ٦٠٪",
+        ],
+      },
+      {
+        icon:"😊",
+        en:"Customer Experience",ar:"تجربة العملاء",
+        items_en:[
+          "Greet every customer by name (if known) within 5 seconds of approaching — warm, genuine, no scripts · KPI: Customer Score ≥ 4.0/5 (from reviews)",
+          "Remember regular orders: target 10+ regulars per month by name and drink preference · KPI: Regulars Remembered ≥ 10",
+          "Wait time: deliver every drink within 3.5 minutes of confirmed order — self-monitor and communicate delays · KPI: On-Time ≥ 95%",
+          "Complaint response: escalate to Head Barista within 2 minutes — never minimise a complaint · KPI: Zero unescalated complaints",
+          "Farewell: thank every customer by name, invite them back — this is the Coffee Beats community signature · KPI: Cultural Engagement",
+          "Positive review mentions: aim for 1 named mention per week on coffeebeats.art or Google · KPI: Review Mentions ≥ 4/month",
+        ],
+        items_ar:[
+          "الترحيب بكل عميل بالاسم (إن عُرف) خلال ٥ ثوانٍ من اقترابه — بدفء وصدق، بدون نصوص محفوظة · الهدف: رضا العملاء ≥ ٤.٠/٥ (من التقييمات)",
+          "تذكر الطلبات المنتظمة: الهدف ١٠+ عملاء منتظمين شهرياً بالاسم وتفضيلات الطلب · الهدف: عملاء منتظمون محفوظون ≥ ١٠",
+          "وقت الانتظار: تقديم كل مشروب خلال ٣.٥ دقيقة من تأكيد الطلب — مراقبة ذاتية وإبلاغ عن التأخير · الهدف: ≥ ٩٥٪ في الوقت",
+          "الاستجابة للشكاوى: الإحالة لرئيس البريستا خلال دقيقتين — لا تستهين بأي شكوى أبداً · الهدف: صفر شكاوى غير محالة",
+          "الوداع: شكر كل عميل بالاسم ودعوته للعودة — هذا هو توقيع مجتمع Coffee Beats · الهدف: التفاعل الثقافي",
+          "ذكر المراجعات الإيجابية: استهداف ذكر واحد بالاسم أسبوعياً على coffeebeats.art أو Google · الهدف: الذكر في المراجعات ≥ ٤/شهر",
+        ],
+      },
+      {
+        icon:"🌱",
+        en:"Growth, Training & Development",ar:"النمو والتدريب والتطور",
+        items_en:[
+          "Complete at least 1 structured training module per month (latte art, extraction science, origins, food pairing) · KPI: Training Completion ≥ 1 module/month",
+          "Attend all monthly team calibration sessions — no exceptions unless approved leave · KPI: Calibration Attendance ≥ 90%",
+          "Set and review one personal SMART growth goal monthly with Head Barista · KPI: Goals Set & Reviewed ≥ 10/12 months",
+          "SCA barista skills (Foundation): complete within first 3 months of employment · KPI: SCA Foundation — pass by Month 3",
+          "Latte art progression: rosetta ≥ 90% success rate by Month 2, free pour milk by Month 4 · KPI: Art Progression milestones",
+          "Cross-training: learn and execute at least 2 brew methods (V60, Chemex, AeroPress, syphon) · KPI: Brew Methods ≥ 2",
+        ],
+        items_ar:[
+          "إكمال وحدة تدريبية منظمة واحدة على الأقل شهرياً (لاتيه آرت، علم الاستخلاص، أصول القهوة، الإقران مع الطعام) · الهدف: إتمام التدريب ≥ وحدة/شهر",
+          "حضور جميع جلسات المعايرة الشهرية — بلا استثناء إلا بإجازة مقررة · الهدف: حضور المعايرة ≥ ٩٠٪",
+          "تحديد ومراجعة هدف SMART شخصي شهرياً مع رئيس البريستا · الهدف: الأهداف المحددة والمراجعة ≥ ١٠/١٢ شهراً",
+          "SCA مهارات البريستا (أساسي): الإتمام خلال أول ٣ أشهر من التوظيف · الهدف: اجتياز SCA Foundation بحلول الشهر الثالث",
+          "تقدم لاتيه آرت: روزيتا ≥ ٩٠٪ نجاح بحلول الشهر الثاني، الصب الحر بحلول الشهر الرابع · الهدف: معالم التقدم الفني",
+          "التدريب المتقاطع: تعلم وتنفيذ طريقتي تحضير على الأقل (V60، كيمكس، إيروبريس، سيفون) · الهدف: طرق التحضير ≥ ٢",
+        ],
+      },
+    ];
+
+    sections.forEach(sec=>{
+      const sCard=el("div",{class:"card",style:{marginBottom:"10px"}});
+      const sHd=el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}});
+      sHd.appendChild(el("span",{style:{fontSize:"20px"}},sec.icon));
+      sHd.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px"}},isAR?sec.ar:sec.en));
+      sCard.appendChild(sHd);
+      const itemsToShow = isAR?sec.items_ar:sec.items_en;
+      const ol=el("ol",{style:{margin:"0",paddingInlineStart:"18px",fontSize:"13px",lineHeight:"1.8",color:"var(--ink-dim)"}});
+      itemsToShow.forEach(item=>{
+        const li=el("li",{style:{marginBottom:"5px"}});
+        li.textContent=item;
+        // highlight KPI targets
+        if(item.includes("الهدف:")||item.includes("· KPI:")||item.includes("KPI:")){
+          li.innerHTML=item.replace(/·\s*(KPI:[^,.<]+|الهدف:[^,.<]+)/g,'<span style="color:var(--accent);font-weight:700"> · $1</span>');
+        }
+        ol.appendChild(li);
+      });
+      sCard.appendChild(ol);
+      wrap.appendChild(sCard);
+    });
+    wrap.appendChild(btnBack());
+  }
+  renderJD();
+  return wrap;
+};
+
 // export helpers
 // ==============================================================
 function download(name, blob) {
