@@ -331,6 +331,9 @@ Content-Type: text/html; charset=UTF-8
   /* Gallery row hover */
   a.gallery-row:hover { background: var(--surface-2) !important; }
 </style>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 </head>
 <body>
 <div id="app"></div>
@@ -341,6 +344,52 @@ Content-Type: text/html; charset=UTF-8
 <script id="seed-menu" type="application/json">{"count":160,"items":[{"name":"Original Beats (Espresso)","price_egp":85.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0001","branches":["maadi","zawya"]},{"name":"Consistent Beats (Americano)","price_egp":100.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0002","branches":["maadi","zawya"]},{"name":"Cappuccino","price_egp":120.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-4","id":"menu_0003","branches":["maadi","zawya"]},{"name":"Turkish Coffee","price_egp":50.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0004","branches":["maadi","zawya"]},{"name":"Flat White","price_egp":115.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-6","id":"menu_0005","branches":["maadi","zawya"]},{"name":"Latte","price_egp":125.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-7","id":"menu_0006","branches":["maadi","zawya"]},{"name":"Macchiato","price_egp":105.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-8","id":"menu_0007","branches":["maadi","zawya"]},{"name":"Cortado","price_egp":110.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-9","id":"menu_0008","branches":["maadi","zawya"]},{"name":"Cortado Team","price_egp":110.0,"cost_egp":null,"category":"Coffee","pos_sku":"sk-0197","id":"menu_0009","branches":["maadi","zawya"]},{"name":"Salted Caramel Latte","price_egp":170.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-11","id":"menu_0010","branches":["maadi","zawya"]},{"name":"Mocha Latte","price_egp":160.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-12","id":"menu_0011","branches":["maadi","zawya"]},{"name":"White Mocha Latte","price_egp":170.0,"cost_egp":null,"category":"Coffee","pos_sku":"sk-0087","id":"menu_0012","branches":["maadi","zawya"]},{"name":"Spanish Latte","price_egp":155.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-13","id":"menu_0013","branches":["maadi","zawya"]},{"name":"Pistacchio Latte","price_egp":280.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0014","branches":["maadi","zawya"]},{"name":"French Coffee","price_egp":75.0,"cost_egp":null,"category":"Coffee","pos_sku":"sk-0219","id":"menu_0015","branches":["maadi","zawya"]},{"name":"Ice Consistent Beats","price_egp":100.0,"cost_egp":null,"category":"cat-4","pos_sku":"psk-14","id":"menu_0016","branches":["maadi","zawya"]},{"name":"Ice Latte","price_egp":130.0,"cost_egp":null,"category":"cat-4","pos_sku":"psk-15","id":"menu_0017","branches":["maadi","zawya"]},{"name":"Ice Salted Caramel Latte","price_egp":170.0,"cost_egp":null,"category":"cat-4","pos_sku":"psk-16","id":"menu_0018","branches":["maadi","zawya"]},{"name":"Ice Spanish Latte","price_egp":160.0,"cost_egp":null,"category":"cat-4","pos_sku":"psk-17","id":"menu_0019","branches":["maadi","zawya"]},{"name":"Ice Mocha Latte","price_egp":165.0,"cost_egp":null,"category":"cat-4","pos_sku":"sk-0088","id":"menu_0020","branches":["maadi","zawya"]},{"name":"Ice White Mocha Latte","price_egp":170.0,"cost_egp":null,"category":"cat-4","pos_sku":"sk-0098","id":"menu_0021","branches":["maadi","zawya"]},{"name":"Ice Pistachio Latte","price_egp":290.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0022","branches":["maadi","zawya"]},{"name":"Queen Moka","price_egp":200.0,"cost_egp":null,"category":"cat-4","pos_sku":"sk-0078","id":"menu_0023","branches":["maadi","zawya"]},{"name":"Lady Moka","price_egp":220.0,"cost_egp":null,"category":"cat-4","pos_sku":"psk-19","id":"menu_0024","branches":["maadi","zawya"]},{"name":"Classic Blended Beats","price_egp":150.0,"cost_egp":null,"category":"Tea","pos_sku":"psk-20","id":"menu_0025","branches":["maadi","zawya"]},{"name":"Mocha Blended Beats","price_egp":185.0,"cost_egp":null,"category":"Tea","pos_sku":"psk-21","id":"menu_0026","branches":["maadi","zawya"]},{"name":"Salted Caramel Blended Beats","price_egp":190.0,"cost_egp":null,"category":"Tea","pos_sku":"psk-22","id":"menu_0027","branches":["maadi","zawya"]},{"name":"White Mocha Blended Beats","price_egp":190.0,"cost_egp":null,"category":"Tea","pos_sku":"sk-0089","id":"menu_0028","branches":["maadi","zawya"]},{"name":"Spanish  Blended Beats","price_egp":180.0,"cost_egp":null,"category":"Tea","pos_sku":"psk-24","id":"menu_0029","branches":["maadi","zawya"]},{"name":"Caramel Blended Beats","price_egp":165.0,"cost_egp":null,"category":"Tea","pos_sku":"psk-23","id":"menu_0030","branches":["maadi","zawya"]},{"name":"Pistachio Blended Beats","price_egp":300.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0031","branches":["maadi","zawya"]},{"name":"Hot Choco Beats L","price_egp":150.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0032","branches":["maadi","zawya"]},{"name":"Hot Choco Beats M","price_egp":120.0,"cost_egp":null,"category":null,"pos_sku":"sk-0200","id":"menu_0033","branches":["maadi","zawya"]},{"name":"Choco Mallow Beats L","price_egp":175.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0034","branches":["maadi","zawya"]},{"name":"Choco Mallow Beats M","price_egp":140.0,"cost_egp":null,"category":null,"pos_sku":"sk-0201","id":"menu_0035","branches":["maadi","zawya"]},{"name":"Spicy Choco Beats L","price_egp":155.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0036","branches":["maadi","zawya"]},{"name":"Spicy Choco Beats M","price_egp":130.0,"cost_egp":null,"category":null,"pos_sku":"sk-0202","id":"menu_0037","branches":["maadi","zawya"]},{"name":"Mint to Be Hot Chocolate","price_egp":130.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0038","branches":["maadi","zawya"]},{"name":"The Actor","price_egp":130.0,"cost_egp":null,"category":null,"pos_sku":"psk-5","id":"menu_0039","branches":["maadi","zawya"]},{"name":"The Director","price_egp":180.0,"cost_egp":null,"category":null,"pos_sku":"sk-0220","id":"menu_0040","branches":["maadi","zawya"]},{"name":"The Producer","price_egp":160.0,"cost_egp":null,"category":null,"pos_sku":"sk-0221","id":"menu_0041","branches":["maadi","zawya"]},{"name":"The writer","price_egp":100.0,"cost_egp":null,"category":null,"pos_sku":"sk-0222","id":"menu_0042","branches":["maadi","zawya"]},{"name":"The artist (Hot/Ice)","price_egp":190.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0043","branches":["maadi","zawya"]},{"name":"The Diva (Hot/Ice)","price_egp":240.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0044","branches":["maadi","zawya"]},{"name":"Berry Hot","price_egp":220.0,"cost_egp":null,"category":null,"pos_sku":"sk-0109","id":"menu_0045","branches":["maadi","zawya"]},{"name":"Green Espresso","price_egp":170.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0046","branches":["maadi","zawya"]},{"name":"Ice Green Espresso","price_egp":170.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0047","branches":["maadi","zawya"]},{"name":"Ice Berry Matching","price_egp":250.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0048","branches":["maadi","zawya"]},{"name":"Berry Matching Blended Beats","price_egp":210.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0049","branches":["maadi","zawya"]},{"name":"Matcha Latte","price_egp":160.0,"cost_egp":null,"category":null,"pos_sku":"sk-0095","id":"menu_0050","branches":["maadi","zawya"]},{"name":"Ice Matcha Latte","price_egp":160.0,"cost_egp":null,"category":null,"pos_sku":"sk-0122","id":"menu_0051","branches":["maadi","zawya"]},{"name":"Matcha Blended Beats","price_egp":180.0,"cost_egp":null,"category":null,"pos_sku":"sk-0118","id":"menu_0052","branches":["maadi","zawya"]},{"name":"Salted Caramel Matcha Latte","price_egp":190.0,"cost_egp":null,"category":null,"pos_sku":"sk-0217","id":"menu_0053","branches":["maadi","zawya"]},{"name":"Ice Salted Caramel Matcha Latte","price_egp":190.0,"cost_egp":null,"category":null,"pos_sku":"sk-0216","id":"menu_0054","branches":["maadi","zawya"]},{"name":"Salted Caramel Matcha  Blended","price_egp":210.0,"cost_egp":null,"category":null,"pos_sku":"sk-0126","id":"menu_0055","branches":["maadi","zawya"]},{"name":"White Matcha Latte","price_egp":190.0,"cost_egp":null,"category":null,"pos_sku":"sk-0096","id":"menu_0056","branches":["maadi","zawya"]},{"name":"Ice White Matcha Latte","price_egp":190.0,"cost_egp":null,"category":null,"pos_sku":"sk-0215","id":"menu_0057","branches":["maadi","zawya"]},{"name":"White Matcha Blended Beats","price_egp":210.0,"cost_egp":null,"category":null,"pos_sku":"sk-0117","id":"menu_0058","branches":["maadi","zawya"]},{"name":"Spanish Matcha Latte","price_egp":175.0,"cost_egp":null,"category":null,"pos_sku":"sk-0227","id":"menu_0059","branches":["maadi","zawya"]},{"name":"Ice Spanish Matcha Latte","price_egp":175.0,"cost_egp":null,"category":null,"pos_sku":"sk-0228","id":"menu_0060","branches":["maadi","zawya"]},{"name":"Blended Spanish Matcha","price_egp":195.0,"cost_egp":null,"category":null,"pos_sku":"sk-0229","id":"menu_0061","branches":["maadi","zawya"]},{"name":"Double O by Omar Omar","price_egp":135.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0062","branches":["maadi","zawya"]},{"name":"ElAlamy by Hamza Diab","price_egp":130.0,"cost_egp":null,"category":null,"pos_sku":"sk-0114","id":"menu_0063","branches":["maadi","zawya"]},{"name":"Change to Decaf (+20)","price_egp":20.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0064","branches":["maadi","zawya"]},{"name":"Decaf Extra Shot","price_egp":65.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0065","branches":["maadi","zawya"]},{"name":"Coffee Extra Shot","price_egp":50.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0066","branches":["maadi","zawya"]},{"name":"White Mocha Sauce","price_egp":60.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0067","branches":["maadi","zawya"]},{"name":"Whipped cream","price_egp":35.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0068","branches":["maadi","zawya"]},{"name":"Condensed Milk","price_egp":45.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0069","branches":["maadi","zawya"]},{"name":"Oat milk","price_egp":55.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0070","branches":["maadi","zawya"]},{"name":"Coconut Milk","price_egp":55.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0071","branches":["maadi","zawya"]},{"name":"Almond Milk","price_egp":55.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0072","branches":["maadi","zawya"]},{"name":"Full Cream Milk","price_egp":30.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0073","branches":["maadi","zawya"]},{"name":"Skimmed Milk","price_egp":30.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0074","branches":["maadi","zawya"]},{"name":"Honey","price_egp":40.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0075","branches":["maadi","zawya"]},{"name":"Salted Caramel Sauce","price_egp":55.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0076","branches":["maadi","zawya"]},{"name":"Dark Mocha Sauce","price_egp":55.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0077","branches":["maadi","zawya"]},{"name":"English Breakfast Tea","price_egp":50.0,"cost_egp":3.0,"category":"Signature","pos_sku":"psk-26","id":"menu_0078","branches":["maadi","zawya"]},{"name":"Green Tea","price_egp":50.0,"cost_egp":2.6,"category":"Signature","pos_sku":"sk-0072","id":"menu_0079","branches":["maadi","zawya"]},{"name":"Anise","price_egp":40.0,"cost_egp":3.0,"category":"Signature","pos_sku":"psk-27","id":"menu_0080","branches":["maadi","zawya"]},{"name":"Water","price_egp":20.0,"cost_egp":null,"category":"Water","pos_sku":"sk-0196","id":"menu_0081","branches":["maadi","zawya"]},{"name":"Sparkling Water","price_egp":55.0,"cost_egp":15.0,"category":"Water","pos_sku":"sk-0231","id":"menu_0082","branches":["maadi","zawya"]},{"name":"Ginger","price_egp":65.0,"cost_egp":null,"category":"Signature","pos_sku":"sk-0077","id":"menu_0083","branches":["maadi","zawya"]},{"name":"Mint","price_egp":50.0,"cost_egp":null,"category":"Signature","pos_sku":"sk-0230","id":"menu_0084","branches":["maadi","zawya"]},{"name":"Halo Choc Coco Berries","price_egp":95.0,"cost_egp":60.0,"category":"Snacks","pos_sku":"sk-0134","id":"menu_0085","branches":["maadi","zawya"]},{"name":"Halo Choc Mixed crunch","price_egp":95.0,"cost_egp":45.0,"category":"Snacks","pos_sku":"sk-0205","id":"menu_0086","branches":["maadi","zawya"]},{"name":"Halo Choc Nutty Peanuts","price_egp":95.0,"cost_egp":45.0,"category":"Snacks","pos_sku":"sk-0206","id":"menu_0087","branches":["maadi","zawya"]},{"name":"E Bar Coco Berries","price_egp":75.0,"cost_egp":33.5525,"category":"Snacks","pos_sku":"sk-0188","id":"menu_0088","branches":["maadi","zawya"]},{"name":"E Bar Nutty Peanuts","price_egp":75.0,"cost_egp":33.5525,"category":"Snacks","pos_sku":"sk-0190","id":"menu_0089","branches":["maadi","zawya"]},{"name":"E Bar Mixed Crunch","price_egp":75.0,"cost_egp":33.5525,"category":"Snacks","pos_sku":"sk-0191","id":"menu_0090","branches":["maadi","zawya"]},{"name":"Halo Sweet Chili Chips","price_egp":35.0,"cost_egp":15.0,"category":"Snacks","pos_sku":"sk-0157","id":"menu_0091","branches":["maadi","zawya"]},{"name":"Halo Honey Mustard Chips","price_egp":35.0,"cost_egp":15.0,"category":"Snacks","pos_sku":"sk-0158","id":"menu_0092","branches":["maadi","zawya"]},{"name":"Halo Green Peas Chips","price_egp":35.0,"cost_egp":15.0,"category":"Snacks","pos_sku":"sk-0210","id":"menu_0093","branches":["maadi","zawya"]},{"name":"Halo Greek Cheese puffs","price_egp":30.0,"cost_egp":11.0,"category":"Snacks","pos_sku":"sk-0207","id":"menu_0094","branches":["maadi","zawya"]},{"name":"Halo parmesan cheese puffs","price_egp":30.0,"cost_egp":12.0,"category":"Snacks","pos_sku":"sk-0208","id":"menu_0095","branches":["maadi","zawya"]},{"name":"Halo sour cream & onion puffs","price_egp":30.0,"cost_egp":12.0,"category":"Snacks","pos_sku":"sk-0209","id":"menu_0096","branches":["maadi","zawya"]},{"name":"V7 Cola","price_egp":30.0,"cost_egp":null,"category":"Water","pos_sku":"sk-0067","id":"menu_0097","branches":["maadi","zawya"]},{"name":"V7 Diet Cola","price_egp":30.0,"cost_egp":null,"category":"Water","pos_sku":"sk-0068","id":"menu_0098","branches":["maadi","zawya"]},{"name":"V7 Pink Lemonade Cola","price_egp":30.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0099","branches":["maadi","zawya"]},{"name":"Lady Moka Cup","price_egp":550.0,"cost_egp":null,"category":null,"pos_sku":"sk-0062","id":"menu_0100","branches":["maadi","zawya"]},{"name":"Espresso","price_egp":350.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0101","branches":["maadi","zawya"]},{"name":"Water Bottle","price_egp":400.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0102","branches":["maadi","zawya"]},{"name":"Drip Bag","price_egp":60.0,"cost_egp":null,"category":null,"pos_sku":null,"id":"menu_0103","branches":["maadi","zawya"]},{"name":"Drip Coffee Bags Bundle of 10 (9 + 1 Free)","price_egp":540.0,"cost_egp":250.0,"category":null,"pos_sku":"sk-0193","id":"menu_0104","branches":["maadi","zawya"]},{"name":"Type 2 Calibration Shot","price_egp":14.0,"cost_egp":null,"category":null,"pos_sku":"sk-0225","id":"menu_0105","branches":["maadi","zawya"]},{"name":"Type 1 Calibration Shot","price_egp":19.0,"cost_egp":null,"category":null,"pos_sku":"sk-0224","id":"menu_0106","branches":["maadi","zawya"]},{"name":"Turkish","price_egp":50.0,"cost_egp":null,"category":"Coffee","pos_sku":"sk-0218","id":"menu_0107","branches":["maadi","zawya"]},{"name":"Sobia Latte","price_egp":125.0,"cost_egp":null,"category":null,"pos_sku":"sk-0214","id":"menu_0108","branches":["maadi","zawya"]},{"name":"Matcha Sobia","price_egp":160.0,"cost_egp":null,"category":null,"pos_sku":"sk-0213","id":"menu_0109","branches":["maadi","zawya"]},{"name":"Croissant - Cream Cheese and Pastrami","price_egp":55.0,"cost_egp":16.0,"category":"Bakery","pos_sku":"sk-0212","id":"menu_0110","branches":["maadi","zawya"]},{"name":"COOKIES","price_egp":60.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0204","id":"menu_0111","branches":["maadi","zawya"]},{"name":"Turkey Croissant","price_egp":100.0,"cost_egp":50.0,"category":"Bakery","pos_sku":"sk-0194","id":"menu_0112","branches":["maadi","zawya"]},{"name":"Chocolate Chip Cookies (Bag of 2)","price_egp":15.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0187","id":"menu_0113","branches":["maadi","zawya"]},{"name":"MANAKISH","price_egp":35.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0186","id":"menu_0114","branches":["maadi","zawya"]},{"name":"Mini Pastrami patty","price_egp":35.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0185","id":"menu_0115","branches":["maadi","zawya"]},{"name":"Mini Pizza Vegetables & Cheese","price_egp":35.0,"cost_egp":12.0,"category":"Bakery","pos_sku":"sk-0179","id":"menu_0116","branches":["maadi","zawya"]},{"name":"Mini Sandwich Tuna","price_egp":50.0,"cost_egp":15.0,"category":"Bakery","pos_sku":"sk-0170","id":"menu_0117","branches":["maadi","zawya"]},{"name":"Cheese Bites","price_egp":18.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0169","id":"menu_0118","branches":["maadi","zawya"]},{"name":"Mixed Nuts Bag","price_egp":110.0,"cost_egp":90.0,"category":"Bakery","pos_sku":"sk-0166","id":"menu_0119","branches":["maadi","zawya"]},{"name":"Cheese Croissant","price_egp":95.0,"cost_egp":50.0,"category":"Bakery","pos_sku":"sk-0164","id":"menu_0120","branches":["maadi","zawya"]},{"name":"Croissant","price_egp":80.0,"cost_egp":40.0,"category":"Bakery","pos_sku":"sk-0163","id":"menu_0121","branches":["maadi","zawya"]},{"name":"Cheese Pate","price_egp":40.0,"cost_egp":15.0,"category":"Bakery","pos_sku":"sk-0162","id":"menu_0122","branches":["maadi","zawya"]},{"name":"V7 Pink Lemonade","price_egp":30.0,"cost_egp":15.0,"category":"Water","pos_sku":"sk-0159","id":"menu_0123","branches":["maadi","zawya"]},{"name":"Double O","price_egp":135.0,"cost_egp":null,"category":null,"pos_sku":"sk-0133","id":"menu_0124","branches":["maadi","zawya"]},{"name":"Blueberry Smoothie","price_egp":130.0,"cost_egp":null,"category":null,"pos_sku":"sk-0131","id":"menu_0125","branches":["maadi","zawya"]},{"name":"Lemon With Mint","price_egp":85.0,"cost_egp":85.0,"category":"Water","pos_sku":"sk-0130","id":"menu_0126","branches":["maadi","zawya"]},{"name":"Watermelon Smoothie","price_egp":140.0,"cost_egp":null,"category":null,"pos_sku":"sk-0127","id":"menu_0127","branches":["maadi","zawya"]},{"name":"KJ by Jennifer Deeb","price_egp":210.0,"cost_egp":null,"category":null,"pos_sku":"sk-0125","id":"menu_0128","branches":["maadi","zawya"]},{"name":"BelHana by Hana Alim (Blended)","price_egp":200.0,"cost_egp":null,"category":null,"pos_sku":"sk-0121","id":"menu_0129","branches":["maadi","zawya"]},{"name":"BelHana by Hana Alim (Ice)","price_egp":200.0,"cost_egp":null,"category":null,"pos_sku":"sk-0120","id":"menu_0130","branches":["maadi","zawya"]},{"name":"BelHana by Hana Alim","price_egp":200.0,"cost_egp":null,"category":null,"pos_sku":"sk-0115","id":"menu_0131","branches":["maadi","zawya"]},{"name":"Assorted Belgian Chocolate Cookies","price_egp":80.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0111","id":"menu_0132","branches":["maadi","zawya"]},{"name":"Belgian Chocolate Cookies","price_egp":65.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0110","id":"menu_0133","branches":["maadi","zawya"]},{"name":"Margherita Pizza Slice","price_egp":40.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0108","id":"menu_0134","branches":["maadi","zawya"]},{"name":"Chocolate Strawberries","price_egp":100.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0106","id":"menu_0135","branches":["maadi","zawya"]},{"name":"The Diva","price_egp":240.0,"cost_egp":null,"category":null,"pos_sku":"sk-0104","id":"menu_0136","branches":["maadi","zawya"]},{"name":"Ice Cream Vanilla","price_egp":40.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0099","id":"menu_0137","branches":["maadi","zawya"]},{"name":"Cookie small","price_egp":20.0,"cost_egp":null,"category":null,"pos_sku":"sk-0092","id":"menu_0138","branches":["maadi","zawya"]},{"name":"Christmas Cookie","price_egp":25.0,"cost_egp":null,"category":null,"pos_sku":"sk-0091","id":"menu_0139","branches":["maadi","zawya"]},{"name":"Chocolates bag - Fleucolat","price_egp":100.0,"cost_egp":null,"category":null,"pos_sku":"sk-0090","id":"menu_0140","branches":["maadi","zawya"]},{"name":"Ice Cream Pistachio","price_egp":75.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0085","id":"menu_0141","branches":["maadi","zawya"]},{"name":"Chocolate Eclair","price_egp":80.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0082","id":"menu_0142","branches":["maadi","zawya"]},{"name":"Triple Chocolate Cake","price_egp":110.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0081","id":"menu_0143","branches":["maadi","zawya"]},{"name":"Tiramisu","price_egp":110.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0080","id":"menu_0144","branches":["maadi","zawya"]},{"name":"Drip Coffee Bags","price_egp":60.0,"cost_egp":25.0,"category":null,"pos_sku":"sk-0076","id":"menu_0145","branches":["maadi","zawya"]},{"name":"Veg Snacks","price_egp":25.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0074","id":"menu_0146","branches":["maadi","zawya"]},{"name":"Blueberry Cheesecake","price_egp":105.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0070","id":"menu_0147","branches":["maadi","zawya"]},{"name":"Vanilla Muffin","price_egp":60.0,"cost_egp":null,"category":"Bakery","pos_sku":"sk-0066","id":"menu_0148","branches":["maadi","zawya"]},{"name":"Detox Water Bottle","price_egp":400.0,"cost_egp":null,"category":null,"pos_sku":"sk-0065","id":"menu_0149","branches":["maadi","zawya"]},{"name":"Lady Moka Espresso Cup","price_egp":350.0,"cost_egp":null,"category":null,"pos_sku":"sk-0063","id":"menu_0150","branches":["maadi","zawya"]},{"name":"Original Beats","price_egp":85.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-2","id":"menu_0151","branches":["maadi","zawya"]},{"name":"Consistent Beats","price_egp":100.0,"cost_egp":null,"category":"Coffee","pos_sku":"psk-3","id":"menu_0152","branches":["maadi","zawya"]},{"name":"The Artist","price_egp":190.0,"cost_egp":null,"category":null,"pos_sku":"psk-10","id":"menu_0153","branches":["maadi","zawya"]},{"name":"Feta Olives and Zaatar croissant","price_egp":80.0,"cost_egp":null,"category":"Bakery","pos_sku":"psk-36","id":"menu_0154","branches":["maadi","zawya"]},{"name":"Brownies","price_egp":70.0,"cost_egp":null,"category":"Bakery","pos_sku":"psk-37","id":"menu_0155","branches":["maadi","zawya"]},{"name":"Chocolate Chip Cookies","price_egp":15.0,"cost_egp":null,"category":"Bakery","pos_sku":"psk-38","id":"menu_0156","branches":["maadi","zawya"]},{"name":"Marble English Cake","price_egp":50.0,"cost_egp":null,"category":"Bakery","pos_sku":"psk-39","id":"menu_0157","branches":["maadi","zawya"]},{"name":"Carrot Cake","price_egp":135.0,"cost_egp":null,"category":"Bakery","pos_sku":"psk-40","id":"menu_0158","branches":["maadi","zawya"]},{"name":"Focaccia","price_egp":40.0,"cost_egp":null,"category":"Bakery","pos_sku":"psk-41","id":"menu_0159","branches":["maadi","zawya"]},{"name":"Ice Cubes Cup","price_egp":10.0,"cost_egp":null,"category":"Water","pos_sku":"psk-46","id":"menu_0160","branches":["maadi","zawya"]}]}</script>
 
 <script>
+// ─── Firebase initialisation ──────────────────────────────────
+const _fbApp = firebase.initializeApp({
+  apiKey: "AIzaSyA9fMlRqhrCMsXHdj1JYd2EM3yOmai2VAA",
+  authDomain: "coffeebeats-79200.firebaseapp.com",
+  projectId: "coffeebeats-79200",
+  storageBucket: "coffeebeats-79200.firebasestorage.app",
+  messagingSenderId: "1046768234777",
+  appId: "1:1046768234777:web:ca6193791030e2fbde5588",
+  measurementId: "G-7DHMD6QXL8",
+});
+const db      = firebase.firestore();
+const storage = firebase.storage();
+
+function startReviewsListener() {
+  db.collection("reviews").orderBy("at", "asc").onSnapshot(snap => {
+    if (!state.customer_feedback) state.customer_feedback = [];
+    const existingIds = new Set(state.customer_feedback.map(f => f.id));
+    let added = 0;
+    snap.docChanges().forEach(change => {
+      if (change.type !== "added") return;
+      const doc = change.doc;
+      if (existingIds.has(doc.id)) return;
+      const d = doc.data();
+      const matchUser = (state.users || []).find(u =>
+        u.name && d.barista && u.name.toLowerCase().startsWith(d.barista.toLowerCase().split(' ')[0])
+      );
+      state.customer_feedback.push({
+        id: doc.id,
+        at: d.at || new Date(d.timestamp).getTime(),
+        by: "website",
+        by_name: "coffeebeats.art",
+        barista_name: d.barista || "",
+        barista_id: matchUser?.id || null,
+        user_id: matchUser?.id || null,
+        rating: d.rating || 0,
+        source: "coffeebeats.art",
+        note: [d.feedback, d.standout].filter(Boolean).join(' | '),
+        branch: d.branch || "",
+        month: new Date(d.at || Date.now()).toISOString().slice(0, 7)
+      });
+      existingIds.add(doc.id);
+      added++;
+    });
+    if (added > 0) { saveState(); render(); }
+  }, err => console.warn("Reviews listener error:", err));
+}
 /* ========= Coffee Beats Operations — v1 =========
  * Single-file PWA. Persists to localStorage. Photos to IndexedDB.
  * Roles: owner, head_barista, barista
@@ -488,8 +537,7 @@ function makeBranchPicker(branches, getCurrent, onPick) {
 // ----- storage -----
 const STORAGE_KEY = "cb.v1.state";
 const DEVICE_KEY = "cb.device";
-const BOOTSTRAP_SYNC_URL = "https://script.google.com/macros/s/AKfycbytZdJs8cr-v13qRBMZ8lfpSMijTHQtZwu5AatqhWCBYRBvpA6kNXN7fJOTqW25xm6VTA/exec"; // auto-bootstrap sync on any new device
-const BOOTSTRAP_SYNC_SECRET = "coffeebeats2026"; // auto-bootstrap secret on any new device
+
 const deviceId = (() => {
   let id = localStorage.getItem(DEVICE_KEY);
   if (!id) { id = uuid(); localStorage.setItem(DEVICE_KEY, id); }
@@ -511,35 +559,27 @@ const IDB = (() => {
   };
 })();
 
-// ─── Cloudinary photo upload (free, no backend needed) ────────
-// Uses an "unsigned upload preset" — sign up free at cloudinary.com,
-// create an Upload Preset set to "Unsigned", paste cloud name + preset in Settings.
+// ─── Firebase Storage photo upload ───────────────────────────
 const Cloudinary = (() => {
-  const cloudName   = () => (typeof state !== "undefined" && state?.settings?.cloudinary_cloud) || "dbharv4kb";
-  const uploadPreset= () => (typeof state !== "undefined" && state?.settings?.cloudinary_preset) || "coffee-beats-ops";
-  const isConfigured= () => !!(cloudName() && uploadPreset());
+  const isConfigured = () => true; // always available via Firebase
 
   async function uploadPhoto(blob, filename) {
-    if (!isConfigured()) throw new Error("Cloudinary not configured. Add Cloud Name and Upload Preset in Settings → Photo Storage.");
-    const form = new FormData();
-    form.append("file", blob, filename);
-    form.append("upload_preset", uploadPreset());
-    form.append("folder", "coffee-beats");
-    // Store original filename as a tag so it shows in the gallery
-    form.append("context", `original_name=${encodeURIComponent(filename)}`);
-    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName()}/auto/upload`, {
-      method: "POST", body: form,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Upload failed: ${err.error?.message || res.status}`);
-    }
-    const data = await res.json();
-    // Returns { secure_url, public_id, created_at, original_filename, bytes }
-    return data;
+    const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+    const safeName = filename.replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const path = `photos/${safeName}_${Date.now()}.${ext}`;
+    const ref = storage.ref(path);
+    const snap = await ref.put(blob, { contentType: blob.type });
+    const secure_url = await snap.ref.getDownloadURL();
+    return {
+      secure_url,
+      public_id: path,
+      created_at: new Date().toISOString(),
+      original_filename: filename,
+      bytes: blob.size,
+    };
   }
 
-  return { isConfigured, uploadPhoto, cloudName };
+  return { isConfigured, uploadPhoto, cloudName: () => "firebase" };
 })();
 
 // ─── Site access gate ────────────────────────────────────────
@@ -699,12 +739,8 @@ function defaultState() {
     photo_log: [],            // { id, url, name, context, at, form, branch }
     assets: [],               // { id, at, by, by_name, title, note, url, folder }
     settings: {
-      sync_url: BOOTSTRAP_SYNC_URL, // Google Apps Script Web App URL
-      sync_secret: BOOTSTRAP_SYNC_SECRET, // shared secret for Apps Script to verify
       currency: "EGP",
       branches: ["maadi", "zawya"],
-      cloudinary_cloud: "",   // Cloudinary cloud name (free)
-      cloudinary_preset: "",  // Unsigned upload preset name
       team_code: "coffeeteam2026", // Site access code — change in Settings
     },
     session: null,
@@ -838,13 +874,9 @@ function migrateState(s) {
   s.photo_log           = s.photo_log     || [];
   s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
   s.leaves              = s.leaves        || []; // leave requests (annual / sick)
-  s.settings.cloudinary_cloud    = s.settings.cloudinary_cloud    || "";
-  s.settings.cloudinary_preset   = s.settings.cloudinary_preset   || "";
   s.settings.team_code           = s.settings.team_code           || "coffeeteam2026";
   s.settings.head_barista_email  = s.settings.head_barista_email  || "";
   s.settings.owner_email         = s.settings.owner_email         || "coffeebeats@haidiyacoub.com";
-  if (!s.settings.sync_url)    s.settings.sync_url    = BOOTSTRAP_SYNC_URL;    // backfill on any existing device that never had it
-  if (!s.settings.sync_secret) s.settings.sync_secret = BOOTSTRAP_SYNC_SECRET; // backfill on any existing device that never had it
 
   // Strip items that were removed from the menu (per Haïdi, April 2026):
   // Coffee Type 4 and Spiced Turkish Coffee should no longer appear anywhere.
@@ -857,9 +889,8 @@ function migrateState(s) {
     for (const it of s.items) { if (isDead(it.name)) it.active = false; }
   }
 }
-// `opts.immediate` pushes to Google Sheets right now instead of waiting for the
-// 2.5s debounce — use it for any write the user expects to see reflected on the
-// sheet immediately (overhead presets, user-role edits, etc.).
+// `opts.immediate` pushes to Firestore right now instead of waiting for the
+// 2.5s debounce — use it for any write the user expects reflected immediately.
 function saveState(opts) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   markDirty();
@@ -871,14 +902,29 @@ function saveState(opts) {
   }
 }
 
-// ----- sync -----
-// Google Sheets is the single source of truth. The app keeps a local cache
-// (localStorage) but every write is pushed to Sheets, and a "dirty" flag is
-// kept so auto-pull can't clobber unsynced edits.
+// ----- Firebase Firestore sync -----
+// Firestore is the single source of truth. State is split into chunks
+// to stay well under the 1 MB document limit.
 let syncTimer = null;
 let syncInFlight = false;
-let pendingWrites = 0; // count of local edits not yet pushed
+let pendingWrites = 0;
 const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
+
+// Each chunk key maps to the state keys it owns.
+const STATE_CHUNKS = {
+  config:      ["settings", "salary_config"],
+  users_items: ["users", "items", "menu", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts"],
+  waste:       ["waste"],
+  purchases:   ["purchases", "petty_cash", "bank_ledger"],
+  sales:       ["sales", "shifts"],
+  operations:  ["shift_closes", "cleaning_logs", "signin_stamps"],
+  roster:      ["rosters", "roaster_schedules", "maadi_deposits"],
+  hr:          ["salaries", "salary_loans", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
+  overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
+  media:       ["photo_log", "assets"],
+  kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings"],
+  meta:        ["_seeded_ids", "_migration_khaled_role_fixed", "version", "created_at", "branch_opening_times"],
+};
 
 function markDirty() {
   pendingWrites++;
@@ -894,10 +940,8 @@ function hasPending() {
   if (pendingWrites > 0) return true;
   try { return Number(localStorage.getItem(SYNC_DIRTY_KEY) || 0) > 0; } catch(e) { return false; }
 }
-// Restore pendingWrites from localStorage (in case the tab was closed mid-sync)
 try { pendingWrites = Number(localStorage.getItem(SYNC_DIRTY_KEY) || 0); } catch(e) {}
 
-// Small corner badge so the user can see whether their edits are safe on the sheet.
 function updateSyncBadge(status) {
   let badge = document.getElementById("syncBadge");
   if (!badge) {
@@ -906,142 +950,82 @@ function updateSyncBadge(status) {
     badge.style.cssText = "position:fixed;bottom:10px;right:10px;padding:6px 10px;border-radius:999px;font-size:11px;font-weight:600;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.15);font-family:system-ui,sans-serif;pointer-events:none;";
     document.body.appendChild(badge);
   }
-  if (!state?.settings?.sync_url) {
-    badge.style.display = "none";
-    return;
-  }
   badge.style.display = "";
   if (status === "syncing") { badge.textContent = "⟳ Syncing…"; badge.style.background = "#fef3c7"; badge.style.color = "#92400e"; }
-  else if (status === "synced") { badge.textContent = "✓ Synced to Sheet"; badge.style.background = "#d1fae5"; badge.style.color = "#065f46"; }
+  else if (status === "synced") { badge.textContent = "✓ Synced"; badge.style.background = "#d1fae5"; badge.style.color = "#065f46"; }
   else if (status === "error")  { badge.textContent = "⚠ Sync failed"; badge.style.background = "#fee2e2"; badge.style.color = "#991b1b"; }
 }
 
 function queueSync() {
-  if (!state?.settings?.sync_url) return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(doSync, 2500);
 }
+
 async function doSync() {
-  if (!state?.settings?.sync_url) return;
-  if (syncInFlight) return; // let the in-flight push drain; pendingWrites will trigger another
+  if (syncInFlight) return;
   syncInFlight = true;
   const batchSize = pendingWrites;
   updateSyncBadge("syncing");
   try {
-    const payload = {
-      secret: state.settings.sync_secret || "",
-      device: deviceId,
-      at: now(),
-      state: {
-        users: state.users,
-        items: state.items,
-        snapshots: state.snapshots,
-        waste: state.waste,
-        purchases: state.purchases,
-        petty_cash: state.petty_cash,
-        bank_ledger: state.bank_ledger,
-        sales: state.sales,
-        shifts: state.shifts,
-        shift_closes: state.shift_closes,
-        cleaning_logs: state.cleaning_logs,
-        signin_stamps: state.signin_stamps,
-        menu: state.menu,
-        salary_config: state.salary_config,
-        salary_loans: state.salary_loans,
-        salaries: state.salaries,
-        overtime_logs: state.overtime_logs,
-        penalties: state.penalties,
-        deleted_penalties: state.deleted_penalties,
-        overheads: state.overheads,
-        overhead_presets: state.overhead_presets,
-        overhead_monthly_amts: state.overhead_monthly_amts,
-        rosters: state.rosters,
-        roaster_schedules: state.roaster_schedules,
-        maadi_deposits: state.maadi_deposits,
-        photo_log: state.photo_log,
-        assets: state.assets,
-        leaves: state.leaves,
-        purchase_units: state.purchase_units,
-        inventory_alerts: state.inventory_alerts,
-        alert_log: state.alert_log,
-        handbook_recipes: state.handbook_recipes,
-        settings: state.settings,
-        _seeded_ids: state._seeded_ids,
-        _migration_khaled_role_fixed: state._migration_khaled_role_fixed,
-      },
-    };
-    await fetch(state.settings.sync_url, {
-      method: "POST",
-      mode: "no-cors",        // Apps Script returns opaque; that's fine
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
+    const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
+      const doc = {};
+      for (const k of keys) { const v = state[k]; doc[k] = v !== undefined ? v : null; }
+      return db.collection("state").doc(chunk).set(doc);
     });
+    await Promise.all(writes);
     state.settings.last_sync = now();
-    // only mark clean if no NEW writes landed while the push was in flight
     pendingWrites = Math.max(0, pendingWrites - batchSize);
     try { localStorage.setItem(SYNC_DIRTY_KEY, String(pendingWrites)); } catch(e) {}
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     if (pendingWrites === 0) updateSyncBadge("synced");
     else { updateSyncBadge("syncing"); queueSync(); }
   } catch (e) {
-    console.warn("sync failed", e);
+    console.warn("Firebase sync failed", e);
     updateSyncBadge("error");
-    // leave pendingWrites as-is so the next save retries
   } finally {
     syncInFlight = false;
   }
 }
 
-// Pull full state from Google Sheets (makes Sheets the single source of truth)
-async function pullFromSheets() {
-  const url = state?.settings?.sync_url;
-  if (!url) return { ok: false, err: "No sync URL configured" };
+// Pull full state from Firestore (makes Firestore the single source of truth)
+async function pullFromFirestore() {
   try {
-    // Append ?action=pull&secret=... to the Apps Script URL
-    const pullUrl = url + (url.includes("?") ? "&" : "?") + "action=pull&secret=" + encodeURIComponent(state.settings.sync_secret || "");
-    const res = await fetch(pullUrl);
-    if (!res.ok) return { ok: false, err: `HTTP ${res.status}` };
-    const data = await res.json();
-    if (!data.ok) return { ok: false, err: data.err || "Unknown error" };
-    const remote = data.state;
-    if (!remote) return { ok: false, err: "No state in response" };
-    // Merge: overwrite local with remote for all data keys, keep settings/session local
+    const chunkNames = Object.keys(STATE_CHUNKS);
+    const docs = await Promise.all(chunkNames.map(c => db.collection("state").doc(c).get()));
+    const remote = {};
+    for (let i = 0; i < chunkNames.length; i++) {
+      if (docs[i].exists) Object.assign(remote, docs[i].data());
+    }
+    if (!remote.users && !remote.items) return { ok: false, err: "No data in Firestore yet" };
     const settingsBak = state.settings;
     const sessionBak  = state.session;
     Object.assign(state, remote);
-    // Re-run migrations so corrections (e.g. Khaled = barista, overhead_monthly_amts init)
-    // survive a pull — Google Sheets is source of truth but migrations always win.
     migrateState(state);
-    state.settings = { ...remote.settings, ...settingsBak }; // keep local URL/secret
+    state.settings = { ...remote.settings, ...settingsBak };
     state.session  = sessionBak;
     state.settings.last_pull = now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    // Push the corrected/migrated state back to Sheets so the sheet stays in sync
-    // with any role fixes or data migrations we just applied.
-    if (state.settings?.sync_url) doSync();
+    doSync(); // push back any migration fixes
+    startReviewsListener();
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
   }
 }
 
-// Auto-pull on start if sync URL is configured.
-// Google Sheets is the source of truth — BUT if this device has unsynced local
-// edits (the tab was closed before the last push completed), flush them to the
-// sheet first so they aren't clobbered by the pull.
+// Alias so any remaining callsites using pullFromSheets still work
+const pullFromSheets = pullFromFirestore;
+
+// Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
-  if (!state?.settings?.sync_url) {
-    updateSyncBadge("synced"); // hidden when sync isn't configured
-    return;
-  }
   if (hasPending()) {
-    console.log("Flushing pending local writes to Sheets before pull…");
+    console.log("Flushing pending local writes to Firestore before pull…");
     await doSync();
   }
-  const result = await pullFromSheets();
+  const result = await pullFromFirestore();
   if (result.ok) {
     markClean();
-    console.log("Auto-pulled from Google Sheets on start");
+    console.log("Auto-pulled from Firestore on start");
     render();
   } else {
     console.warn("Auto-pull failed:", result.err);
@@ -1701,112 +1685,38 @@ routes.waste_new = function (u) {
   return wrap;
 };
 
-// ── Waste entry edit modal ─────────────────────────────────────────────────
-function showWasteEdit(w, onSaved) {
-  const overlay = el("div", { style: {
-    position: "fixed", inset: "0", background: "rgba(0,0,0,0.55)", zIndex: "200",
-    display: "flex", alignItems: "flex-end", justifyContent: "center",
-  }});
-
-  let qty    = w.qty_canonical;
-  let reason = w.reason || "Spilled";
-  let note   = w.note || "";
-  const it   = state.items.find(x => x.id === w.inv_item_id);
-
-  const sheet = el("div", { style: {
-    background: "var(--surface)", borderRadius: "18px 18px 0 0", padding: "20px",
-    width: "100%", maxWidth: "520px", maxHeight: "80vh", overflowY: "auto",
-  }});
-
-  sheet.appendChild(el("div", { style: { fontWeight: "700", fontSize: "16px", marginBottom: "14px" } },
-    `Edit: ${w.item_name}`));
-
-  if (it) {
-    sheet.appendChild(el("label", {}, `Qty (${it.unit})`));
-    const qtyInput = el("input", { type: "number", min: "0", step: "any", value: qty || "" });
-    qtyInput.addEventListener("input", () => qty = Number(qtyInput.value) || 0);
-    const stepper = el("div", { class: "qty-stepper" }, [
-      el("button", { onClick: () => { qty = Math.max(0, (Number(qtyInput.value)||0) - (it.unit==="unit"?1:10)); qtyInput.value = qty; } }, "−"),
-      qtyInput,
-      el("button", { onClick: () => { qty = (Number(qtyInput.value)||0) + (it.unit==="unit"?1:10); qtyInput.value = qty; } }, "+"),
-    ]);
-    sheet.appendChild(stepper);
-  }
-
-  sheet.appendChild(el("label", { style: { marginTop: "10px" } }, "Reason"));
-  const reasonSel = el("select", {},
-    ["Spilled","Expired","Returned by customer","Staff drink (comp)","Quality issue","Training / calibration","Other"]
-    .map(r => el("option", { value: r, selected: r === reason ? "true" : null }, r)));
-  reasonSel.addEventListener("change", () => reason = reasonSel.value);
-  sheet.appendChild(reasonSel);
-
-  sheet.appendChild(el("label", { style: { marginTop: "10px" } }, "Note"));
-  const noteInput = el("input", { type: "text", value: note, placeholder: "optional" });
-  noteInput.addEventListener("input", () => note = noteInput.value);
-  sheet.appendChild(noteInput);
-
-  sheet.appendChild(el("div", { style: { display: "flex", gap: "10px", marginTop: "16px" } }, [
-    el("button", { class: "btn", style: { flex: "1" }, onClick: () => {
-      if (it && (!qty || qty <= 0)) { toast("Qty must be > 0", "error"); return; }
-      w.qty_canonical = qty;
-      w.reason = reason;
-      w.note = note;
-      w.edited_at = new Date().toISOString();
-      saveState();
-      document.body.removeChild(overlay);
-      toast("Waste entry updated ✓");
-      if (onSaved) onSaved();
-    }}, "Save changes"),
-    el("button", { class: "btn ghost", style: { flex: "1" }, onClick: () => document.body.removeChild(overlay) }, "Cancel"),
-  ]));
-
-  overlay.appendChild(sheet);
-  overlay.addEventListener("click", e => { if (e.target === overlay) document.body.removeChild(overlay); });
-  document.body.appendChild(overlay);
-}
-
 routes.waste_list = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Recent waste", "Tap a row to edit. Tap + to add."));
+  wrap.appendChild(header("Recent waste", "Signed entries. Tap + to add."));
 
   const list = el("div", { class: "list" });
-
-  function renderList() {
-    list.innerHTML = "";
-    const mine = state.waste.filter(w => u.role === "owner" || u.branches.includes(w.branch))
-      .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
-    if (mine.length === 0) { list.appendChild(el("div", { class: "muted" }, "No entries yet.")); return; }
-    for (const w of mine) {
-      const photoCount = (w.photos || []).length;
-      const titleNode = el("div", { class: "title" });
-      titleNode.appendChild(document.createTextNode(`${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`));
-      if (photoCount) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "12px", color: "var(--ok)", fontWeight: "600" } }, `📷 ${photoCount}`));
-      if (w.edited_at) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "11px", color: "var(--ink-dim)" } }, "✎ edited"));
-      const growParts = [
-        titleNode,
-        el("div", { class: "sub" }, `${w.branch} · ${w.reason}${w.note ? ` · ${w.note}` : ""}`),
-        el("div", { class: "sub" }, `by ${w.by_name} · ${fmtDate(w.at)}`),
-      ];
-      if (photoCount) {
-        const thumbRow = el("div", { style: { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } });
-        (w.photos || []).forEach(url => {
-          const thumb = el("img", { src: url, style: { width: "56px", height: "56px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)", cursor: "pointer" } });
-          thumb.addEventListener("click", e => { e.stopPropagation(); const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; a.click(); });
-          thumbRow.appendChild(thumb);
-        });
-        growParts.push(thumbRow);
-      }
-      const canEdit = (u.role === "owner" || u.role === "manager" || u.role === "head_barista");
-      const row = el("div", { class: "row", style: { cursor: canEdit ? "pointer" : "default" } }, [
-        el("div", { class: "grow" }, growParts),
-        canEdit ? el("span", { class: "pill", style: { background: "var(--surface2)" } }, "✎ edit") : el("span", { class: "pill" }, w.branch),
-      ]);
-      if (canEdit) row.addEventListener("click", () => showWasteEdit(w, renderList));
-      list.appendChild(row);
+  const mine = state.waste.filter(w => u.role === "owner" || u.branches.includes(w.branch))
+    .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
+  if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, "No entries yet."));
+  for (const w of mine) {
+    const photoCount = (w.photos || []).length;
+    const titleNode = el("div", { class: "title" });
+    titleNode.appendChild(document.createTextNode(`${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`));
+    if (photoCount) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "12px", color: "var(--ok)", fontWeight: "600" } }, `📷 ${photoCount}`));
+    const growParts = [
+      titleNode,
+      el("div", { class: "sub" }, `${w.branch} · ${w.reason}${w.note ? ` · ${w.note}` : ""}`),
+      el("div", { class: "sub" }, `by ${w.by_name} · ${fmtDate(w.at)}`),
+    ];
+    if (photoCount) {
+      const thumbRow = el("div", { style: { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } });
+      (w.photos || []).forEach(url => {
+        const thumb = el("img", { src: url, style: { width: "56px", height: "56px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)", cursor: "pointer" } });
+        thumb.addEventListener("click", () => { const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; a.click(); });
+        thumbRow.appendChild(thumb);
+      });
+      growParts.push(thumbRow);
     }
+    list.appendChild(el("div", { class: "row" }, [
+      el("div", { class: "grow" }, growParts),
+      el("span", { class: "pill" }, w.branch),
+    ]));
   }
-  renderList();
-
   wrap.appendChild(list);
   wrap.appendChild(el("div", { class: "sticky-actions" }, [
     el("button", { class: "btn", onClick: () => go("waste_new") }, "+ New waste entry"),
@@ -1845,12 +1755,9 @@ routes.shift_close_new = function (u) {
   // Closing barista name
   let closingBarista = "";
 
-  // Hospitality free drinks — count + note
+  // Cinema hospitality free drinks — count + note
   let cinemaFreeCount = "";
   let cinemaFreeNote  = "";
-
-  // Drinks photo field — mandatory when hospitality drinks are logged (not required for management or barista allowance drinks)
-  const drinksPhotoField = makePhotoField({ label: "Hospitality photo(s) — required when hospitality drinks are logged", required: null, multiple: true, formLabel: "Shift Close Hospitality" });
 
   // Management drinks — dynamic rows [{who, drink}]
   const MANAGERS = ["Haïdi", "Luke", "Youssef"];
@@ -1967,13 +1874,10 @@ routes.shift_close_new = function (u) {
       onClick: () => { baristaAllowanceDrinks.push({ who: "", drink: "" }); drawBaristaAllowance(); },
     }, "+ Add barista drink"));
 
-    form.appendChild(el("label", {}, "Hospitality — number of free drinks"));
+    form.appendChild(el("label", {}, "Cinema hospitality — number of free drinks"));
     form.appendChild(mkInput("number", cinemaFreeCount, v => cinemaFreeCount = v, "0"));
-    form.appendChild(el("label", {}, "Hospitality — note (optional)"));
-    form.appendChild(mkInput("text", cinemaFreeNote, v => cinemaFreeNote = v, "e.g. Event group, VIP guests"));
-
-    // Hospitality photo — shown always; mandatory only when hospitality drinks count > 0
-    form.appendChild(drinksPhotoField.el);
+    form.appendChild(el("label", {}, "Cinema hospitality — note (optional)"));
+    form.appendChild(mkInput("text", cinemaFreeNote, v => cinemaFreeNote = v, "e.g. Screening room, group of 8"));
 
     // ── Management drinks ──
     form.appendChild(el("h2", { style: { marginTop: "14px" } }, "Management drinks"));
@@ -2002,11 +1906,6 @@ routes.shift_close_new = function (u) {
     if (cash === "" && instapay === "" && cc === "" && talabat_credit === "" && talabat_cash === "")
       return toast("Enter at least one payment amount", "error");
 
-    // Mandatory photo only when hospitality drinks are logged (management & barista allowance do not require a photo)
-    const hospitalityCount = Number(cinemaFreeCount) || 0;
-    if (hospitalityCount > 0 && drinksPhotoField.getBlobs().length === 0)
-      return toast("📷 Photo required — attach at least one hospitality photo", "error");
-
     const s = stamp();
     const doSave = async () => {
       const dpBlobs = discountPhotoField ? discountPhotoField.getBlobs() : [];
@@ -2018,17 +1917,6 @@ routes.shift_close_new = function (u) {
         discountPhotoIds.push(pid);
       }
       const photoId = discountPhotoIds[0] || null;
-
-      // Save drinks photos
-      const dkBlobs = drinksPhotoField ? drinksPhotoField.getBlobs() : [];
-      const dkNames = dkBlobs.map(f => f.name);
-      const drinksPhotoIds = [];
-      for (const pb of dkBlobs) {
-        const pid = uuid();
-        try { await IDB.put(pid, pb); } catch (e) { console.warn(e); }
-        drinksPhotoIds.push(pid);
-      }
-
       state.shift_closes.push({
         id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
         branch, date,
@@ -2040,9 +1928,6 @@ routes.shift_close_new = function (u) {
         talabat_cash:    Number(talabat_cash)   || 0,
         extra_money_notes: extraMoneyNotes.trim(),
         barista_allowance_drinks: baristaAllowanceDrinks.filter(r => r.drink.trim()),
-        hospitality_free_count: Number(cinemaFreeCount) || 0,
-        hospitality_free_note:  cinemaFreeNote.trim(),
-        // keep legacy key for backward compat
         cinema_free_count: Number(cinemaFreeCount) || 0,
         cinema_free_note:  cinemaFreeNote.trim(),
         mgmt_drinks: mgmtDrinks.filter(r => r.drink.trim()),
@@ -2050,9 +1935,6 @@ routes.shift_close_new = function (u) {
         discount_photo_ids: discountPhotoIds,
         discount_photo_names: dpNames,
         discount_drive_ids: discountPhotoField ? discountPhotoField.getDriveIds() : [],
-        drinks_photo_ids: drinksPhotoIds,
-        drinks_photo_names: dkNames,
-        drinks_drive_ids: drinksPhotoField ? drinksPhotoField.getDriveIds() : [],
       });
       saveState();
       if (dpNames.length) {
@@ -2424,10 +2306,8 @@ routes.purchase_new = function (u) {
     pack_size: 0,        // inventory units per purchase unit (e.g. 850 ml per bottle)
     purchase_qty: 1,     // how many bottles/packs bought
     unit_price: 0,       // EGP per purchase unit (e.g. 40 EGP per bottle)
-    expiry_date: "",     // expiry date of this item (from packaging)
     note: "",
   }];
-  let electronic_receipt = null; // null = not set, true = yes, false = no
   // Receipt photos — initialized once, re-appended on each draw()
   const receiptPhotoField = makePhotoField({ label: "Receipt photo(s)", formLabel: "Purchase Receipt" });
 
@@ -2566,13 +2446,7 @@ routes.purchase_new = function (u) {
           ]));
         }
 
-        card.appendChild(el("label", {}, "Expiry date (from packaging)"));
-        const expInput = el("input", { type: "date", value: ln.expiry_date || "" });
-        expInput.addEventListener("input", () => { ln.expiry_date = expInput.value; });
-        card.appendChild(expInput);
-        card.appendChild(el("div", { class: "muted small", style: { marginTop: "4px" } }, "⚠ A high-priority alert will fire system-wide as this date approaches. Leave blank if item has no expiry."));
-
-        card.appendChild(el("label", {}, "Note (batch, ref)"));
+        card.appendChild(el("label", {}, "Note (batch, expiry, ref)"));
         const nInput = el("input", { type: "text", value: ln.note||"", placeholder: "optional" });
         nInput.addEventListener("input", () => ln.note = nInput.value);
         card.appendChild(nInput);
@@ -2603,7 +2477,7 @@ routes.purchase_new = function (u) {
       el("button", {
         class: "btn secondary",
         onClick: () => {
-          lines.push({ kind: "inventory", inv_item_id: null, purchase_unit: "", pack_size: 0, purchase_qty: 1, unit_price: 0, expiry_date: "", note: "" });
+          lines.push({ kind: "inventory", inv_item_id: null, purchase_unit: "", pack_size: 0, purchase_qty: 1, unit_price: 0, note: "" });
           draw();
         }
       }, "+ Inventory line"),
@@ -2618,26 +2492,6 @@ routes.purchase_new = function (u) {
 
     // photo(s)
     form.appendChild(receiptPhotoField.el);
-
-    // Electronic receipt Yes/No
-    form.appendChild(el("h2", { style: { marginTop: "16px" } }, "Electronic receipt"));
-    form.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } }, "Did the supplier provide an electronic receipt? This is used for the monthly receipt report sent to management."));
-    const erWrap = el("div", { style: { display: "flex", gap: "10px" } });
-    const btnYes = el("button", {
-      class: "btn" + (electronic_receipt === true ? "" : " ghost"),
-      style: { flex: "1" },
-      onClick: () => { electronic_receipt = true; draw(); },
-    }, "✓ Yes — uploaded");
-    const btnNo = el("button", {
-      class: "btn" + (electronic_receipt === false ? "" : " ghost"),
-      style: { flex: "1" },
-      onClick: () => { electronic_receipt = false; draw(); },
-    }, "✗ No receipt from supplier");
-    erWrap.appendChild(btnYes);
-    erWrap.appendChild(btnNo);
-    form.appendChild(erWrap);
-    if (electronic_receipt === null)
-      form.appendChild(el("div", { class: "muted small", style: { color: "var(--bad)", marginTop: "6px" } }, "⚠ Required — tap Yes or No"));
 
     // total
     const totalEl = el("div", { class: "card", style: { marginTop: "14px", textAlign: "right" } }, [
@@ -2666,7 +2520,6 @@ routes.purchase_new = function (u) {
         if (!(Number(ln.amount) > 0)) return toast("Enter an amount for every Other line", "error");
       }
     }
-    if (electronic_receipt === null) return toast("Select Yes or No for electronic receipt", "error");
 
     const s = stamp();
     const total = lines.reduce((s2, l) => s2 + lineTotal(l), 0);
@@ -2704,7 +2557,6 @@ routes.purchase_new = function (u) {
           qty_canonical: canonicalQty,                  // inventory units added (used by inventory / dashboard)
           unit_cost: canonicalQty ? cost / canonicalQty : 0,  // EGP per inventory unit
           line_total: cost,
-          expiry_date: l.expiry_date || "",
           note: l.note || "",
         };
       }
@@ -2722,7 +2574,6 @@ routes.purchase_new = function (u) {
       id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
       branch, date, supplier, paid_by, total,
       lines: outLines,
-      electronic_receipt: electronic_receipt,
       receipt_photo_id: photoId,
       receipt_photo_ids: photoIds,
       receipt_photo_names: photoNames,
@@ -2777,11 +2628,7 @@ routes.purchase_list = function (u) {
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, `${p.supplier} — ${money(p.total)}`),
         el("div", { class: "sub" }, `${p.branch} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`),
-        el("div", { class: "sub" }, [
-          document.createTextNode(`by ${p.by_name} · ${fmtDate(p.at)}  `),
-          el("span", { style: { fontWeight: "600", color: p.electronic_receipt === true ? "var(--ok, #1a8a4a)" : p.electronic_receipt === false ? "var(--bad)" : "var(--ink-dim)" } },
-            p.electronic_receipt === true ? "🧾 Receipt ✓" : p.electronic_receipt === false ? "🚫 No receipt" : ""),
-        ]),
+        el("div", { class: "sub" }, `by ${p.by_name} · ${fmtDate(p.at)}`),
       ]),
       el("span", { class: "pill" }, p.paid_by.replace("_"," ")),
     ]));
@@ -5693,28 +5540,21 @@ routes.settings = function (u) {
 
   // sync
   const s = el("div", { class: "card" });
-  s.appendChild(el("h2", {}, "Google Sheets sync"));
-  s.appendChild(el("div", { class: "muted small" }, "Paste the Apps Script Web App URL (see setup doc). We POST the full state every few seconds after changes."));
-  s.appendChild(el("label", {}, "Web App URL"));
-  const urlIn = el("input", { type: "url", value: state.settings.sync_url || "", placeholder: "https://script.google.com/macros/s/…/exec" });
-  s.appendChild(urlIn);
-  s.appendChild(el("label", {}, "Shared secret (must match Apps Script)"));
-  const secIn = el("input", { type: "text", value: state.settings.sync_secret || "" });
-  s.appendChild(secIn);
+  s.appendChild(el("h2", {}, "☁ Firebase sync"));
+  s.appendChild(el("div", { class: "muted small" }, "Data is automatically synced to Firebase Firestore after every change. Photos and files go to Firebase Storage. No configuration needed."));
   s.appendChild(el("div", { class: "banner-arch", style: { marginTop: "10px" } },
-    "Google Sheets is the single source of truth. Use 'Pull from Sheets' to load the latest data from the sheet (overwrites local). Use 'Push now' to write your local state to the sheet."));
+    "Firebase is the single source of truth. Use 'Pull from Firebase' to load the latest data (overwrites local). Use 'Push now' to write your local state to Firebase."));
   s.appendChild(el("div", { class: "btn-row" }, [
-    el("button", { class: "btn", onClick: () => { state.settings.sync_url = urlIn.value.trim(); state.settings.sync_secret = secIn.value.trim(); saveState({ immediate: true }); toast("Saved"); } }, "Save URL & secret"),
-    el("button", { class: "btn secondary", onClick: async () => { await doSync(); toast("Pushed to Sheets ✓"); } }, "⬆ Push now"),
+    el("button", { class: "btn secondary", onClick: async () => { await doSync(); toast("Pushed to Firebase ✓"); } }, "⬆ Push now"),
     el("button", { class: "btn secondary", style: { background: "var(--accent-2)" }, onClick: async () => {
       if (hasPending()) {
-        if (!confirm("You have local edits that haven't synced to the sheet yet. Pull will overwrite them. Push first?")) return;
+        if (!confirm("You have local edits not yet synced. Push first?")) return;
         await doSync();
       }
-      const result = await pullFromSheets();
-      if (result.ok) { markClean(); toast("Pulled from Sheets ✓"); render(); }
+      const result = await pullFromFirestore();
+      if (result.ok) { markClean(); toast("Pulled from Firebase ✓"); render(); }
       else { updateSyncBadge("error"); toast("Pull failed: " + result.err, "error"); }
-    } }, "⬇ Pull from Sheets"),
+    } }, "⬇ Pull from Firebase"),
   ]));
   s.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } }, [
     document.createTextNode(`Last push: ${state.settings.last_sync ? fmtDate(state.settings.last_sync) : "—"}`),
@@ -5789,67 +5629,28 @@ routes.settings = function (u) {
   ex.appendChild(rf);
   wrap.appendChild(ex);
 
-  // ── Cloudinary photo storage (free) ──
+  // ── Firebase photo storage ──
   const gd = el("div", { class: "card", style: { marginTop: "14px" } });
-  gd.appendChild(el("h2", {}, "📷 Photo Storage (Cloudinary — free)"));
+  gd.appendChild(el("h2", {}, "📷 Photo Storage (Firebase)"));
   gd.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Photos taken in the app are automatically backed up to Cloudinary — free forever, no credit card needed. Takes 2 minutes to set up."));
-  gd.appendChild(el("div", { class: "banner-arch", style: { marginBottom: "12px" } }, [
-    el("b", {}, "Setup (2 min, free): "),
-    document.createTextNode("1. Sign up at cloudinary.com — free plan, no card. "),
-    document.createTextNode("2. In your dashboard copy your Cloud Name. "),
-    document.createTextNode("3. Go to Settings → Upload → Add upload preset → set to Unsigned → copy the preset name. "),
-    document.createTextNode("4. Paste both below and save."),
-  ]));
-
-  gd.appendChild(el("label", {}, "Cloud Name"));
-  const gdCloud = el("input", { type: "text", value: state.settings.cloudinary_cloud || "dbharv4kb", placeholder: "e.g. my-coffee-beats" });
-  gd.appendChild(gdCloud);
-
-  gd.appendChild(el("label", {}, "Upload Preset (Unsigned)"));
-  const gdPreset = el("input", { type: "text", value: state.settings.cloudinary_preset || "coffee-beats-ops", placeholder: "e.g. coffee_beats_unsigned" });
-  gd.appendChild(gdPreset);
-
-  const gdRow = el("div", { class: "btn-row", style: { marginTop: "10px" } });
-
-  const gdSaveBtn = el("button", { class: "btn secondary" }, "Save");
-  gdSaveBtn.addEventListener("click", () => {
-    state.settings.cloudinary_cloud  = gdCloud.value.trim();
-    state.settings.cloudinary_preset = gdPreset.value.trim();
-    saveState({ immediate: true });
-    toast("Cloudinary settings saved ✓");
-  });
-  gdRow.appendChild(gdSaveBtn);
-
+    "Photos taken in the app are automatically uploaded to Firebase Storage. No setup needed — it's all handled by the Firebase project."));
   const gdTestBtn = el("button", { class: "btn" }, "Test connection");
   gdTestBtn.addEventListener("click", async () => {
-    if (!gdCloud.value.trim() || !gdPreset.value.trim()) { toast("Enter Cloud Name and Preset first", "error"); return; }
     gdTestBtn.disabled = true; gdTestBtn.textContent = "Testing…";
-    // Verify by uploading a tiny 1×1 transparent PNG — this is the only reliable
-    // browser-side test since Cloudinary's /ping endpoint blocks cross-origin requests.
     try {
       const tiny = await fetch("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==").then(r => r.blob());
-      const form = new FormData();
-      form.append("file", tiny, "test.png");
-      form.append("upload_preset", gdPreset.value.trim());
-      form.append("folder", "coffee-beats/_test");
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${gdCloud.value.trim()}/image/upload`, { method: "POST", body: form });
-      const data = await res.json();
-      if (data.secure_url) {
-        toast("✓ Cloudinary connected! Cloud name and preset are working.");
-      } else {
-        const msg = data.error?.message || "Check your Cloud Name and Upload Preset.";
-        toast("Connection failed: " + msg, "error");
-      }
+      const ref = storage.ref("_test/connection_check.png");
+      await ref.put(tiny, { contentType: "image/png" });
+      const url = await ref.getDownloadURL();
+      if (url) toast("✓ Firebase Storage connected!");
+      else toast("Connection check returned no URL.", "error");
     } catch (e) {
       toast("Connection failed: " + e.message, "error");
     }
     gdTestBtn.disabled = false; gdTestBtn.textContent = "Test connection";
   });
-  gdRow.appendChild(gdTestBtn);
-
-  gd.appendChild(gdRow);
-  gd.appendChild(el("div", { class: "btn-row", style: { marginTop: "8px" } }, [
+  gd.appendChild(el("div", { class: "btn-row", style: { marginTop: "10px" } }, [
+    gdTestBtn,
     el("button", { class: "btn secondary", onClick: () => go("photo_gallery") }, "📷 Open Photo Gallery"),
   ]));
   wrap.appendChild(gd);
@@ -6330,37 +6131,42 @@ routes.signin_stamp_list = function (u) {
 // ==============================================================
 // Seed data: full Coffee Beats recipe list
 function handbookSeedRecipes() {
+  const T1  = "Coffee Type 1 · Extraction: 26–30 sec · Brew Ratio 1:2";
+  const T1R = "Coffee Type 1 · Ristretto pull · Yield 22–24 ml";
+  const T2  = "Coffee Type 2 · Extraction: ~32 sec · Brew Ratio 1:2.5";
+  const V60 = "Coffee Type 3 · V60 Pour-over · 92°C · Brew Ratio 1:15";
+  const TK  = "Traditional Cezve Brew · Fine Turkish Grind · Low & Slow";
   return [
     // ── HOT ESPRESSO ──
-    { id: uuid(), category: "Hot Espresso", name: "Original Beats — Espresso", size: "4 oz", time: "3 min", ingredients: ["Coffee powder: 18 g", "Hot water: 72 g"], steps: ["Dose 18 g into portafilter.", "Extract to yield 36 ml in 26–30 sec (Coffee Type 1).", "Serve immediately in 4 oz cup."] },
-    { id: uuid(), category: "Hot Espresso", name: "Espresso Macchiato", size: "4 oz", time: "4 min", ingredients: ["Coffee powder: 18 g", "Hot water: 72 g", "Steamed milk foam: 100 ml"], steps: ["Extract espresso 36 ml / 26–30 sec (Type 1).", "Steam milk to dense, dry foam.", "Spoon 30 g foam on top.", "Serve immediately."] },
-    { id: uuid(), category: "Hot Espresso", name: "Consistent Beats — Americano", size: "12 oz", time: "4 min", ingredients: ["Espresso: 18 g dose", "Hot water: 300 g (at 92°C)", "Optional: milk, 100 ml"], steps: ["Add hot water (92°C) to cup first.", "Extract espresso (Type 1, 36 g, 26–30 sec), pour in.", "Preserve espresso cream on top.", "Add milk if requested. Serve with lid."] },
-    { id: uuid(), category: "Hot Espresso", name: "Cortado", size: "4 oz", time: "5 min", ingredients: ["Espresso: 18 g dose", "Steamed whole milk: 100 ml"], steps: ["Extract into cup (Type 1, yield 22–24 ml).", "Steam milk 60°C, silky, low foam.", "Pour milk gently, preserve crema.", "Serve immediately."] },
-    { id: uuid(), category: "Hot Espresso", name: "Flat White", size: "8 oz", time: "5 min", ingredients: ["Espresso: 18 g dose", "Steamed whole milk: 150 ml"], steps: ["Extract espresso into cup.", "Steam milk 60°C, thin velvety microfoam.", "Pour milk, preserve crema. Minimal foam.", "Serve with lid."] },
-    { id: uuid(), category: "Hot Espresso", name: "Cappuccino", size: "8 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 180 g"], steps: ["Extract (Type 2, yield 45 g, 32 sec).", "Steam milk to thick, creamy foam.", "Pour, preserve crema. More foam than latte.", "Serve with lid."] },
-    { id: uuid(), category: "Hot Espresso", name: "Latte", size: "12 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 280 ml"], steps: ["Extract espresso (Type 2).", "Steam milk 65°C, light microfoam.", "Pour milk, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Hot Espresso", name: "Turkish Coffee", size: "4 oz", time: "6 min", ingredients: ["Turkish coffee grounds: 12 g"], steps: ["Add 12 g grounds to cezve.", "Add cold water to the 4 oz line.", "Heat over low flame, stir gently, until foam rises.", "Remove from heat before boiling.", "Pour carefully including foam. Serve."] },
+    { id: uuid(), category: "Hot Espresso", name: "Original Beats — Espresso", size: "4 oz", time: "3 min", coffee_notes: T1, ingredients: ["Coffee powder: 18 g", "Hot water: 72 g"], steps: ["Dose 18 g into portafilter.", "Extract to yield 36 ml in 26–30 sec (Coffee Type 1).", "Serve immediately in 4 oz cup."] },
+    { id: uuid(), category: "Hot Espresso", name: "Espresso Macchiato", size: "4 oz", time: "4 min", coffee_notes: T1, ingredients: ["Coffee powder: 18 g", "Hot water: 72 g", "Steamed milk foam: 100 ml"], steps: ["Extract espresso 36 ml / 26–30 sec (Type 1).", "Steam milk to dense, dry foam.", "Spoon 30 g foam on top.", "Serve immediately."] },
+    { id: uuid(), category: "Hot Espresso", name: "Consistent Beats — Americano", size: "12 oz", time: "4 min", coffee_notes: T1, ingredients: ["Espresso: 18 g dose", "Hot water: 300 g (at 92°C)", "Optional: milk, 100 ml"], steps: ["Add hot water (92°C) to cup first.", "Extract espresso (Type 1, 36 g, 26–30 sec), pour in.", "Preserve espresso cream on top.", "Add milk if requested. Serve with lid."] },
+    { id: uuid(), category: "Hot Espresso", name: "Cortado", size: "4 oz", time: "5 min", coffee_notes: T1R, ingredients: ["Espresso: 18 g dose", "Steamed whole milk: 100 ml"], steps: ["Extract into cup (Type 1, yield 22–24 ml).", "Steam milk 60°C, silky, low foam.", "Pour milk gently, preserve crema.", "Serve immediately."] },
+    { id: uuid(), category: "Hot Espresso", name: "Flat White", size: "8 oz", time: "5 min", coffee_notes: T1, ingredients: ["Espresso: 18 g dose", "Steamed whole milk: 150 ml"], steps: ["Extract espresso into cup.", "Steam milk 60°C, thin velvety microfoam.", "Pour milk, preserve crema. Minimal foam.", "Serve with lid."] },
+    { id: uuid(), category: "Hot Espresso", name: "Cappuccino", size: "8 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 180 g"], steps: ["Extract (Type 2, yield 45 g, 32 sec).", "Steam milk to thick, creamy foam.", "Pour, preserve crema. More foam than latte.", "Serve with lid."] },
+    { id: uuid(), category: "Hot Espresso", name: "Latte", size: "12 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 280 ml"], steps: ["Extract espresso (Type 2).", "Steam milk 65°C, light microfoam.", "Pour milk, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Hot Espresso", name: "Turkish Coffee", size: "4 oz", time: "6 min", coffee_notes: TK, ingredients: ["Turkish coffee grounds: 12 g"], steps: ["Add 12 g grounds to cezve.", "Add cold water to the 4 oz line.", "Heat over low flame, stir gently, until foam rises.", "Remove from heat before boiling.", "Pour carefully including foam. Serve."] },
     // ── HOT FLAVOURED ──
-    { id: uuid(), category: "Hot Flavoured Coffee", name: "Spanish Latte", size: "12 oz", time: "6 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 35 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso (Type 2).", "Add condensed milk, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Hot Flavoured Coffee", name: "Mocha — Dark", size: "12 oz", time: "6 min", ingredients: ["Espresso: 18 g dose", "Dark chocolate sauce: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add dark chocolate sauce, mix well.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Finish with chocolate chips. Serve with lid."] },
-    { id: uuid(), category: "Hot Flavoured Coffee", name: "Mocha — White", size: "12 oz", time: "6 min", ingredients: ["Espresso: 18 g dose", "White chocolate syrup: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add white chocolate syrup, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Hot Flavoured Coffee", name: "Salted Caramel Latte", size: "12 oz", time: "6 min", ingredients: ["Espresso: 18 g dose", "Salted caramel sauce: 40 g", "Steamed whole milk: 260 g"], steps: ["Extract espresso.", "Add salted caramel sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Hot Flavoured Coffee", name: "Spanish Latte", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 35 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso (Type 2).", "Add condensed milk, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Hot Flavoured Coffee", name: "Mocha — Dark", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g dose", "Dark chocolate sauce: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add dark chocolate sauce, mix well.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Finish with chocolate chips. Serve with lid."] },
+    { id: uuid(), category: "Hot Flavoured Coffee", name: "Mocha — White", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g dose", "White chocolate syrup: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add white chocolate syrup, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Hot Flavoured Coffee", name: "Salted Caramel Latte", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g dose", "Salted caramel sauce: 40 g", "Steamed whole milk: 260 g"], steps: ["Extract espresso.", "Add salted caramel sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     // ── SIGNATURE ──
-    { id: uuid(), category: "Signature Coffee", name: "The Artist — V60 Filter Coffee", size: "12 oz", time: "8 min", ingredients: ["Coffee powder: 18 g (Type 3 grind)", "Hot water: 270 g (at 92°C)"], steps: ["Heat water to 92°C exactly.", "Rinse paper filter in V60, discard rinse water.", "Grind 18 g medium-fine, place in filter.", "Bloom: pour 50 g water evenly, wait 30 sec.", "Second pour: 150 ml over ~1 min 15 sec.", "Final pour: 70 ml over ~40 sec.", "Allow to drip fully, serve with lid. (Iced: 135 ml hot + 135 g ice.)"] },
-    { id: uuid(), category: "Signature Coffee", name: "The Diva — Haskap Berry Blended", size: "16 oz", time: "6 min", ingredients: ["Espresso: 18 g dose", "Cold milk: 90 g", "Ice: 200 g", "Vanilla powder: 30 g", "Haskap berries: 20 g", "Vanilla syrup: 20 ml"], steps: ["Add cold milk and espresso to blender.", "Add cubed ice and vanilla powder.", "Add haskap berries and vanilla syrup.", "Blend ~35 sec until smooth.", "Decorate cup with flower sticker, pour in, serve with lid."] },
-    { id: uuid(), category: "Signature Coffee", name: "The Actor — Espressivo", size: "4 oz", time: "3 min", ingredients: ["Coffee powder: 18 g", "Condensed milk: 15 g", "Fresh cream: 10 g"], steps: ["Extract espresso into cup.", "Add condensed milk, stir.", "Top with fresh cream. Serve immediately."] },
-    { id: uuid(), category: "Signature Coffee", name: "The Producer — Ginger Latte", size: "12 oz", time: "3 min", ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Condensed milk: 30 g", "Ground ginger: 1 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add condensed milk and ginger, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Signature Coffee", name: "The Director — Sea Salt Vanilla Latte", size: "12 oz", time: "3 min", ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Sea salt vanilla sauce: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add sea salt vanilla sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Coffee", name: "The Artist — V60 Filter Coffee", size: "12 oz", time: "8 min", coffee_notes: V60, ingredients: ["Coffee powder: 18 g (Type 3 grind)", "Hot water: 270 g (at 92°C)"], steps: ["Heat water to 92°C exactly.", "Rinse paper filter in V60, discard rinse water.", "Grind 18 g medium-fine, place in filter.", "Bloom: pour 50 g water evenly, wait 30 sec.", "Second pour: 150 ml over ~1 min 15 sec.", "Final pour: 70 ml over ~40 sec.", "Allow to drip fully, serve with lid. (Iced: 135 ml hot + 135 g ice.)"] },
+    { id: uuid(), category: "Signature Coffee", name: "The Diva — Haskap Berry Blended", size: "16 oz", time: "6 min", coffee_notes: T1, ingredients: ["Espresso: 18 g dose", "Cold milk: 90 g", "Ice: 200 g", "Vanilla powder: 30 g", "Haskap berries: 20 g", "Vanilla syrup: 20 ml"], steps: ["Add cold milk and espresso to blender.", "Add cubed ice and vanilla powder.", "Add haskap berries and vanilla syrup.", "Blend ~35 sec until smooth.", "Decorate cup with flower sticker, pour in, serve with lid."] },
+    { id: uuid(), category: "Signature Coffee", name: "The Actor — Espressivo", size: "4 oz", time: "3 min", coffee_notes: T1, ingredients: ["Coffee powder: 18 g", "Condensed milk: 15 g", "Fresh cream: 10 g"], steps: ["Extract espresso into cup.", "Add condensed milk, stir.", "Top with fresh cream. Serve immediately."] },
+    { id: uuid(), category: "Signature Coffee", name: "The Producer — Ginger Latte", size: "12 oz", time: "3 min", coffee_notes: T2, ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Condensed milk: 30 g", "Ground ginger: 1 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add condensed milk and ginger, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Coffee", name: "The Director — Sea Salt Vanilla Latte", size: "12 oz", time: "3 min", coffee_notes: T2, ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Sea salt vanilla sauce: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add sea salt vanilla sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     { id: uuid(), category: "Signature Coffee", name: "The Writer — Herbal Tea", size: "12 oz", time: "3 min", ingredients: ["Tea bag: 1 (Lipton)", "Special herbs blend: 0.5 g", "Peppermint: 2 g", "Cardamom: 0.2 g", "Honey: 20 g"], steps: ["Bring water to boil.", "Place tea bag, peppermint, cardamom in cup.", "Pour hot water, steep 3–4 min.", "Remove bag. Add herbs blend and honey.", "Stir well and serve."] },
-    { id: uuid(), category: "Signature Coffee", name: "Double O", size: "8 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 1)", "Salted caramel sauce: 20 g", "Steamed whole milk: 100 g"], steps: ["Extract espresso (Type 1).", "Add salted caramel sauce, mix.", "Steam milk to silky texture.", "Pour over base, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Signature Coffee", name: "El 3alamey", size: "8 oz", time: "6 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 25 g", "Steamed whole milk: 100 ml"], steps: ["Extract espresso (Type 2).", "Add condensed milk, mix.", "Steam milk to silky microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Coffee", name: "Double O", size: "8 oz", time: "5 min", coffee_notes: T1, ingredients: ["Espresso: 18 g (Coffee Type 1)", "Salted caramel sauce: 20 g", "Steamed whole milk: 100 g"], steps: ["Extract espresso (Type 1).", "Add salted caramel sauce, mix.", "Steam milk to silky texture.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Coffee", name: "El 3alamey", size: "8 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 25 g", "Steamed whole milk: 100 ml"], steps: ["Extract espresso (Type 2).", "Add condensed milk, mix.", "Steam milk to silky microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     // ── ICED COFFEE ──
-    { id: uuid(), category: "Iced Coffee", name: "Iced Latte", size: "16 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Whole milk: 230 ml (cold)", "Ice: full cup"], steps: ["Fill cup with ice.", "Extract espresso.", "Add cold milk to cup.", "Pour espresso over milk and ice. Serve with lid."] },
-    { id: uuid(), category: "Iced Coffee", name: "Iced Americano", size: "16 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 1)", "Cold water: 250 ml", "Ice: full cup"], steps: ["Fill cup with ice.", "Extract espresso.", "Add cold water.", "Pour espresso over ice and water. Serve with lid."] },
-    { id: uuid(), category: "Iced Coffee", name: "Iced Spanish Latte", size: "16 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 40 g", "Whole milk: 190 ml (cold)", "Ice: full cup"], steps: ["Extract espresso, mix with condensed milk.", "Fill cup with ice.", "Add cold milk.", "Pour espresso mixture over. Serve with lid."] },
-    { id: uuid(), category: "Iced Coffee", name: "Iced Salted Caramel Latte", size: "16 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Salted caramel sauce: 40 g", "Whole milk: 190 ml (cold)", "Ice: full cup"], steps: ["Extract espresso, mix with caramel sauce.", "Fill cup with ice.", "Add cold milk.", "Pour espresso mixture over. Serve with lid."] },
-    { id: uuid(), category: "Iced Coffee", name: "Iced Mocha — Dark", size: "16 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Dark chocolate sauce: 40 g", "Cold milk: 190 ml", "Ice: full cup"], steps: ["Extract espresso, mix with chocolate sauce.", "Fill cup with ice.", "Add cold milk.", "Pour over. Serve with lid."] },
-    { id: uuid(), category: "Iced Coffee", name: "Iced Mocha — White", size: "16 oz", time: "5 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "White chocolate syrup: 40 g", "Cold milk: 190 ml", "Ice: full cup"], steps: ["Extract espresso, mix with white chocolate.", "Fill cup with ice.", "Add cold milk.", "Pour over. Serve with lid."] },
+    { id: uuid(), category: "Iced Coffee", name: "Iced Latte", size: "16 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Whole milk: 230 ml (cold)", "Ice: full cup"], steps: ["Fill cup with ice.", "Extract espresso.", "Add cold milk to cup.", "Pour espresso over milk and ice. Serve with lid."] },
+    { id: uuid(), category: "Iced Coffee", name: "Iced Americano", size: "16 oz", time: "5 min", coffee_notes: T1, ingredients: ["Espresso: 18 g (Coffee Type 1)", "Cold water: 250 ml", "Ice: full cup"], steps: ["Fill cup with ice.", "Extract espresso.", "Add cold water.", "Pour espresso over ice and water. Serve with lid."] },
+    { id: uuid(), category: "Iced Coffee", name: "Iced Spanish Latte", size: "16 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 40 g", "Whole milk: 190 ml (cold)", "Ice: full cup"], steps: ["Extract espresso, mix with condensed milk.", "Fill cup with ice.", "Add cold milk.", "Pour espresso mixture over. Serve with lid."] },
+    { id: uuid(), category: "Iced Coffee", name: "Iced Salted Caramel Latte", size: "16 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Salted caramel sauce: 40 g", "Whole milk: 190 ml (cold)", "Ice: full cup"], steps: ["Extract espresso, mix with caramel sauce.", "Fill cup with ice.", "Add cold milk.", "Pour espresso mixture over. Serve with lid."] },
+    { id: uuid(), category: "Iced Coffee", name: "Iced Mocha — Dark", size: "16 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Dark chocolate sauce: 40 g", "Cold milk: 190 ml", "Ice: full cup"], steps: ["Extract espresso, mix with chocolate sauce.", "Fill cup with ice.", "Add cold milk.", "Pour over. Serve with lid."] },
+    { id: uuid(), category: "Iced Coffee", name: "Iced Mocha — White", size: "16 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "White chocolate syrup: 40 g", "Cold milk: 190 ml", "Ice: full cup"], steps: ["Extract espresso, mix with white chocolate.", "Fill cup with ice.", "Add cold milk.", "Pour over. Serve with lid."] },
     // ── HOT MATCHA ──
     { id: uuid(), category: "Hot Matcha", name: "Hot Matcha Latte", size: "12 oz", time: "5 min", ingredients: ["Matcha powder: 3 g", "Hot water: 15 ml", "Honey: 15 g", "Steamed whole milk: 300 ml"], steps: ["Combine matcha, hot water, honey. Whisk until smooth paste.", "Steam milk 60°C, light less-foam texture.", "Pour milk over matcha paste, stir gently.", "Serve with lid."] },
     { id: uuid(), category: "Hot Matcha", name: "Salted Caramel Matcha Latte", size: "12 oz", time: "5 min", ingredients: ["Matcha powder: 3 g", "Hot water: 15 ml", "Salted sauce: 30 g", "Steamed whole milk: 260 ml"], steps: ["Combine matcha, hot water, salted sauce. Whisk smooth.", "Steam milk with light foam.", "Pour milk over matcha base. Serve with lid."] },
@@ -6377,11 +6183,11 @@ function handbookSeedRecipes() {
     { id: uuid(), category: "Blended Matcha", name: "Blended Spanish Matcha", size: "16 oz", time: "5 min", ingredients: ["Matcha powder: 3 g", "Ice: 220 g", "Whole milk: 150 ml", "Condensed milk: 30 g", "Vanilla powder: 30 g"], steps: ["Add milk to blender.", "Add ice, matcha, vanilla, condensed milk.", "Blend until smooth.", "Pour into cup, serve with lid."] },
     { id: uuid(), category: "Blended Matcha", name: "Blended White Matcha Latte", size: "16 oz", time: "5 min", ingredients: ["Matcha powder: 3 g", "Hot water: 15 ml", "Ice: 230 g", "Whole milk: 150 ml", "White chocolate syrup: 30 g", "Vanilla powder: 30 g"], steps: ["Dissolve matcha in 15 ml hot water.", "Add milk to blender.", "Add ice, vanilla, white chocolate.", "Add matcha liquid, blend smooth.", "Pour into cup, serve with lid."] },
     // ── BLENDED BEATS ──
-    { id: uuid(), category: "Blended Beats", name: "Classic Blended Beats", size: "16 oz", time: "6 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 100 ml", "Ice: 220 g", "Coffee frappe powder: 30 g"], steps: ["Add milk and espresso to blender.", "Add cubed ice.", "Add frappe powder.", "Blend ~35 sec. Pour into cup, serve with lid."] },
-    { id: uuid(), category: "Blended Beats", name: "Mocha Blended Beats", size: "16 oz", time: "6 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 ml", "Ice: 200 g", "Vanilla powder: 15 g", "Chocolate powder: 15 g", "Dark chocolate sauce: 30 g + 5 g garnish"], steps: ["Add milk and espresso to blender.", "Add ice, vanilla powder, chocolate powder.", "Add dark chocolate sauce.", "Blend ~35 sec. Pour, drizzle garnish on top. Serve with lid."] },
-    { id: uuid(), category: "Blended Beats", name: "White Mocha Blended Beats", size: "16 oz", time: "6 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 ml", "Ice: 200 g", "Vanilla powder: 30 g", "White chocolate syrup: 35 g"], steps: ["Add milk and espresso to blender.", "Add ice and vanilla powder.", "Add white chocolate syrup.", "Blend ~35 sec. Pour into cup, serve with lid."] },
-    { id: uuid(), category: "Blended Beats", name: "Spanish Blended Beats", size: "16 oz", time: "6 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 ml", "Ice: 200 g", "Vanilla powder: 30 g", "Condensed milk: 40 g"], steps: ["Add milk and espresso to blender.", "Add ice and vanilla powder.", "Add condensed milk.", "Blend ~35 sec. Pour into cup, serve with lid."] },
-    { id: uuid(), category: "Blended Beats", name: "Salted Caramel Blended Beats", size: "16 oz", time: "6 min", ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 g", "Ice: 200 g", "Vanilla powder: 30 g", "Salted caramel sauce: 40 g"], steps: ["Add milk and espresso to blender.", "Add ice and vanilla powder.", "Add salted caramel sauce.", "Blend ~35 sec. Pour into cup, serve with lid."] },
+    { id: uuid(), category: "Blended Beats", name: "Classic Blended Beats", size: "16 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 100 ml", "Ice: 220 g", "Coffee frappe powder: 30 g"], steps: ["Add milk and espresso to blender.", "Add cubed ice.", "Add frappe powder.", "Blend ~35 sec. Pour into cup, serve with lid."] },
+    { id: uuid(), category: "Blended Beats", name: "Mocha Blended Beats", size: "16 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 ml", "Ice: 200 g", "Vanilla powder: 15 g", "Chocolate powder: 15 g", "Dark chocolate sauce: 30 g + 5 g garnish"], steps: ["Add milk and espresso to blender.", "Add ice, vanilla powder, chocolate powder.", "Add dark chocolate sauce.", "Blend ~35 sec. Pour, drizzle garnish on top. Serve with lid."] },
+    { id: uuid(), category: "Blended Beats", name: "White Mocha Blended Beats", size: "16 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 ml", "Ice: 200 g", "Vanilla powder: 30 g", "White chocolate syrup: 35 g"], steps: ["Add milk and espresso to blender.", "Add ice and vanilla powder.", "Add white chocolate syrup.", "Blend ~35 sec. Pour into cup, serve with lid."] },
+    { id: uuid(), category: "Blended Beats", name: "Spanish Blended Beats", size: "16 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 ml", "Ice: 200 g", "Vanilla powder: 30 g", "Condensed milk: 40 g"], steps: ["Add milk and espresso to blender.", "Add ice and vanilla powder.", "Add condensed milk.", "Blend ~35 sec. Pour into cup, serve with lid."] },
+    { id: uuid(), category: "Blended Beats", name: "Salted Caramel Blended Beats", size: "16 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 g", "Ice: 200 g", "Vanilla powder: 30 g", "Salted caramel sauce: 40 g"], steps: ["Add milk and espresso to blender.", "Add ice and vanilla powder.", "Add salted caramel sauce.", "Blend ~35 sec. Pour into cup, serve with lid."] },
     // ── HOT CHOCOLATE ──
     { id: uuid(), category: "Hot Chocolate", name: "Choco Mallow Beats", size: "8 oz", time: "6 min", ingredients: ["Cold milk: 200 g", "Chocolate powder: 35 g", "Marshmallows: 3 pieces"], steps: ["Steam whole milk until hot.", "Add chocolate powder, whisk until dissolved.", "Pour into cup, top with marshmallows.", "Serve with lid."] },
     { id: uuid(), category: "Hot Chocolate", name: "Hot Choco Beats", size: "8 oz", time: "6 min", ingredients: ["Milk: 200 g", "Chocolate powder: 35 g"], steps: ["Steam milk until hot.", "Add chocolate powder, whisk until dissolved.", "Pour into cup, serve with lid."] },
@@ -6793,21 +6599,43 @@ routes.handbook = function (u) {
     saveState();
   }
 
+  // One-time migration: apply coffee_notes to existing saved recipes missing the field
+  const _T1  = "Coffee Type 1 · Extraction: 26–30 sec · Brew Ratio 1:2";
+  const _T1R = "Coffee Type 1 · Ristretto pull · Yield 22–24 ml";
+  const _T2  = "Coffee Type 2 · Extraction: ~32 sec · Brew Ratio 1:2.5";
+  const _V60 = "Coffee Type 3 · V60 Pour-over · 92°C · Brew Ratio 1:15";
+  const _TK  = "Traditional Cezve Brew · Fine Turkish Grind · Low & Slow";
+  const _COFFEE_NOTES_MAP = {
+    "Original Beats — Espresso": _T1, "Espresso Macchiato": _T1,
+    "Consistent Beats — Americano": _T1, "Flat White": _T1,
+    "The Diva — Haskap Berry Blended": _T1, "The Actor — Espressivo": _T1,
+    "Double O": _T1, "Iced Americano": _T1,
+    "Cortado": _T1R,
+    "Cappuccino": _T2, "Latte": _T2, "Spanish Latte": _T2,
+    "Mocha — Dark": _T2, "Mocha — White": _T2, "Salted Caramel Latte": _T2,
+    "The Producer — Ginger Latte": _T2, "The Director — Sea Salt Vanilla Latte": _T2,
+    "El 3alamey": _T2, "Iced Latte": _T2, "Iced Spanish Latte": _T2,
+    "Iced Salted Caramel Latte": _T2, "Iced Mocha — Dark": _T2, "Iced Mocha — White": _T2,
+    "Classic Blended Beats": _T2, "Mocha Blended Beats": _T2,
+    "White Mocha Blended Beats": _T2, "Spanish Blended Beats": _T2,
+    "Salted Caramel Blended Beats": _T2,
+    "The Artist — V60 Filter Coffee": _V60,
+    "Turkish Coffee": _TK,
+  };
+  let _migrated = false;
+  state.handbook_recipes.forEach(r => {
+    if (!r.coffee_notes && _COFFEE_NOTES_MAP[r.name]) {
+      r.coffee_notes = _COFFEE_NOTES_MAP[r.name];
+      _migrated = true;
+    }
+  });
+  if (_migrated) saveState();
+
   const canEdit = (u.role === "owner" || u.role === "head_barista");
   const CATEGORIES = [...new Set(state.handbook_recipes.map(r => r.category))];
 
   const wrap = el("div", {});
   wrap.appendChild(header("Barista Handbook", "Recipes & drink preparation guide."));
-
-  // ── Handbook v4 download banner ──
-  const dlBanner = el("div", { style: { display:"flex", alignItems:"center", justifyContent:"space-between", background:"var(--surface-2)", border:"1px solid var(--border)", borderRadius:"10px", padding:"12px 16px", marginBottom:"14px", gap:"12px" } });
-  dlBanner.appendChild(el("div", {}, [
-    el("div", { style:{ fontWeight:"700", fontSize:"13px", color:"var(--ink)" } }, "📄 Barista Training Handbook — v4"),
-    el("div", { style:{ fontSize:"11px", color:"var(--ink-dim)", marginTop:"3px" } }, "Official recipe & standards guide · download to read offline"),
-  ]));
-  const dlBtn = el("a", { href:"Coffee_Beats_Barista_Training_Handbook_v4.docx", download:"Coffee_Beats_Barista_Training_Handbook_v4.docx", class:"btn", style:{ width:"auto", padding:"8px 16px", fontSize:"13px", textDecoration:"none", flexShrink:"0" } }, "⬇ Download");
-  dlBanner.appendChild(dlBtn);
-  wrap.appendChild(dlBanner);
 
   // ── Category filter tabs ──
   let activeCategory = "all";
@@ -6859,39 +6687,59 @@ routes.handbook = function (u) {
     filtered.forEach(r => { (groups[r.category] = groups[r.category] || []).push(r); });
 
     Object.entries(groups).forEach(([cat, recipes]) => {
-      // Category heading (only when showing all)
-      if (activeCategory === "all") {
-        recipeBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "12px", textTransform: "uppercase", letterSpacing: "1.2px", color: "var(--ink-dim)", margin: "16px 0 8px" } }, cat));
-      }
-      recipes.forEach(recipe => {
-        const card = el("div", { class: "card", style: { marginBottom: "10px", padding: "0", overflow: "hidden" } });
+      // Category heading — always shown as bold section label above cards
+      recipeBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", textTransform: "uppercase", letterSpacing: "1.4px", color: "var(--ink)", margin: "20px 0 10px", paddingBottom: "4px", borderBottom: "2px solid var(--ink)" } }, cat));
 
-        // Card header
-        const cardHead = el("div", { style: { background: "var(--ink)", color: "var(--accent)", padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" } });
-        cardHead.appendChild(el("div", {}, [
-          el("div", { style: { fontWeight: "700", fontSize: "14px" } }, recipe.name),
-          el("div", { style: { fontSize: "11px", color: "#bbb", marginTop: "2px" } }, [recipe.size, recipe.time].filter(Boolean).join(" · ")),
-        ]));
+      recipes.forEach(recipe => {
+        const card = el("div", { class: "card", style: { marginBottom: "14px", padding: "0", overflow: "hidden", border: "1px solid var(--border)", borderRadius: "8px" } });
+
+        // ── Dark header: recipe name + edit button ──
+        const cardHead = el("div", { style: { background: "#3b2314", color: "#f5e6d3", padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" } });
+        cardHead.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", letterSpacing: "0.3px" } }, recipe.name));
         if (canEdit) {
-          const editBtn = el("button", { style: { background: "transparent", border: "1px solid rgba(255,255,255,0.25)", borderRadius: "6px", color: "#eee", padding: "4px 10px", cursor: "pointer", fontSize: "12px" } }, "Edit");
+          const editBtn = el("button", { style: { background: "transparent", border: "1px solid rgba(245,230,211,0.35)", borderRadius: "6px", color: "#f5e6d3", padding: "4px 10px", cursor: "pointer", fontSize: "12px", flexShrink: "0" } }, "Edit");
           editBtn.addEventListener("click", () => openRecipeEditor(recipe));
           cardHead.appendChild(editBtn);
         }
         card.appendChild(cardHead);
 
-        // Card body — ingredients | steps
+        // ── Two-column spec row: Cup Size | Prep Time ──
+        const specRow = el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: "1px solid var(--border)" } });
+        const specLeft = el("div", { style: { padding: "7px 14px", fontSize: "12px", color: "var(--ink)", borderRight: "1px solid var(--border)" } });
+        specLeft.appendChild(el("span", { style: { fontWeight: "600" } }, "Cup Size: "));
+        specLeft.appendChild(document.createTextNode(recipe.size || "—"));
+        const specRight = el("div", { style: { padding: "7px 14px", fontSize: "12px", color: "var(--ink)" } });
+        specRight.appendChild(el("span", { style: { fontWeight: "600" } }, "Preparation Time: "));
+        specRight.appendChild(document.createTextNode(recipe.time || "—"));
+        specRow.appendChild(specLeft);
+        specRow.appendChild(specRight);
+        card.appendChild(specRow);
+
+        // ── Coffee notes banner (optional) ──
+        if (recipe.coffee_notes) {
+          const banner = el("div", { style: { background: "#f5e6d3", padding: "7px 14px", fontSize: "12px", color: "#3b2314", borderBottom: "1px solid var(--border)", fontStyle: "italic" } }, "☕ " + recipe.coffee_notes);
+          card.appendChild(banner);
+        }
+
+        // ── Two-column body: Ingredients | Steps ──
         const body = el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0" } });
 
-        const ingCol = el("div", { style: { padding: "12px 14px", background: "var(--surface-2)", borderRight: "1px solid var(--border)" } });
-        ingCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-faint)", marginBottom: "7px" } }, "Ingredients"));
+        const ingCol = el("div", { style: { padding: "12px 14px", borderRight: "1px solid var(--border)" } });
+        ingCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", marginBottom: "8px" } }, "Ingredients"));
         (recipe.ingredients || []).forEach(ing => {
-          ingCol.appendChild(el("div", { style: { fontSize: "12.5px", padding: "2px 0", borderBottom: "1px solid var(--border)", color: "var(--ink)" } }, "· " + ing));
+          const row = el("div", { style: { fontSize: "12.5px", padding: "3px 0", borderBottom: "1px solid var(--border)", color: "var(--ink)", display: "flex", gap: "6px" } });
+          row.appendChild(el("span", { style: { color: "#3b2314", flexShrink: "0" } }, "•"));
+          row.appendChild(document.createTextNode(ing));
+          ingCol.appendChild(row);
         });
 
         const stepsCol = el("div", { style: { padding: "12px 14px" } });
-        stepsCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-faint)", marginBottom: "7px" } }, "Steps"));
+        stepsCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", marginBottom: "8px" } }, "Preparation Steps"));
         (recipe.steps || []).forEach((step, i) => {
-          stepsCol.appendChild(el("div", { style: { fontSize: "12.5px", padding: "2px 0", borderBottom: "1px solid var(--border)", color: "var(--ink)" } }, `${i+1}. ${step}`));
+          const row = el("div", { style: { fontSize: "12.5px", padding: "3px 0", borderBottom: "1px solid var(--border)", color: "var(--ink)", display: "flex", gap: "6px" } });
+          row.appendChild(el("span", { style: { color: "#3b2314", fontWeight: "600", flexShrink: "0" } }, `${i+1}.`));
+          row.appendChild(document.createTextNode(step));
+          stepsCol.appendChild(row);
         });
 
         body.appendChild(ingCol);
@@ -6917,7 +6765,7 @@ routes.handbook = function (u) {
   function openRecipeEditor(existing) {
     const isNew = !existing;
     const draft = existing ? { ...existing, ingredients: [...(existing.ingredients||[])], steps: [...(existing.steps||[])] }
-                           : { id: uuid(), category: "", name: "", size: "", time: "", ingredients: [""], steps: [""] };
+                           : { id: uuid(), category: "", name: "", size: "", time: "", coffee_notes: "", ingredients: [""], steps: [""] };
 
     const root = document.querySelector("#modal-root");
     root.innerHTML = "";
@@ -6947,6 +6795,12 @@ routes.handbook = function (u) {
     metaRow.appendChild(el("div", {}, [el("label", { style: { marginTop: "0" } }, "Cup Size"), sizeIn]));
     metaRow.appendChild(el("div", {}, [el("label", { style: { marginTop: "0" } }, "Prep Time"), timeIn]));
     inner.appendChild(metaRow);
+
+    // Coffee notes (optional banner)
+    inner.appendChild(el("label", {}, "Coffee Notes (optional — e.g. Coffee Type 1 · Extraction: 26–30 sec · Brew Ratio 1:2)"));
+    const notesIn = el("input", { type: "text", value: draft.coffee_notes || "", placeholder: "Leave blank to hide the banner" });
+    notesIn.addEventListener("input", () => draft.coffee_notes = notesIn.value.trim());
+    inner.appendChild(notesIn);
 
     // Ingredients dynamic list
     inner.appendChild(el("label", {}, "Ingredients"));
@@ -7205,13 +7059,8 @@ routes.photo_gallery = function (u) {
   // Status bar
   const statusCard = el("div", { class: "card", style: { marginBottom: "14px" } });
   statusCard.appendChild(el("div", { class: "muted small" },
-    Cloudinary.isConfigured()
-      ? `☁ Cloudinary connected · ${photos.length} photo${photos.length !== 1 ? "s" : ""} in gallery`
-      : "⚠ Cloudinary not configured — photos are saved locally only. Add your Cloud Name and Upload Preset in Settings → Photo Storage."
+    `☁ Firebase Storage · ${photos.length} photo${photos.length !== 1 ? "s" : ""} in gallery`
   ));
-  if (!Cloudinary.isConfigured()) {
-    statusCard.appendChild(el("button", { class: "btn secondary", style: { marginTop: "10px" }, onClick: () => go("settings") }, "⚙ Open Settings"));
-  }
   wrap.appendChild(statusCard);
 
   if (!photos.length) {
@@ -7340,7 +7189,7 @@ routes.photo_gallery = function (u) {
 function makePhotoField({ label = "Photo(s)", required = false, multiple = true, formLabel = "" } = {}) {
   const container = el("div", { style: { marginTop: "12px" } });
   const labelEl = el("div", { style: { fontWeight: "600", fontSize: "14px", color: "var(--ink-dim)", marginBottom: "8px" } },
-    label + (required === true ? " *" : required === false ? " (optional)" : ""));
+    label + (required ? " *" : " (optional)"));
   container.appendChild(labelEl);
 
   // Drop zone
@@ -7387,7 +7236,7 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
         });
         // Keep log manageable (latest 500)
         if (state.photo_log.length > 500) state.photo_log.length = 500;
-        // Persist and sync to Sheets
+        // Persist and sync to Firestore
         saveState();
       }
       statusBar.className = "ph-status done";
@@ -7960,27 +7809,6 @@ function kpiCustomerScore(userId) {
   return Math.round(avg * 20); // convert 0–5 stars to 0–100
 }
 
-// Pull the latest state from the sync URL to refresh customer_feedback without a full reload
-async function kpiFetchFeedback() {
-  const url    = state.settings?.sync_url;
-  const secret = state.settings?.sync_secret;
-  if (!url || !secret) return toast("Sync URL not configured — go to Settings → Sync to set it up.", "error");
-  try {
-    const res  = await fetch(url + "?action=pull&secret=" + encodeURIComponent(secret));
-    const data = await res.json();
-    if (!data.ok) return toast("Sync error: " + (data.err||"unknown"), "error");
-    if (Array.isArray(data.state?.customer_feedback)) {
-      state.customer_feedback = data.state.customer_feedback;
-      saveState();
-      toast("✅ Customer feedback refreshed — " + data.state.customer_feedback.length + " entries loaded.");
-      render(); // re-render to update scores
-    } else {
-      toast("No feedback data in sync yet.");
-    }
-  } catch(e) {
-    toast("Fetch failed: " + e.message, "error");
-  }
-}
 
 function kpiGetUserScores(userId) {
   const cutoff = Date.now() - 30*24*60*60*1000;
@@ -8027,19 +7855,13 @@ routes.scorecard = function(u) {
   wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},"🏆 KPI Scorecards"));
   wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"10px"}},"Team performance · last 30 days · auto-calculated from self-reports"));
 
-  // ── Customer feedback sync button ─────────────────────────────────────────
+  // ── Customer feedback live count ──────────────────────────────────────────
   const fbCount = (state.customer_feedback||[]).length;
-  const fbBar = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"14px",flexWrap:"wrap"}});
-  fbBar.appendChild(el("div",{class:"muted small",style:{flex:"1"}},
+  wrap.appendChild(el("div",{class:"muted small",style:{marginBottom:"14px"}},
     fbCount
-      ? "😊 " + fbCount + " customer feedback entr" + (fbCount===1?"y":"ies") + " in sync — Customer Score is live"
-      : "😊 No customer feedback synced yet — ratings from coffeebeats.art will appear here after setup"
+      ? "😊 " + fbCount + " customer feedback entr" + (fbCount===1?"y":"ies") + " — live from coffeebeats.art"
+      : "😊 No customer reviews yet — they'll appear here automatically once customers submit on coffeebeats.art"
   ));
-  const fbBtn = el("button",{class:"btn ghost",style:{fontSize:"12px",padding:"5px 12px"},
-    onClick: async () => { fbBtn.textContent="Fetching…"; fbBtn.disabled=true; await kpiFetchFeedback(); fbBtn.textContent="🔄 Sync feedback"; fbBtn.disabled=false; }
-  },"🔄 Sync feedback");
-  fbBar.appendChild(fbBtn);
-  wrap.appendChild(fbBar);
 
   const allU = state.users.filter(x=>["barista","head_barista"].includes(x.role)&&x.active);
   const allScores = kpiGetAllScores();
@@ -8249,7 +8071,7 @@ routes.scorecard = function(u) {
     const cfCard = el("div",{class:"card",style:{marginTop:"12px"}});
     cfCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},"😊 Customer Feedback Log"));
     cfCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
-      "Customer Score auto-feeds from coffeebeats.art reviews — ratings from the public form flow straight into each barista's KPI. Use 'Sync feedback' on the scorecard page to pull the latest, or override manually below."));
+      "Customer Score auto-feeds from coffeebeats.art reviews — ratings from the public form flow straight into each barista's KPI in real-time. Override manually below if needed."));
     const cfSelWrap = el("div",{style:{marginBottom:"10px"}});
     cfSelWrap.appendChild(el("label",{},"Barista"));
     const cfSel = el("select",{});
