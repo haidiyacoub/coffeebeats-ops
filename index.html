@@ -1,3 +1,6 @@
+HTTP 200 
+Content-Type: text/html; charset=UTF-8
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -485,6 +488,8 @@ function makeBranchPicker(branches, getCurrent, onPick) {
 // ----- storage -----
 const STORAGE_KEY = "cb.v1.state";
 const DEVICE_KEY = "cb.device";
+const BOOTSTRAP_SYNC_URL = "https://script.google.com/macros/s/AKfycbytZdJs8cr-v13qRBMZ8lfpSMijTHQtZwu5AatqhWCBYRBvpA6kNXN7fJOTqW25xm6VTA/exec"; // auto-bootstrap sync on any new device
+const BOOTSTRAP_SYNC_SECRET = "coffeebeats2026"; // auto-bootstrap secret on any new device
 const deviceId = (() => {
   let id = localStorage.getItem(DEVICE_KEY);
   if (!id) { id = uuid(); localStorage.setItem(DEVICE_KEY, id); }
@@ -510,8 +515,8 @@ const IDB = (() => {
 // Uses an "unsigned upload preset" — sign up free at cloudinary.com,
 // create an Upload Preset set to "Unsigned", paste cloud name + preset in Settings.
 const Cloudinary = (() => {
-  const cloudName   = () => (typeof state !== "undefined" && state?.settings?.cloudinary_cloud) || "";
-  const uploadPreset= () => (typeof state !== "undefined" && state?.settings?.cloudinary_preset) || "";
+  const cloudName   = () => (typeof state !== "undefined" && state?.settings?.cloudinary_cloud) || "dbharv4kb";
+  const uploadPreset= () => (typeof state !== "undefined" && state?.settings?.cloudinary_preset) || "coffee-beats-ops";
   const isConfigured= () => !!(cloudName() && uploadPreset());
 
   async function uploadPhoto(blob, filename) {
@@ -522,7 +527,7 @@ const Cloudinary = (() => {
     form.append("folder", "coffee-beats");
     // Store original filename as a tag so it shows in the gallery
     form.append("context", `original_name=${encodeURIComponent(filename)}`);
-    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName()}/image/upload`, {
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName()}/auto/upload`, {
       method: "POST", body: form,
     });
     if (!res.ok) {
@@ -692,9 +697,10 @@ function defaultState() {
     sales: [],
     shifts: [],
     photo_log: [],            // { id, url, name, context, at, form, branch }
+    assets: [],               // { id, at, by, by_name, title, note, url, folder }
     settings: {
-      sync_url: "",           // Google Apps Script Web App URL
-      sync_secret: "",        // shared secret for Apps Script to verify
+      sync_url: BOOTSTRAP_SYNC_URL, // Google Apps Script Web App URL
+      sync_secret: BOOTSTRAP_SYNC_SECRET, // shared secret for Apps Script to verify
       currency: "EGP",
       branches: ["maadi", "zawya"],
       cloudinary_cloud: "",   // Cloudinary cloud name (free)
@@ -728,37 +734,73 @@ function migrateState(s) {
   const takenPin = (p) => s.users.some(u => u.pin === p);
   const nextPin = () => { for (let i = 1000; i < 9999; i++) { const p = String(i); if (!takenPin(p)) return p; } return "0000"; };
 
-  // Seed Khaled + Barista 3 if they don't already exist (for upgrades from older state).
-  // Khaled is a BARISTA (not an owner) — same access as Youssef / Mahmoud / the others.
-  if (!hasName("Khaled")) {
-    s.users.push({ id: uuid(), name: "Khaled", role: "barista", pin: takenPin("7777") ? nextPin() : "7777", branches: ["maadi","zawya"], active: true });
-  }
-  if (!hasName("Barista 3")) {
-    s.users.push({ id: uuid(), name: "Barista 3", role: "barista", pin: takenPin("6666") ? nextPin() : "6666", branches: ["maadi","zawya"], active: true });
-  }
-  // Migration: Khaled is a barista. Previous builds mistakenly set his role to "owner" — this
-  // corrects any stale state on reload. Baristas rotate both branches, no deny/extra overrides.
-  const khaledUser = s.users.find(u => (u.name || "").toLowerCase() === "khaled");
-  if (khaledUser) {
-    khaledUser.role         = "barista";
-    khaledUser.branches     = ["maadi","zawya"];
-    khaledUser.deny_access  = [];
-    khaledUser.extra_access = [];
-    khaledUser.active       = khaledUser.active !== false;
+  // Track seeded user IDs so renames don't trigger re-seeding.
+  // We check by PIN (which is stable) in addition to name — if neither the default
+  // name NOR the default PIN exists, the slot is genuinely empty and we seed it.
+  s._seeded_ids = s._seeded_ids || {};
+
+  // Helper: find a user by stored seeded ID, then by name, then by default PIN.
+  function findSeeded(key, defaultName, defaultPin) {
+    if (s._seeded_ids[key]) {
+      const byId = s.users.find(u => u.id === s._seeded_ids[key]);
+      if (byId) return byId;
+    }
+    const byName = s.users.find(u => (u.name||"").toLowerCase() === defaultName.toLowerCase());
+    if (byName) { s._seeded_ids[key] = byName.id; return byName; }
+    const byPin  = s.users.find(u => u.pin === defaultPin);
+    if (byPin)  { s._seeded_ids[key] = byPin.id;  return byPin;  }
+    return null;
   }
 
-  // Seed Zawya baristas Bakr & Mohamed if they don't exist yet.
-  if (!hasName("Bakr")) {
-    s.users.push({ id: uuid(), name: "Bakr", role: "barista", pin: takenPin("8888") ? nextPin() : "8888", branches: ["zawya"], active: true });
-  } else {
-    const u = s.users.find(u => (u.name||"").toLowerCase() === "bakr");
-    if (u && !u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+  // Seed Khaled + Barista 3 if they don't already exist (for upgrades from older state).
+  // Checks by name OR by default PIN so renaming doesn't cause a duplicate to be seeded.
+  if (!findSeeded("khaled", "Khaled", "7777")) {
+    const u = { id: uuid(), name: "Khaled", role: "barista", pin: takenPin("7777") ? nextPin() : "7777", branches: ["maadi","zawya"], active: true };
+    s.users.push(u); s._seeded_ids.khaled = u.id;
   }
-  if (!hasName("Mohamed")) {
-    s.users.push({ id: uuid(), name: "Mohamed", role: "barista", pin: takenPin("9876") ? nextPin() : "9876", branches: ["zawya"], active: true });
+  if (!findSeeded("barista3", "Barista 3", "6666")) {
+    const u = { id: uuid(), name: "Barista 3", role: "barista", pin: takenPin("6666") ? nextPin() : "6666", branches: ["maadi","zawya"], active: true };
+    s.users.push(u); s._seeded_ids.barista3 = u.id;
+  }
+
+  // One-time migration: Khaled was mistakenly set to "owner" in earlier builds.
+  // Only run once (flag prevents it from fighting any deliberate role change the owner makes).
+  if (!s._migration_khaled_role_fixed) {
+    const khaledUser = findSeeded("khaled", "Khaled", "7777");
+    if (khaledUser && khaledUser.role === "owner") {
+      khaledUser.role         = "barista";
+      khaledUser.branches     = ["maadi","zawya"];
+      khaledUser.deny_access  = [];
+      khaledUser.extra_access = [];
+      khaledUser.active       = khaledUser.active !== false;
+    }
+    s._migration_khaled_role_fixed = true;
+  }
+
+  // Seed Zawya staff Bakr (helper) & Mohamed (manager) if they don't exist yet.
+  // Same PIN-aware check so renames are safe.
+  // Both are Zawya-only with no app access but appear in the barista drink allowance list.
+  if (!findSeeded("bakr", "Bakr", "8888")) {
+    const u = { id: uuid(), name: "Bakr", role: "helper", pin: takenPin("8888") ? nextPin() : "8888", branches: ["zawya"], active: true, deny_access: [] };
+    s.users.push(u); s._seeded_ids.bakr = u.id;
   } else {
-    const u = s.users.find(u => (u.name||"").toLowerCase() === "mohamed");
-    if (u && !u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+    const u = findSeeded("bakr", "Bakr", "8888");
+    if (u) {
+      if (!u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+      // Upgrade role to helper (Zawya-only, no app access)
+      if (u.role === "barista") { u.role = "helper"; u.deny_access = []; }
+    }
+  }
+  if (!findSeeded("mohamed", "Mohamed", "9876")) {
+    const u = { id: uuid(), name: "Mohamed", role: "manager", pin: takenPin("9876") ? nextPin() : "9876", branches: ["zawya"], active: true, deny_access: [] };
+    s.users.push(u); s._seeded_ids.mohamed = u.id;
+  } else {
+    const u = findSeeded("mohamed", "Mohamed", "9876");
+    if (u) {
+      if (!u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
+      // Upgrade role to manager (Zawya-only, no app access)
+      if (u.role === "barista") { u.role = "manager"; u.deny_access = []; }
+    }
   }
 
   // Ensure handbook_recipes collection exists (seeded with full menu on first run).
@@ -779,16 +821,30 @@ function migrateState(s) {
   s.alert_log           = s.alert_log || [];
   s.rosters             = s.rosters || []; // weekly shift rosters
   s.roaster_schedules   = s.roaster_schedules || []; // weekly roaster — head barista posts to whole team
+  s.kpi_logs      = s.kpi_logs      || []; // kept for migration only — scores now derived from source tiles
+  s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork, training
+  s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
+  s.kpi_settings  = s.kpi_settings  || {
+    weights: { punctuality:15, waste:15, cleanliness:15, craft:20, upselling:10, customer:15, teamwork:5, training:5 }
+  };
+
   s.shift_closes        = s.shift_closes  || [];
   s.cleaning_logs       = s.cleaning_logs || [];
   s.signin_stamps       = s.signin_stamps || [];
+  s.branch_opening_times = s.branch_opening_times || {
+    maadi: { morning: "10:00", night: "16:00" },
+    zawya: { morning: "12:00", night: "18:00" },
+  };
   s.photo_log           = s.photo_log     || [];
+  s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
   s.leaves              = s.leaves        || []; // leave requests (annual / sick)
   s.settings.cloudinary_cloud    = s.settings.cloudinary_cloud    || "";
   s.settings.cloudinary_preset   = s.settings.cloudinary_preset   || "";
   s.settings.team_code           = s.settings.team_code           || "coffeeteam2026";
   s.settings.head_barista_email  = s.settings.head_barista_email  || "";
   s.settings.owner_email         = s.settings.owner_email         || "coffeebeats@haidiyacoub.com";
+  if (!s.settings.sync_url)    s.settings.sync_url    = BOOTSTRAP_SYNC_URL;    // backfill on any existing device that never had it
+  if (!s.settings.sync_secret) s.settings.sync_secret = BOOTSTRAP_SYNC_SECRET; // backfill on any existing device that never had it
 
   // Strip items that were removed from the menu (per Haïdi, April 2026):
   // Coffee Type 4 and Spiced Turkish Coffee should no longer appear anywhere.
@@ -886,9 +942,14 @@ async function doSync() {
         bank_ledger: state.bank_ledger,
         sales: state.sales,
         shifts: state.shifts,
+        shift_closes: state.shift_closes,
+        cleaning_logs: state.cleaning_logs,
+        signin_stamps: state.signin_stamps,
         menu: state.menu,
         salary_config: state.salary_config,
         salary_loans: state.salary_loans,
+        salaries: state.salaries,
+        overtime_logs: state.overtime_logs,
         penalties: state.penalties,
         deleted_penalties: state.deleted_penalties,
         overheads: state.overheads,
@@ -897,6 +958,16 @@ async function doSync() {
         rosters: state.rosters,
         roaster_schedules: state.roaster_schedules,
         maadi_deposits: state.maadi_deposits,
+        photo_log: state.photo_log,
+        assets: state.assets,
+        leaves: state.leaves,
+        purchase_units: state.purchase_units,
+        inventory_alerts: state.inventory_alerts,
+        alert_log: state.alert_log,
+        handbook_recipes: state.handbook_recipes,
+        settings: state.settings,
+        _seeded_ids: state._seeded_ids,
+        _migration_khaled_role_fixed: state._migration_khaled_role_fixed,
       },
     };
     await fetch(state.settings.sync_url, {
@@ -1211,9 +1282,13 @@ const ROLE_ACCESS = {
                  "petty_cash","salaries","penalties","maadi_deposits","roster",
                  "shift_close_new","shift_close_list","cleaning_log_new","cleaning_log_list",
                  "signin_stamp_new","signin_stamp_list",
-                 "leave_new","leave_list"],
+                 "leave_new","leave_list",
+                 "scorecard","my_scorecard","my_jd"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list"],
+  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd"],
+  // Zawya-only roles — no app access, kept in list for barista drink allowance tracking
+  manager: [],
+  helper:  [],
 };
 function canAccess(routeName, u) {
   if (!u) return false;
@@ -1254,7 +1329,7 @@ function render() {
 }
 
 function topbar(u) {
-  const roleLabel = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista" }[u.role] || u.role;
+  const roleLabel = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" }[u.role] || u.role;
   const t = el("div", { class: "topbar" }, [
     el("img", { class: "logo", src: CB_LOGO_SRC, alt: "Coffee Beats", style: { height: "52px" } }),
     el("div", { style: { flex: "1" } }),
@@ -1296,7 +1371,7 @@ function loginView() {
   const people = state.users.filter(u => u.active);
   for (const u of people) {
     const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
-    const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista" };
+    const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
     const branchLabel = u.role === "barista" ? "rotates" : (u.role === "accountant" ? "all branches" : u.branches.join(", "));
     const r = el("div", { class: "row", onClick: () => selectUser(u) }, [
       el("div", { class: "icon", style: { fontSize: "22px" } }, icon),
@@ -1362,6 +1437,7 @@ routes.home = function (u) {
   if (u.role === "barista") {
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · read only", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
     tiles.appendChild(tile("🔒", "Shift Close", "End-of-shift summary", () => go("shift_close_new")));
     tiles.appendChild(tile("🕐", "Sign-In Stamp", "Clock-in photo", () => go("signin_stamp_new")));
@@ -1369,12 +1445,16 @@ routes.home = function (u) {
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "My Leaves", "View leave history", () => go("leave_list")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
+    tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
   }
 
   // ── Head barista: full frontline + management extras ──
   if (u.role === "head_barista") {
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
     tiles.appendChild(tile("📋", "Waste Log", "View recent entries", () => go("waste_list")));
     tiles.appendChild(tile("📦", "Inventory Count", "Monthly / adjust", () => go("snapshot_new")));
@@ -1385,6 +1465,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🧹", "Cleaning Log", "Upload checklist photo", () => go("cleaning_log_new")));
     tiles.appendChild(tile("🕐", "Sign-In Stamp", "Clock-in photo", () => go("signin_stamp_new")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
     if (u.branches.includes("maadi")) {
       tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
@@ -1393,12 +1474,23 @@ routes.home = function (u) {
     tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
+    tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance dashboard", () => go("scorecard")));
+    tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
+  }
+
+  // ── Manager / Helper (Zawya only): no app tiles — drink allowance tracking only ──
+  if (u.role === "manager" || u.role === "helper") {
+    tiles.appendChild(el("div", {
+      style: { gridColumn: "1 / -1", textAlign: "center", padding: "32px 16px", color: "var(--ink-dim)", fontSize: "14px" },
+    }, "No app access — contact the owner if you need assistance."));
   }
 
   // ── Owner + Accountant: full operational visibility ──
   if (u.role === "owner" || u.role === "accountant") {
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
     tiles.appendChild(tile("📋", "Waste Log", "View recent entries", () => go("waste_list")));
     tiles.appendChild(tile("📋", "My Shifts", "History", () => go("shifts")));
@@ -1415,10 +1507,12 @@ routes.home = function (u) {
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
+    tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
   }
@@ -1576,6 +1670,10 @@ routes.waste_new = function (u) {
       el("div", { class: "small muted", style: { marginTop: "6px", textAlign: "center" } }, `Will reduce ${it.name} at ${branch} by ${qty || 0} ${it.unit}.`),
     ]));
   }
+  // ── Photo evidence (multi-image, auto-uploads to Cloudinary) ──
+  const wastePhotoField = makePhotoField({ label: "Evidence photo(s)", multiple: true, formLabel: "Record Waste" });
+  wrap.appendChild(wastePhotoField.el);
+
   search.addEventListener("input", update);
   update();
 
@@ -1583,39 +1681,132 @@ routes.waste_new = function (u) {
     const it = state.items.find(x => x.id === itemId);
     if (!it || !qty || qty <= 0) { toast("Pick an item and qty > 0", "error"); return; }
     const s = stamp();
+    const photoUrls = wastePhotoField.getCloudUrls().filter(Boolean);
     state.waste.push({
       id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
       branch,
       inv_item_id: itemId, item_name: it.name, unit: it.unit,
       qty_canonical: qty,
       reason, note,
+      photos: photoUrls,
+      image_url: photoUrls[0] || "",
     });
     saveState();
-    toast("Waste recorded");
+    // KPI waste score is derived live in kpiGetUserScores() from state.waste — no extra storage needed
+    const photoMsg = photoUrls.length ? ` · ${photoUrls.length} photo${photoUrls.length > 1 ? "s" : ""} saved` : "";
+    toast("Waste recorded" + photoMsg);
     go("waste_list");
   }
 
   return wrap;
 };
 
+// ── Waste entry edit modal ─────────────────────────────────────────────────
+function showWasteEdit(w, onSaved) {
+  const overlay = el("div", { style: {
+    position: "fixed", inset: "0", background: "rgba(0,0,0,0.55)", zIndex: "200",
+    display: "flex", alignItems: "flex-end", justifyContent: "center",
+  }});
+
+  let qty    = w.qty_canonical;
+  let reason = w.reason || "Spilled";
+  let note   = w.note || "";
+  const it   = state.items.find(x => x.id === w.inv_item_id);
+
+  const sheet = el("div", { style: {
+    background: "var(--surface)", borderRadius: "18px 18px 0 0", padding: "20px",
+    width: "100%", maxWidth: "520px", maxHeight: "80vh", overflowY: "auto",
+  }});
+
+  sheet.appendChild(el("div", { style: { fontWeight: "700", fontSize: "16px", marginBottom: "14px" } },
+    `Edit: ${w.item_name}`));
+
+  if (it) {
+    sheet.appendChild(el("label", {}, `Qty (${it.unit})`));
+    const qtyInput = el("input", { type: "number", min: "0", step: "any", value: qty || "" });
+    qtyInput.addEventListener("input", () => qty = Number(qtyInput.value) || 0);
+    const stepper = el("div", { class: "qty-stepper" }, [
+      el("button", { onClick: () => { qty = Math.max(0, (Number(qtyInput.value)||0) - (it.unit==="unit"?1:10)); qtyInput.value = qty; } }, "−"),
+      qtyInput,
+      el("button", { onClick: () => { qty = (Number(qtyInput.value)||0) + (it.unit==="unit"?1:10); qtyInput.value = qty; } }, "+"),
+    ]);
+    sheet.appendChild(stepper);
+  }
+
+  sheet.appendChild(el("label", { style: { marginTop: "10px" } }, "Reason"));
+  const reasonSel = el("select", {},
+    ["Spilled","Expired","Returned by customer","Staff drink (comp)","Quality issue","Training / calibration","Other"]
+    .map(r => el("option", { value: r, selected: r === reason ? "true" : null }, r)));
+  reasonSel.addEventListener("change", () => reason = reasonSel.value);
+  sheet.appendChild(reasonSel);
+
+  sheet.appendChild(el("label", { style: { marginTop: "10px" } }, "Note"));
+  const noteInput = el("input", { type: "text", value: note, placeholder: "optional" });
+  noteInput.addEventListener("input", () => note = noteInput.value);
+  sheet.appendChild(noteInput);
+
+  sheet.appendChild(el("div", { style: { display: "flex", gap: "10px", marginTop: "16px" } }, [
+    el("button", { class: "btn", style: { flex: "1" }, onClick: () => {
+      if (it && (!qty || qty <= 0)) { toast("Qty must be > 0", "error"); return; }
+      w.qty_canonical = qty;
+      w.reason = reason;
+      w.note = note;
+      w.edited_at = new Date().toISOString();
+      saveState();
+      document.body.removeChild(overlay);
+      toast("Waste entry updated ✓");
+      if (onSaved) onSaved();
+    }}, "Save changes"),
+    el("button", { class: "btn ghost", style: { flex: "1" }, onClick: () => document.body.removeChild(overlay) }, "Cancel"),
+  ]));
+
+  overlay.appendChild(sheet);
+  overlay.addEventListener("click", e => { if (e.target === overlay) document.body.removeChild(overlay); });
+  document.body.appendChild(overlay);
+}
+
 routes.waste_list = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Recent waste", "Signed entries. Tap + to add."));
+  wrap.appendChild(header("Recent waste", "Tap a row to edit. Tap + to add."));
 
   const list = el("div", { class: "list" });
-  const mine = state.waste.filter(w => u.role === "owner" || u.branches.includes(w.branch))
-    .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
-  if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, "No entries yet."));
-  for (const w of mine) {
-    list.appendChild(el("div", { class: "row" }, [
-      el("div", { class: "grow" }, [
-        el("div", { class: "title" }, `${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`),
-        el("div", { class: "sub" }, `${w.branch} · ${w.reason}${w.note?` · ${w.note}`:""}`),
+
+  function renderList() {
+    list.innerHTML = "";
+    const mine = state.waste.filter(w => u.role === "owner" || u.branches.includes(w.branch))
+      .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
+    if (mine.length === 0) { list.appendChild(el("div", { class: "muted" }, "No entries yet.")); return; }
+    for (const w of mine) {
+      const photoCount = (w.photos || []).length;
+      const titleNode = el("div", { class: "title" });
+      titleNode.appendChild(document.createTextNode(`${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`));
+      if (photoCount) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "12px", color: "var(--ok)", fontWeight: "600" } }, `📷 ${photoCount}`));
+      if (w.edited_at) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "11px", color: "var(--ink-dim)" } }, "✎ edited"));
+      const growParts = [
+        titleNode,
+        el("div", { class: "sub" }, `${w.branch} · ${w.reason}${w.note ? ` · ${w.note}` : ""}`),
         el("div", { class: "sub" }, `by ${w.by_name} · ${fmtDate(w.at)}`),
-      ]),
-      el("span", { class: "pill" }, w.branch),
-    ]));
+      ];
+      if (photoCount) {
+        const thumbRow = el("div", { style: { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } });
+        (w.photos || []).forEach(url => {
+          const thumb = el("img", { src: url, style: { width: "56px", height: "56px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)", cursor: "pointer" } });
+          thumb.addEventListener("click", e => { e.stopPropagation(); const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; a.click(); });
+          thumbRow.appendChild(thumb);
+        });
+        growParts.push(thumbRow);
+      }
+      const canEdit = (u.role === "owner" || u.role === "manager" || u.role === "head_barista");
+      const row = el("div", { class: "row", style: { cursor: canEdit ? "pointer" : "default" } }, [
+        el("div", { class: "grow" }, growParts),
+        canEdit ? el("span", { class: "pill", style: { background: "var(--surface2)" } }, "✎ edit") : el("span", { class: "pill" }, w.branch),
+      ]);
+      if (canEdit) row.addEventListener("click", () => showWasteEdit(w, renderList));
+      list.appendChild(row);
+    }
   }
+  renderList();
+
   wrap.appendChild(list);
   wrap.appendChild(el("div", { class: "sticky-actions" }, [
     el("button", { class: "btn", onClick: () => go("waste_new") }, "+ New waste entry"),
@@ -1643,7 +1834,7 @@ routes.shift_close_new = function (u) {
   // Returns all active baristas/head-baristas assigned to the current branch.
   function getBaristaList() {
     return state.users
-      .filter(x => x.active && (x.role === "barista" || x.role === "head_barista") && x.branches.includes(branch))
+      .filter(x => x.active && (x.role === "barista" || x.role === "head_barista" || x.role === "manager" || x.role === "helper") && x.branches.includes(branch))
       .map(x => x.name);
   }
   let baristaAllowanceDrinks = [{ who: "", drink: "" }];
@@ -1654,9 +1845,12 @@ routes.shift_close_new = function (u) {
   // Closing barista name
   let closingBarista = "";
 
-  // Cinema hospitality free drinks — count + note
+  // Hospitality free drinks — count + note
   let cinemaFreeCount = "";
   let cinemaFreeNote  = "";
+
+  // Drinks photo field — mandatory when hospitality drinks are logged (not required for management or barista allowance drinks)
+  const drinksPhotoField = makePhotoField({ label: "Hospitality photo(s) — required when hospitality drinks are logged", required: null, multiple: true, formLabel: "Shift Close Hospitality" });
 
   // Management drinks — dynamic rows [{who, drink}]
   const MANAGERS = ["Haïdi", "Luke", "Youssef"];
@@ -1773,10 +1967,13 @@ routes.shift_close_new = function (u) {
       onClick: () => { baristaAllowanceDrinks.push({ who: "", drink: "" }); drawBaristaAllowance(); },
     }, "+ Add barista drink"));
 
-    form.appendChild(el("label", {}, "Cinema hospitality — number of free drinks"));
+    form.appendChild(el("label", {}, "Hospitality — number of free drinks"));
     form.appendChild(mkInput("number", cinemaFreeCount, v => cinemaFreeCount = v, "0"));
-    form.appendChild(el("label", {}, "Cinema hospitality — note (optional)"));
-    form.appendChild(mkInput("text", cinemaFreeNote, v => cinemaFreeNote = v, "e.g. Screening room, group of 8"));
+    form.appendChild(el("label", {}, "Hospitality — note (optional)"));
+    form.appendChild(mkInput("text", cinemaFreeNote, v => cinemaFreeNote = v, "e.g. Event group, VIP guests"));
+
+    // Hospitality photo — shown always; mandatory only when hospitality drinks count > 0
+    form.appendChild(drinksPhotoField.el);
 
     // ── Management drinks ──
     form.appendChild(el("h2", { style: { marginTop: "14px" } }, "Management drinks"));
@@ -1805,6 +2002,11 @@ routes.shift_close_new = function (u) {
     if (cash === "" && instapay === "" && cc === "" && talabat_credit === "" && talabat_cash === "")
       return toast("Enter at least one payment amount", "error");
 
+    // Mandatory photo only when hospitality drinks are logged (management & barista allowance do not require a photo)
+    const hospitalityCount = Number(cinemaFreeCount) || 0;
+    if (hospitalityCount > 0 && drinksPhotoField.getBlobs().length === 0)
+      return toast("📷 Photo required — attach at least one hospitality photo", "error");
+
     const s = stamp();
     const doSave = async () => {
       const dpBlobs = discountPhotoField ? discountPhotoField.getBlobs() : [];
@@ -1816,6 +2018,17 @@ routes.shift_close_new = function (u) {
         discountPhotoIds.push(pid);
       }
       const photoId = discountPhotoIds[0] || null;
+
+      // Save drinks photos
+      const dkBlobs = drinksPhotoField ? drinksPhotoField.getBlobs() : [];
+      const dkNames = dkBlobs.map(f => f.name);
+      const drinksPhotoIds = [];
+      for (const pb of dkBlobs) {
+        const pid = uuid();
+        try { await IDB.put(pid, pb); } catch (e) { console.warn(e); }
+        drinksPhotoIds.push(pid);
+      }
+
       state.shift_closes.push({
         id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
         branch, date,
@@ -1827,6 +2040,9 @@ routes.shift_close_new = function (u) {
         talabat_cash:    Number(talabat_cash)   || 0,
         extra_money_notes: extraMoneyNotes.trim(),
         barista_allowance_drinks: baristaAllowanceDrinks.filter(r => r.drink.trim()),
+        hospitality_free_count: Number(cinemaFreeCount) || 0,
+        hospitality_free_note:  cinemaFreeNote.trim(),
+        // keep legacy key for backward compat
         cinema_free_count: Number(cinemaFreeCount) || 0,
         cinema_free_note:  cinemaFreeNote.trim(),
         mgmt_drinks: mgmtDrinks.filter(r => r.drink.trim()),
@@ -1834,6 +2050,9 @@ routes.shift_close_new = function (u) {
         discount_photo_ids: discountPhotoIds,
         discount_photo_names: dpNames,
         discount_drive_ids: discountPhotoField ? discountPhotoField.getDriveIds() : [],
+        drinks_photo_ids: drinksPhotoIds,
+        drinks_photo_names: dkNames,
+        drinks_drive_ids: drinksPhotoField ? drinksPhotoField.getDriveIds() : [],
       });
       saveState();
       if (dpNames.length) {
@@ -2035,6 +2254,7 @@ routes.snapshot_new = function (u) {
       id: snapId, as_of: asOf, branch, created_at: s.at, created_by: s.by, created_by_name: s.by_name, device: s.device,
       entries,
       notes: `${branch} count`,
+      image_url: "",
     });
     undoStack.push(snapId);
     saveState();
@@ -2050,6 +2270,129 @@ routes.snapshot_new = function (u) {
     renderUndo();
     draw();
   }
+
+  // ── Manage Items panel (owner + head_barista only) ──────────────
+  if (["owner", "head_barista"].includes(u.role)) {
+    let panelOpen = false;
+    let showInactive = false;
+
+    const panelBody = el("div", { style: { display: "none", marginTop: "12px" } });
+
+    // Add-item form
+    const nameIn = el("input", { type: "text", placeholder: "Item name (e.g. Oat Milk)" });
+    const unitIn = el("input", { type: "text", placeholder: "Unit (e.g. ml, g, pcs, kg)" });
+    const catIn  = el("input", { type: "text", placeholder: "Category (e.g. Milk, Syrup, Packaging)" });
+
+    const mgmtList = el("div", { class: "list", style: { marginTop: "12px" } });
+
+    function drawMgmt() {
+      mgmtList.innerHTML = "";
+      let items = state.items.filter(i =>
+        showInactive || i.active
+      ).slice().sort((a, b) => {
+        if (a.active !== b.active) return a.active ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      if (!items.length) {
+        mgmtList.appendChild(el("div", { class: "muted", style: { padding: "12px 4px" } }, "No items."));
+        return;
+      }
+      for (const it of items) {
+        const badge = el("span", {
+          style: {
+            padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: "700",
+            background: it.active ? "#dcfce7" : "#f3f4f6",
+            color: it.active ? "#16a34a" : "#9ca3af",
+            marginLeft: "6px",
+          }
+        }, it.active ? "Active" : "Inactive");
+        const toggleBtn = el("button", {
+          class: "btn ghost",
+          style: { padding: "5px 12px", fontSize: "12px", color: it.active ? "var(--bad,#dc2626)" : "var(--good,#16a34a)" },
+          onClick: () => {
+            const msg = it.active
+              ? `Deactivate "${it.name}"? It will no longer appear in counts.`
+              : `Restore "${it.name}"? It will reappear in counts.`;
+            if (!confirm(msg)) return;
+            it.active      = !it.active;
+            it.modified_by = currentUser() ? currentUser().name : "—";
+            it.modified_at = now();
+            saveState();
+            toast(`"${it.name}" ${it.active ? "restored ✓" : "deactivated ✓"}`);
+            drawMgmt();
+            draw(); // refresh the count list above
+          }
+        }, it.active ? "Deactivate" : "Restore");
+        mgmtList.appendChild(el("div", { class: "row", style: { opacity: it.active ? "1" : "0.5" } }, [
+          el("div", { class: "grow" }, [
+            el("div", { class: "title" }, [it.name, badge]),
+            el("div", { class: "sub" }, `${it.category || "—"} · ${it.unit}`),
+          ]),
+          toggleBtn,
+        ]));
+      }
+    }
+
+    function addMgmtItem() {
+      const name = nameIn.value.trim();
+      const unit = unitIn.value.trim();
+      const cat  = catIn.value.trim();
+      if (!name) { toast("Enter an item name", "error"); return; }
+      if (!unit) { toast("Enter a unit (e.g. ml, g, pcs)", "error"); return; }
+      if (state.items.some(i => i.name.toLowerCase() === name.toLowerCase())) {
+        toast("An item with that name already exists.", "error"); return;
+      }
+      state.items.push({
+        id: "inv_" + String(Date.now()),
+        name, unit,
+        category: cat || "Other",
+        active: true,
+        added_by: currentUser() ? currentUser().name : "—",
+        added_at: now(),
+      });
+      saveState();
+      nameIn.value = ""; unitIn.value = ""; catIn.value = "";
+      toast(`"${name}" added ✓`);
+      drawMgmt();
+      draw(); // refresh count list above
+    }
+
+    const toggleInactiveBtn = el("button", {
+      class: "btn ghost",
+      style: { fontSize: "12px", marginTop: "8px" },
+      onClick: () => {
+        showInactive = !showInactive;
+        toggleInactiveBtn.textContent = showInactive ? "Hide inactive items" : "Show inactive items";
+        drawMgmt();
+      }
+    }, "Show inactive items");
+
+    panelBody.appendChild(el("div", { class: "card", style: { marginBottom: "8px" } }, [
+      el("div", { class: "muted", style: { textTransform: "uppercase", letterSpacing: "1px", fontSize: "11px", marginBottom: "10px", fontWeight: "700" } }, "Add new item"),
+      el("div", { class: "form-field" }, [ el("label", {}, "Name"), nameIn ]),
+      el("div", { class: "form-field" }, [ el("label", {}, "Unit"), unitIn ]),
+      el("div", { class: "form-field" }, [ el("label", {}, "Category"), catIn ]),
+      el("button", { class: "btn", style: { marginTop: "8px" }, onClick: addMgmtItem }, "＋ Add item"),
+    ]));
+    panelBody.appendChild(toggleInactiveBtn);
+    panelBody.appendChild(mgmtList);
+
+    const togglePanelBtn = el("button", {
+      class: "btn ghost",
+      style: { marginTop: "24px", width: "100%", borderStyle: "dashed", fontSize: "13px" },
+      onClick: () => {
+        panelOpen = !panelOpen;
+        panelBody.style.display = panelOpen ? "block" : "none";
+        togglePanelBtn.textContent = panelOpen ? "▲ Hide item management" : "🗂️ Manage items (add / remove)";
+        if (panelOpen) drawMgmt();
+      }
+    }, "🗂️ Manage items (add / remove)");
+
+    wrap.appendChild(togglePanelBtn);
+    wrap.appendChild(panelBody);
+  }
+  // ── end Manage Items ────────────────────────────────────────────
+
   return wrap;
 };
 
@@ -2081,8 +2424,10 @@ routes.purchase_new = function (u) {
     pack_size: 0,        // inventory units per purchase unit (e.g. 850 ml per bottle)
     purchase_qty: 1,     // how many bottles/packs bought
     unit_price: 0,       // EGP per purchase unit (e.g. 40 EGP per bottle)
+    expiry_date: "",     // expiry date of this item (from packaging)
     note: "",
   }];
+  let electronic_receipt = null; // null = not set, true = yes, false = no
   // Receipt photos — initialized once, re-appended on each draw()
   const receiptPhotoField = makePhotoField({ label: "Receipt photo(s)", formLabel: "Purchase Receipt" });
 
@@ -2221,7 +2566,13 @@ routes.purchase_new = function (u) {
           ]));
         }
 
-        card.appendChild(el("label", {}, "Note (batch, expiry, ref)"));
+        card.appendChild(el("label", {}, "Expiry date (from packaging)"));
+        const expInput = el("input", { type: "date", value: ln.expiry_date || "" });
+        expInput.addEventListener("input", () => { ln.expiry_date = expInput.value; });
+        card.appendChild(expInput);
+        card.appendChild(el("div", { class: "muted small", style: { marginTop: "4px" } }, "⚠ A high-priority alert will fire system-wide as this date approaches. Leave blank if item has no expiry."));
+
+        card.appendChild(el("label", {}, "Note (batch, ref)"));
         const nInput = el("input", { type: "text", value: ln.note||"", placeholder: "optional" });
         nInput.addEventListener("input", () => ln.note = nInput.value);
         card.appendChild(nInput);
@@ -2252,7 +2603,7 @@ routes.purchase_new = function (u) {
       el("button", {
         class: "btn secondary",
         onClick: () => {
-          lines.push({ kind: "inventory", inv_item_id: null, purchase_unit: "", pack_size: 0, purchase_qty: 1, unit_price: 0, note: "" });
+          lines.push({ kind: "inventory", inv_item_id: null, purchase_unit: "", pack_size: 0, purchase_qty: 1, unit_price: 0, expiry_date: "", note: "" });
           draw();
         }
       }, "+ Inventory line"),
@@ -2267,6 +2618,26 @@ routes.purchase_new = function (u) {
 
     // photo(s)
     form.appendChild(receiptPhotoField.el);
+
+    // Electronic receipt Yes/No
+    form.appendChild(el("h2", { style: { marginTop: "16px" } }, "Electronic receipt"));
+    form.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } }, "Did the supplier provide an electronic receipt? This is used for the monthly receipt report sent to management."));
+    const erWrap = el("div", { style: { display: "flex", gap: "10px" } });
+    const btnYes = el("button", {
+      class: "btn" + (electronic_receipt === true ? "" : " ghost"),
+      style: { flex: "1" },
+      onClick: () => { electronic_receipt = true; draw(); },
+    }, "✓ Yes — uploaded");
+    const btnNo = el("button", {
+      class: "btn" + (electronic_receipt === false ? "" : " ghost"),
+      style: { flex: "1" },
+      onClick: () => { electronic_receipt = false; draw(); },
+    }, "✗ No receipt from supplier");
+    erWrap.appendChild(btnYes);
+    erWrap.appendChild(btnNo);
+    form.appendChild(erWrap);
+    if (electronic_receipt === null)
+      form.appendChild(el("div", { class: "muted small", style: { color: "var(--bad)", marginTop: "6px" } }, "⚠ Required — tap Yes or No"));
 
     // total
     const totalEl = el("div", { class: "card", style: { marginTop: "14px", textAlign: "right" } }, [
@@ -2295,6 +2666,7 @@ routes.purchase_new = function (u) {
         if (!(Number(ln.amount) > 0)) return toast("Enter an amount for every Other line", "error");
       }
     }
+    if (electronic_receipt === null) return toast("Select Yes or No for electronic receipt", "error");
 
     const s = stamp();
     const total = lines.reduce((s2, l) => s2 + lineTotal(l), 0);
@@ -2332,6 +2704,7 @@ routes.purchase_new = function (u) {
           qty_canonical: canonicalQty,                  // inventory units added (used by inventory / dashboard)
           unit_cost: canonicalQty ? cost / canonicalQty : 0,  // EGP per inventory unit
           line_total: cost,
+          expiry_date: l.expiry_date || "",
           note: l.note || "",
         };
       }
@@ -2349,10 +2722,12 @@ routes.purchase_new = function (u) {
       id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
       branch, date, supplier, paid_by, total,
       lines: outLines,
+      electronic_receipt: electronic_receipt,
       receipt_photo_id: photoId,
       receipt_photo_ids: photoIds,
       receipt_photo_names: photoNames,
       receipt_drive_ids: receiptPhotoField.getDriveIds(),
+      image_url: (receiptPhotoField.getCloudUrls().filter(Boolean)[0]) || "",
     };
     state.purchases.push(purch);
     // ledger side-effects
@@ -2402,7 +2777,11 @@ routes.purchase_list = function (u) {
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, `${p.supplier} — ${money(p.total)}`),
         el("div", { class: "sub" }, `${p.branch} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`),
-        el("div", { class: "sub" }, `by ${p.by_name} · ${fmtDate(p.at)}`),
+        el("div", { class: "sub" }, [
+          document.createTextNode(`by ${p.by_name} · ${fmtDate(p.at)}  `),
+          el("span", { style: { fontWeight: "600", color: p.electronic_receipt === true ? "var(--ok, #1a8a4a)" : p.electronic_receipt === false ? "var(--bad)" : "var(--ink-dim)" } },
+            p.electronic_receipt === true ? "🧾 Receipt ✓" : p.electronic_receipt === false ? "🚫 No receipt" : ""),
+        ]),
       ]),
       el("span", { class: "pill" }, p.paid_by.replace("_"," ")),
     ]));
@@ -4117,12 +4496,24 @@ function parseSalesCSVFromMapping(lines, headerRaw, defaultBranch, fallbackMonth
 // day (mon..sun), user_id, user_name, by, by_name, at, photo_id? }.
 // Head barista + owner edit; everyone else reads.
 // ==============================================================
+// Format a Date as YYYY-MM-DD using LOCAL time (not UTC).
+// toISOString() returns UTC which is offset by Cairo's UTC+2/+3, causing
+// dates to appear one day behind. This helper fixes that everywhere.
+function localISODate(d) {
+  const y  = d.getFullYear();
+  const m  = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
 function mondayOf(dateStr) {
-  const d = dateStr ? new Date(dateStr) : new Date();
+  // Parse date-only strings as LOCAL noon to avoid DST / UTC-offset shifts.
+  const d = dateStr
+    ? new Date(dateStr.length === 10 ? dateStr + "T12:00:00" : dateStr)
+    : new Date();
   // JS: Sunday=0, Monday=1, ..., Saturday=6. Shift so Monday is start.
   const dow = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - dow);
-  return d.toISOString().slice(0, 10);
+  return localISODate(d);
 }
 const ROSTER_DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
 const ROSTER_DAY_LABELS = { mon:"Mon", tue:"Tue", wed:"Wed", thu:"Thu", fri:"Fri", sat:"Sat", sun:"Sun" };
@@ -4141,6 +4532,41 @@ routes.roster = function (u) {
   weekPicker.addEventListener("input", () => { weekOf = mondayOf(weekPicker.value); draw(); });
   wrap.appendChild(el("label", {}, "Week starting (we snap to Monday)"));
   wrap.appendChild(weekPicker);
+
+  // ── Attendance Opening Times ────────────────────────────────
+  state.branch_opening_times = state.branch_opening_times || {
+    maadi: { morning: "10:00", night: "16:00" },
+    zawya: { morning: "12:00", night: "18:00" },
+  };
+  const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
+  otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
+  otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    "Sign-in stamps are checked against these times. >15 min late = ½ day deduction · >2 h = 1 day · No stamp = 2 days. Deductions show automatically in each barista's salary."));
+  for (const otBranch of ["maadi", "zawya"]) {
+    const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
+    otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
+    for (const otShift of ["morning", "night"]) {
+      const shLabel = otShift[0].toUpperCase() + otShift.slice(1);
+      const currentVal = (state.branch_opening_times[otBranch] || {})[otShift] || "";
+      const otRow = el("div", { class: "kv", style: { alignItems: "center" } });
+      otRow.appendChild(el("div", { class: "k" }, shLabel + " shift start"));
+      if (canEdit) {
+        const otInp = el("input", { type: "time", value: currentVal, style: { maxWidth: "130px" } });
+        otInp.addEventListener("change", () => {
+          if (!state.branch_opening_times[otBranch]) state.branch_opening_times[otBranch] = {};
+          state.branch_opening_times[otBranch][otShift] = otInp.value;
+          saveState();
+          toast(`${brLabel} ${shLabel} opening time updated → ${otInp.value}`);
+        });
+        otRow.appendChild(el("div", { class: "v" }, [otInp]));
+      } else {
+        otRow.appendChild(el("div", { class: "v" }, currentVal || "—"));
+      }
+      otCard.appendChild(otRow);
+    }
+  }
+  wrap.appendChild(otCard);
+  // ────────────────────────────────────────────────────────────
 
   const body = el("div", { class: "stack" });
   wrap.appendChild(body);
@@ -4170,9 +4596,12 @@ routes.roster = function (u) {
     body.innerHTML = "";
     if (canEdit) {
       body.appendChild(el("div", { class: "banner-arch" },
-        "Head barista/owner: assign baristas per day. Each day shows Maadi Morning, Maadi Night, Zawya Morning, Zawya Night. Changes save instantly."));
+        "Assign baristas per shift per day — changes save instantly and take effect immediately. " +
+        "You can update mid-week at any time (sick calls, emergencies). " +
+        "⚠ The morning shift barista is the one responsible for the sign-in stamp. " +
+        "If you swap the morning assignment, the penalty system picks up the new name automatically."));
     } else {
-      body.appendChild(el("div", { class: "banner-arch" }, "Read-only — your weekly schedule. Ask the head barista if anything looks off."));
+      body.appendChild(el("div", { class: "banner-arch" }, "Read-only — your weekly schedule. The morning shift barista is responsible for the daily sign-in stamp. Ask the head barista if anything looks off."));
     }
 
     const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
@@ -4184,16 +4613,16 @@ routes.roster = function (u) {
         .map(l => l.user_id);
     }
 
-    // Week start as a Date (weekOf is a Monday ISO string)
-    const weekStart = new Date(weekOf + "T00:00:00");
+    // Week start as local noon — avoids UTC-offset shifts when we reformat
+    const weekStart = new Date(weekOf + "T12:00:00");
 
     // Group by DAY → then branch+shift (Mon → Maadi Morning / Night, Zawya Morning / Night)
     for (let di = 0; di < ROSTER_DAYS.length; di++) {
       const day = ROSTER_DAYS[di];
-      // Compute the actual calendar date for this roster day
+      // Compute the actual calendar date for this roster day using local time
       const dayDate = new Date(weekStart);
       dayDate.setDate(dayDate.getDate() + di);
-      const dayDateStr = dayDate.toISOString().slice(0, 10);
+      const dayDateStr = localISODate(dayDate); // local, not UTC
       const onLeave = onLeaveIds(dayDateStr);
 
       const card = el("div", { class: "card", style: { marginTop: "10px" } });
@@ -4277,6 +4706,13 @@ routes.roster = function (u) {
     } else {
       summary.appendChild(el("div", { class: "muted small" }, "You have no shifts assigned this week."));
     }
+    // Last-edit note — shows head barista exactly when the schedule was last changed
+    const weekEntries = state.rosters.filter(r => r.week_of === weekOf);
+    if (weekEntries.length) {
+      const lastEdit = weekEntries.slice().sort((a,b) => (b.at||"").localeCompare(a.at||""))[0];
+      summary.appendChild(el("div", { class: "muted small", style: { marginTop: "10px", borderTop: "1px solid var(--border)", paddingTop: "8px" } },
+        `Last schedule update: ${fmtDate(lastEdit.at)} by ${lastEdit.by_name || "—"}`));
+    }
     body.appendChild(summary);
 
     if (canEdit) {
@@ -4288,8 +4724,8 @@ routes.roster = function (u) {
         } }, "🗑 Clear this week"),
         el("button", { class: "btn ghost", onClick: () => {
           // Copy last week's roster to this week
-          const prev = new Date(weekOf); prev.setDate(prev.getDate() - 7);
-          const prevKey = prev.toISOString().slice(0,10);
+          const prev = new Date(weekOf + "T12:00:00"); prev.setDate(prev.getDate() - 7);
+          const prevKey = localISODate(prev);
           const src = state.rosters.filter(r => r.week_of === prevKey);
           if (!src.length) return toast("No schedule found for last week", "error");
           for (const r of src) {
@@ -4745,10 +5181,11 @@ routes.users = function (u) {
   const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
   btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => addUser() }, "➕ Add user"));
   btnRow.appendChild(el("button", { class: "btn ghost", onClick: () => {
-    // Re-run migration — idempotent; adds Khaled/Barista 3 if not already there.
+    // Re-run migration — idempotent; adds any missing default baristas if not already there.
+    // Won't overwrite renamed users — lookup is by ID/PIN, not name.
     migrateState(state);
     saveState();
-    toast("Missing baristas seeded (Khaled, Barista 3)");
+    toast("Missing baristas seeded");
     render();
   } }, "🔄 Seed missing baristas"));
   wrap.appendChild(btnRow);
@@ -5366,11 +5803,11 @@ routes.settings = function (u) {
   ]));
 
   gd.appendChild(el("label", {}, "Cloud Name"));
-  const gdCloud = el("input", { type: "text", value: state.settings.cloudinary_cloud || "", placeholder: "e.g. my-coffee-beats" });
+  const gdCloud = el("input", { type: "text", value: state.settings.cloudinary_cloud || "dbharv4kb", placeholder: "e.g. my-coffee-beats" });
   gd.appendChild(gdCloud);
 
   gd.appendChild(el("label", {}, "Upload Preset (Unsigned)"));
-  const gdPreset = el("input", { type: "text", value: state.settings.cloudinary_preset || "", placeholder: "e.g. coffee_beats_unsigned" });
+  const gdPreset = el("input", { type: "text", value: state.settings.cloudinary_preset || "coffee-beats-ops", placeholder: "e.g. coffee_beats_unsigned" });
   gd.appendChild(gdPreset);
 
   const gdRow = el("div", { class: "btn-row", style: { marginTop: "10px" } });
@@ -5388,14 +5825,21 @@ routes.settings = function (u) {
   gdTestBtn.addEventListener("click", async () => {
     if (!gdCloud.value.trim() || !gdPreset.value.trim()) { toast("Enter Cloud Name and Preset first", "error"); return; }
     gdTestBtn.disabled = true; gdTestBtn.textContent = "Testing…";
-    // Quick test: ping the Cloudinary ping endpoint
+    // Verify by uploading a tiny 1×1 transparent PNG — this is the only reliable
+    // browser-side test since Cloudinary's /ping endpoint blocks cross-origin requests.
     try {
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${gdCloud.value.trim()}/ping`);
+      const tiny = await fetch("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==").then(r => r.blob());
+      const form = new FormData();
+      form.append("file", tiny, "test.png");
+      form.append("upload_preset", gdPreset.value.trim());
+      form.append("folder", "coffee-beats/_test");
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${gdCloud.value.trim()}/image/upload`, { method: "POST", body: form });
       const data = await res.json();
-      if (data.status === "ok") {
-        toast("✓ Cloudinary connected! Photos will sync automatically.");
+      if (data.secure_url) {
+        toast("✓ Cloudinary connected! Cloud name and preset are working.");
       } else {
-        toast("Cloud name not found — check spelling.", "error");
+        const msg = data.error?.message || "Check your Cloud Name and Upload Preset.";
+        toast("Connection failed: " + msg, "error");
       }
     } catch (e) {
       toast("Connection failed: " + e.message, "error");
@@ -5583,11 +6027,72 @@ routes.cleaning_log_new = function (u) {
   dInput.addEventListener("input", () => date = dInput.value);
   wrap.appendChild(dInput);
 
-  const cleaningPhotoField = makePhotoField({ label: "Cleaning checklist photos", required: true, formLabel: "Cleaning Log" });
+  // ── Cleaning checklist ──────────────────────────────────────────────────────
+  const isAR_clean = u.role === "barista" || u.role === "head_barista";
+  const CLEAN_ITEMS_EN_LOC = [
+    "Espresso machine group heads backflushed & flushed with water",
+    "Steam wands purged & wiped with dedicated cloth after every use ✓",
+    "Portafilters scrubbed, rinsed & dried — no coffee residue",
+    "Bar counter cleared, sanitised & free of spills",
+    "Milk fridge wiped down, FIFO labels checked, no expired product",
+    "Drip trays emptied, rinsed & dried",
+    "Grinder hopper, chute & doser brushed — no build-up",
+    "Back bar and syrup shelf cleaned & organised",
+    "Floor swept and wet-mopped in bar area",
+    "Cups, glasses & tools restocked and polished",
+  ];
+  const CLEAN_ITEMS_AR_LOC = [
+    "ظهر الإسبريسو: عمل backflush ثم شطف بالماء",
+    "عصا البخار: تنقية ومسح بقماش مخصص بعد كل استخدام ✓",
+    "الـ portafilters: تنظيف، شطف وتجفيف — لا بقايا قهوة",
+    "كاونتر البار: تفريغ، تعقيم وخلوّه من البقع",
+    "ثلاجة الحليب: مسح، مراجعة تواريخ FIFO، لا منتجات منتهية",
+    "صينية التصريف: تفريغ، شطف وتجفيف",
+    "الطاحونة: فرشاة الحوض والمجرى والدوزر — لا تراكمات",
+    "الجزء الخلفي للبار وخانة الشراب: تنظيف وترتيب",
+    "الأرضية: كنس وتمسيح منطقة البار",
+    "الأكواب والأدوات: إعادة تعبئة وتلميع",
+  ];
+  const cleanItems = isAR_clean ? CLEAN_ITEMS_AR_LOC : CLEAN_ITEMS_EN_LOC;
+  let checkedItems = new Array(cleanItems.length).fill(false);
+
+  const checklistCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+  checklistCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "8px", fontSize: "15px" } },
+    isAR_clean ? "🧹 قائمة مهام النظافة" : "🧹 Cleaning Checklist"));
+  checklistCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    isAR_clean
+      ? "✅ كل بند محقق = نقاط في بطاقة أدائك. إكمال ١٠٠٪ يُحقق شارة 'نظافة مثالية'!"
+      : "✅ Each checked item scores points. 100% earns a Clean Sweep badge!"));
+
+  const scoreDisplay = el("div", { style: { fontWeight: "700", marginBottom: "10px", color: "var(--accent)" } },
+    isAR_clean ? "النقاط: ٠/١٠٠" : "Score: 0/100");
+
+  cleanItems.forEach((item, i) => {
+    const lbl = el("label", { style: {
+      display: "flex", alignItems: "flex-start", gap: "10px",
+      padding: "9px 0", borderBottom: "1px solid var(--border)",
+      fontSize: "13.5px", cursor: "pointer", lineHeight: "1.5",
+      direction: isAR_clean ? "rtl" : "ltr",
+    }});
+    const chk = el("input", { type: "checkbox", style: { width: "18px", height: "18px", marginTop: "2px", flexShrink: "0", accentColor: "var(--accent)" } });
+    chk.addEventListener("change", () => {
+      checkedItems[i] = chk.checked;
+      const pct = Math.round(checkedItems.filter(Boolean).length / cleanItems.length * 100);
+      scoreDisplay.textContent = isAR_clean ? `النقاط: ${pct}/١٠٠` : `Score: ${pct}/100`;
+      scoreDisplay.style.color = pct >= 80 ? "var(--ok)" : pct >= 50 ? "var(--warn)" : "var(--bad)";
+    });
+    lbl.appendChild(chk);
+    lbl.appendChild(el("span", {}, item));
+    checklistCard.appendChild(lbl);
+  });
+  checklistCard.appendChild(scoreDisplay);
+  wrap.appendChild(checklistCard);
+
+  const cleaningPhotoField = makePhotoField({ label: isAR_clean ? "صورة البار بعد التنظيف (مطلوبة)" : "Cleaning photo(s) — bar after cleaning (required)", required: true, formLabel: "Cleaning Log" });
   wrap.appendChild(cleaningPhotoField.el);
 
-  wrap.appendChild(el("label", {}, "Note (optional)"));
-  const noteInput = el("input", { type: "text", placeholder: "e.g. Floor mopped twice, hood filter replaced" });
+  wrap.appendChild(el("label", {}, isAR_clean ? "ملاحظة (اختياري)" : "Note (optional)"));
+  const noteInput = el("input", { type: "text", placeholder: isAR_clean ? "مثال: تم تغيير فلتر الهود، غسيل عميق للإسبريسو" : "e.g. Floor mopped twice, hood filter replaced" });
   noteInput.addEventListener("input", () => note = noteInput.value);
   wrap.appendChild(noteInput);
 
@@ -5596,7 +6101,8 @@ routes.cleaning_log_new = function (u) {
       class: "btn",
       onClick: async () => {
         const photoBlobs = cleaningPhotoField.getBlobs();
-        if (!photoBlobs.length) return toast("Please attach at least one photo", "error");
+        if (!photoBlobs.length) return toast(isAR_clean ? "أرفق صورة واحدة على الأقل" : "Please attach at least one photo", "error");
+        const checklist_score = Math.round(checkedItems.filter(Boolean).length / cleanItems.length * 100);
         const photoNames = photoBlobs.map(f => f.name);
         const s = stamp();
         const photoIds = photoBlobs.map(() => uuid());
@@ -5610,17 +6116,19 @@ routes.cleaning_log_new = function (u) {
           photo_ids: photoIds, photo_names: photoNames,
           drive_ids: cleaningPhotoField.getDriveIds(),
           note: note.trim(),
+          checklist_score,
+          checklist_items: checkedItems.map((v,i) => ({ item: CLEAN_ITEMS_EN_LOC[i], checked: v })),
         });
         saveState();
         showPhotoConfirm({
-          title: "Cleaning log submitted!",
+          title: isAR_clean ? "سجل النظافة تم!" : "Cleaning log submitted!",
           names: photoNames,
           driveIds: cleaningPhotoField.getDriveIds(),
           onDone: () => go("cleaning_log_list"),
         });
       },
-    }, "Submit cleaning log"),
-    el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, "← Back to home"),
+    }, isAR_clean ? "✅ إرسال سجل النظافة" : "Submit cleaning log"),
+    el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, isAR_clean ? "← الرئيسية" : "← Back to home"),
   ]));
   return wrap;
 };
@@ -5701,7 +6209,81 @@ routes.signin_stamp_new = function (u) {
           drive_ids: stampPhotoField.getDriveIds(),
           note: note.trim(),
         });
-        saveState();
+
+        // ── Auto late-penalty from photo upload timestamp ─────
+        (function() {
+          const submitTime = new Date(s.at);
+          const todayStr   = localISODate(submitTime); // local date, not UTC
+          const dayIndex   = (submitTime.getDay() + 6) % 7; // 0=Mon … 6=Sun
+          const dayKey     = ROSTER_DAYS[dayIndex];
+          const weekOf     = mondayOf(todayStr);
+
+          // Sign-in stamp = morning shift only.
+          // Only penalise if this barista is currently assigned to the morning shift
+          // at this branch today — checked live so mid-week swaps take effect immediately.
+          const morningEntry = (state.rosters || []).find(r =>
+            r.week_of === weekOf &&
+            r.branch  === branch.toLowerCase() &&
+            r.day     === dayKey &&
+            r.shift   === "morning" &&
+            r.user_id === u.id
+          );
+          if (!morningEntry) return; // not today's morning barista — no penalty
+
+          // Get morning opening time for this branch from the schedule config
+          const bot      = state.branch_opening_times || {};
+          const openStr  = ((bot[branch.toLowerCase()] || {})["morning"])
+                           || (branch.toLowerCase() === "maadi" ? "10:00" : "12:00");
+          const openingMs = new Date(todayStr + "T" + openStr + ":00").getTime();
+          const minsLate  = Math.round((submitTime.getTime() - openingMs) / 60000);
+
+          if (minsLate <= 15) return; // on time or within grace period
+
+          // Prevent duplicate auto-penalty for same person on same date
+          const already = (state.penalties || []).find(p =>
+            p.auto_late && p.user_id === u.id && p.date === todayStr
+          );
+          if (already) return;
+
+          const kind    = minsLate > 120 ? "full_day" : "half_day";
+          const salary  = Number(((state.salary_config || {})[u.id] || {}).monthly_salary || 0);
+          const amount  = penaltyAmount(kind, salary);
+          const kLabel  = kind === "full_day" ? "Full day" : "Half day";
+
+          state.penalties = state.penalties || [];
+          state.penalties.push({
+            id: uuid(), at: s.at, by: s.by, by_name: s.by_name,
+            user_id: u.id, barista: u.name,
+            kind, reason: "late",
+            date: todayStr,
+            month: todayStr.slice(0, 7),
+            branch,
+            amount,
+            note: `Auto: ${minsLate} min late — ${kLabel} deducted (sign-in stamp)`,
+            auto_late: true,
+          });
+          saveState();
+          toast(`⚠ ${minsLate} min late — ${kLabel} deducted from ${u.name}'s salary`, "warn");
+        })();
+        // ─────────────────────────────────────────────────────
+
+        // ── KPI: auto-score punctuality from this stamp ───────
+        (function() {
+          try {
+            const submitTime = new Date(s.at);
+            const todayStr   = localISODate(submitTime);
+            const bot        = state.branch_opening_times || {};
+            const openStr    = ((bot[branch?.toLowerCase()] || {})["morning"])
+                               || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
+            const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
+            const diffMins    = Math.round((submitTime.getTime() - scheduledMs) / 60000);
+            const pScore      = diffMins <= 0 ? 100 : diffMins <= 5 ? 95 : diffMins <= 15 ? 80 : diffMins <= 30 ? 60 : diffMins <= 60 ? 40 : 20;
+            // Store in kpi_manual for this month as punctuality entry stub
+            // (actual derivation in kpiGetUserScores uses signin_stamps directly)
+          } catch(e) {}
+        })();
+        // ─────────────────────────────────────────────────────
+
         showPhotoConfirm({
           title: "Clock-in recorded!",
           names: photoNames,
@@ -6217,6 +6799,16 @@ routes.handbook = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Barista Handbook", "Recipes & drink preparation guide."));
 
+  // ── Handbook v4 download banner ──
+  const dlBanner = el("div", { style: { display:"flex", alignItems:"center", justifyContent:"space-between", background:"var(--surface-2)", border:"1px solid var(--border)", borderRadius:"10px", padding:"12px 16px", marginBottom:"14px", gap:"12px" } });
+  dlBanner.appendChild(el("div", {}, [
+    el("div", { style:{ fontWeight:"700", fontSize:"13px", color:"var(--ink)" } }, "📄 Barista Training Handbook — v4"),
+    el("div", { style:{ fontSize:"11px", color:"var(--ink-dim)", marginTop:"3px" } }, "Official recipe & standards guide · download to read offline"),
+  ]));
+  const dlBtn = el("a", { href:"Coffee_Beats_Barista_Training_Handbook_v4.docx", download:"Coffee_Beats_Barista_Training_Handbook_v4.docx", class:"btn", style:{ width:"auto", padding:"8px 16px", fontSize:"13px", textDecoration:"none", flexShrink:"0" } }, "⬇ Download");
+  dlBanner.appendChild(dlBtn);
+  wrap.appendChild(dlBanner);
+
   // ── Category filter tabs ──
   let activeCategory = "all";
   const tabBar = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "14px" } });
@@ -6446,6 +7038,164 @@ routes.handbook = function (u) {
 // ==============================================================
 // PHOTO GALLERY (Cloudinary)
 // ==============================================================
+// ==============================================================
+// ASSETS — upload and store files/documents with title & notes
+// ==============================================================
+routes.assets_new = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Upload Asset", "Store a file or document with a title and note."));
+
+  let pendingUrl = "";
+  let title = "";
+  let note = "";
+  let folder = "assets";
+
+  const card = el("div", { class: "card" });
+
+  // Title input
+  card.appendChild(el("label", {}, "Title *"));
+  const titleIn = el("input", { type: "text", placeholder: "e.g. Lease agreement, Equipment manual…" });
+  titleIn.addEventListener("input", () => { title = titleIn.value.trim(); });
+  card.appendChild(titleIn);
+
+  // Note input
+  card.appendChild(el("label", { style: { marginTop: "10px" } }, "Note (optional)"));
+  const noteIn = el("input", { type: "text", placeholder: "Any additional context…" });
+  noteIn.addEventListener("input", () => { note = noteIn.value.trim(); });
+  card.appendChild(noteIn);
+
+  // Photo/file upload using existing makePhotoField
+  const assetPhotoField = makePhotoField({ label: "File / Photo *", required: true, multiple: false, formLabel: "Asset Upload" });
+  card.appendChild(assetPhotoField.el);
+
+  // Submit
+  const submitBtn = el("button", { class: "btn", style: { marginTop: "14px" } }, "Save Asset");
+  submitBtn.addEventListener("click", () => {
+    const urls = assetPhotoField.getCloudUrls().filter(Boolean);
+    if (!title) { toast("Enter a title first", "error"); return; }
+    if (!urls.length) { toast("Upload a file first", "error"); return; }
+    const s = stamp();
+    state.assets = state.assets || [];
+    state.assets.unshift({
+      id: uuid(),
+      at: s.at,
+      by: s.by,
+      by_name: s.by_name,
+      title,
+      note,
+      url: urls[0],
+      folder: "assets",
+      image_url: urls[0],
+    });
+    saveState();
+    toast("Asset saved ✓");
+    go("assets_list");
+  });
+  card.appendChild(submitBtn);
+  wrap.appendChild(card);
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+routes.assets_list = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Assets", "Uploaded files and documents."));
+
+  const addBtn = el("div", { class: "fab-row", style: { marginBottom: "12px" } }, [
+    el("button", { class: "btn", onClick: () => go("assets_new") }, "+ Upload Asset"),
+  ]);
+  wrap.appendChild(addBtn);
+
+  state.assets = state.assets || [];
+  const list = state.assets.slice().sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+
+  if (!list.length) {
+    wrap.appendChild(el("div", { class: "card", style: { textAlign: "center", padding: "30px 14px" } }, [
+      el("div", { style: { fontSize: "40px", marginBottom: "10px" } }, "📁"),
+      el("div", { style: { fontWeight: "600", marginBottom: "6px" } }, "No assets yet"),
+      el("div", { class: "muted small" }, "Upload files, documents or photos using the button above."),
+    ]));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  const listEl = el("div", { class: "list" });
+  for (const asset of list) {
+    const isImage = asset.url && /\.(jpg|jpeg|png|gif|webp|heic)/i.test(asset.url.split("?")[0]);
+    const rowTag = asset.url ? "a" : "div";
+    const rowAttrs = {
+      style: {
+        display: "flex", alignItems: "center", gap: "12px",
+        padding: "12px", background: "var(--surface)",
+        border: "1px solid var(--border)", borderRadius: "12px",
+        textDecoration: "none", color: "var(--ink)", cursor: asset.url ? "pointer" : "default",
+        marginBottom: "8px",
+      },
+    };
+    if (asset.url) { rowAttrs.href = asset.url; rowAttrs.target = "_blank"; rowAttrs.rel = "noopener"; }
+    const row = el(rowTag, rowAttrs);
+
+    // Thumbnail
+    const thumb = el("div", {
+      style: {
+        flexShrink: "0", width: "56px", height: "56px", borderRadius: "8px",
+        overflow: "hidden", background: "var(--surface-2)", border: "1px solid var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px",
+      },
+    });
+    if (asset.url && isImage) {
+      const thumbUrl = asset.url.replace("/upload/", "/upload/w_112,h_112,c_fill/");
+      thumb.appendChild(el("img", {
+        src: thumbUrl, loading: "lazy",
+        style: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
+      }));
+    } else {
+      thumb.textContent = asset.url ? "📄" : "📁";
+    }
+    row.appendChild(thumb);
+
+    // Info
+    const info = el("div", { style: { flex: "1", minWidth: "0" } });
+    info.appendChild(el("div", {
+      style: { fontWeight: "600", fontSize: "14px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    }, asset.title || "Untitled"));
+    if (asset.note) {
+      info.appendChild(el("div", { class: "muted small", style: { marginTop: "3px" } }, asset.note));
+    }
+    info.appendChild(el("div", { class: "muted small", style: { marginTop: "3px" } },
+      `${asset.by_name || "Unknown"} · ${fmtDate(asset.at)}`));
+    if (asset.url) {
+      info.appendChild(el("div", { style: { fontSize: "11px", color: "var(--accent)", marginTop: "4px", fontWeight: "600" } }, "Open ↗"));
+    }
+    row.appendChild(info);
+
+    // Delete button (owner only)
+    if (u.role === "owner") {
+      const del = el("button", {
+        style: {
+          flexShrink: "0", background: "none", border: "none", fontSize: "18px",
+          cursor: "pointer", color: "var(--bad)", padding: "4px 8px",
+        },
+      }, "🗑");
+      del.addEventListener("click", e => {
+        e.preventDefault(); e.stopPropagation();
+        if (confirm(`Delete "${asset.title}"?`)) {
+          state.assets = (state.assets || []).filter(a => a.id !== asset.id);
+          saveState();
+          render();
+        }
+      });
+      row.appendChild(del);
+    }
+
+    listEl.appendChild(row);
+  }
+
+  wrap.appendChild(listEl);
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
 routes.photo_gallery = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Photo Gallery", "All photos uploaded from this app — sorted by date."));
@@ -6547,6 +7297,26 @@ routes.photo_gallery = function (u) {
       }
       row.appendChild(info);
 
+      // Delete button — owner only
+      if (u.role === "owner") {
+        const delBtn = el("button", {
+          style: {
+            flexShrink: "0", background: "none", border: "none", cursor: "pointer",
+            color: "var(--bad)", fontSize: "18px", padding: "8px", lineHeight: "1",
+          },
+          title: "Delete photo",
+          onClick: (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!confirm(`Delete "${ph.name || "this photo"}"? This only removes it from the log — the file on Cloudinary is unaffected.`)) return;
+            state.photo_log = (state.photo_log || []).filter(p => p !== ph);
+            saveState();
+            toast("Photo removed from log");
+            go("photo_gallery");
+          },
+        }, "🗑️");
+        row.appendChild(delBtn);
+      }
+
       listEl.appendChild(row);
     }
   }
@@ -6570,7 +7340,7 @@ routes.photo_gallery = function (u) {
 function makePhotoField({ label = "Photo(s)", required = false, multiple = true, formLabel = "" } = {}) {
   const container = el("div", { style: { marginTop: "12px" } });
   const labelEl = el("div", { style: { fontWeight: "600", fontSize: "14px", color: "var(--ink-dim)", marginBottom: "8px" } },
-    label + (required ? " *" : " (optional)"));
+    label + (required === true ? " *" : required === false ? " (optional)" : ""));
   container.appendChild(labelEl);
 
   // Drop zone
@@ -6594,7 +7364,15 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
     if (!Cloudinary.isConfigured()) return;
     statusBar.className = "ph-status uploading";
     try {
-      const filename = `${formLabel ? formLabel.replace(/\s+/g,"_") + "_" : ""}${Date.now()}_${file.name}`;
+      // Build filename: April28_CleaningLog_Seif
+      const _now = new Date();
+      const _months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      const _dateStamp = _months[_now.getMonth()] + _now.getDate();
+      const _uploader = (typeof currentUser === "function" && currentUser()?.name)
+        ? currentUser().name.split(" ")[0]
+        : "Unknown";
+      const _label = formLabel ? formLabel.replace(/\s+/g,"") : "Upload";
+      const filename = `${_dateStamp}_${_label}_${_uploader}`;
       const data = await Cloudinary.uploadPhoto(file, filename);
       cloudUrls[idx] = data.secure_url;
       // Log to state for gallery
@@ -6609,8 +7387,8 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
         });
         // Keep log manageable (latest 500)
         if (state.photo_log.length > 500) state.photo_log.length = 500;
-        // Persist silently
-        try { localStorage.setItem("cb_ops_state", JSON.stringify(state)); } catch (e) {}
+        // Persist and sync to Sheets
+        saveState();
       }
       statusBar.className = "ph-status done";
       badge.style.display = "block";
@@ -6766,6 +7544,1371 @@ function openPrompt({ title, fields, onSubmit, extraButtons }) {
 }
 
 // ==============================================================
+// APP GUIDE — Bilingual barista operations handbook (EN + AR)
+// ==============================================================
+routes.app_guide = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("App Guide", "How to use the Coffee Beats Operations app."));
+
+  // ── Language toggle ──
+  let lang = "en";
+  const langRow = el("div", { style: { display: "flex", gap: "8px", marginBottom: "18px" } });
+  const btnEn = el("button", { class: "btn", style: { flex: "1", background: "var(--ink)", color: "var(--accent)" } }, "🇬🇧 English");
+  const btnAr = el("button", { class: "btn secondary", style: { flex: "1" } }, "🇪🇬 العربية");
+  langRow.appendChild(btnEn);
+  langRow.appendChild(btnAr);
+  wrap.appendChild(langRow);
+
+  const guideBody = el("div", {});
+  wrap.appendChild(guideBody);
+
+  // ── Content definition ──
+  const sections = [
+    {
+      icon: "🔑",
+      en_title: "Signing In",
+      ar_title: "تسجيل الدخول",
+      en_steps: [
+        "Open <strong>ops.coffeebeats.art</strong> in your phone's browser.",
+        "The app will ask for the <strong>team code</strong> the first time — enter it once and you're set.",
+        "You'll see the staff list. Tap your name.",
+        "Enter your <strong>4-digit PIN</strong>. If you forgot it, ask the head barista or owner.",
+        "You are now signed in. The app will remember you until the shift ends (auto-logout after 8 hours).",
+      ],
+      ar_steps: [
+        "افتح <strong>ops.coffeebeats.art</strong> في متصفح هاتفك.",
+        "في أول مرة، سيطلب منك التطبيق <strong>كود الفريق</strong> — أدخله مرة واحدة وانتهى.",
+        "ستظهر لك قائمة الموظفين. اضغط على اسمك.",
+        "أدخل <strong>الـ PIN المكون من 4 أرقام</strong>. لو نسيت الكود، اسأل رئيس البريستا أو المالك.",
+        "أنت الآن مسجّل الدخول. التطبيق يتذكرك حتى نهاية الشيفت (تسجيل خروج تلقائي بعد 8 ساعات).",
+      ],
+    },
+    {
+      icon: "🕐",
+      en_title: "Sign-In Stamp (Clock In)",
+      ar_title: "بصمة الحضور (الوصول)",
+      en_steps: [
+        "Tap <strong>Sign-In Stamp</strong> from the home screen <em>as soon as you arrive</em>.",
+        "Select your branch: <strong>Maadi</strong> or <strong>Zawya</strong>.",
+        "Take a <strong>selfie or photo</strong> — this is your proof of arrival. Make sure it's clear.",
+        "Tap <strong>Submit clock-in</strong>.",
+        "<strong>⚠ Important:</strong> Maadi morning shift — arrive by <strong>10:00</strong>. After 10:15 = half-day deduction. After 12:00 = full-day deduction. Zawya — arrive by <strong>12:00</strong>. After 12:15 = half-day. After 14:00 = full-day. These deductions are automatic.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
+        "اختر الفرع: <strong>المعادي</strong> أو <strong>زاوية</strong>.",
+        "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك. تأكد أنها واضحة.",
+        "اضغط <strong>تسجيل الحضور</strong>.",
+        "<strong>⚠ مهم:</strong> شيفت الصباح بالمعادي — الوصول قبل <strong>10:00</strong>. بعد 10:15 = خصم نصف يوم. بعد 12:00 = خصم يوم كامل. زاوية — الوصول قبل <strong>12:00</strong>. بعد 12:15 = نصف يوم. بعد 14:00 = يوم كامل. الخصومات تتم تلقائيًا.",
+      ],
+    },
+    {
+      icon: "🗑️",
+      en_title: "Record Waste",
+      ar_title: "تسجيل الهدر",
+      en_steps: [
+        "Tap <strong>Record Waste</strong> — do this <em>every time</em> something is wasted during your shift.",
+        "Select your <strong>branch</strong>.",
+        "Search for the item (e.g. milk, espresso, syrup) and select it.",
+        "Enter the <strong>quantity wasted</strong> and the <strong>unit</strong> (ml, g, or unit).",
+        "Select a <strong>reason</strong>: Spilled, Expired, Returned by customer, Staff drink (comp), Quality issue, Training/calibration, or Other.",
+        "You can take a photo as proof — optional but recommended.",
+        "Tap <strong>Save waste entry</strong>. The inventory is updated automatically.",
+        "⚠ Do NOT skip waste recording. All waste must be logged — even small amounts.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>تسجيل الهدر</strong> — افعل هذا <em>في كل مرة</em> يُهدر فيها شيء خلال الشيفت.",
+        "اختر <strong>الفرع</strong>.",
+        "ابحث عن العنصر (مثلاً: حليب، إسبريسو، شراب) واختره.",
+        "أدخل <strong>الكمية المهدرة</strong> و<strong>الوحدة</strong> (مل، جرام، أو وحدة).",
+        "اختر <strong>السبب</strong>: انسكاب، انتهاء صلاحية، إرجاع من عميل، مشروب الموظف، مشكلة جودة، تدريب/معايرة، أو أخرى.",
+        "يمكنك التقاط صورة كدليل — اختياري لكن مُستحسن.",
+        "اضغط <strong>حفظ</strong>. يتم تحديث المخزون تلقائيًا.",
+        "⚠ لا تتجاهل تسجيل الهدر. يجب تسجيل كل الهدر — حتى الكميات الصغيرة.",
+      ],
+    },
+    {
+      icon: "🔒",
+      en_title: "Shift Close",
+      ar_title: "إغلاق الشيفت",
+      en_steps: [
+        "At the end of your shift, tap <strong>Shift Close</strong>.",
+        "Select your <strong>branch</strong>.",
+        "Fill in the <strong>closing cash</strong> (the money in the till at close).",
+        "Record any <strong>management drinks</strong> given out (manager/owner comps).",
+        "Add any notes about the shift — unusual events, issues, or handover info.",
+        "Tap <strong>Save shift close</strong>.",
+        "⚠ The shift close must be done before you leave — never skip it.",
+      ],
+      ar_steps: [
+        "في نهاية شيفتك، اضغط على <strong>إغلاق الشيفت</strong>.",
+        "اختر <strong>الفرع</strong>.",
+        "أدخل <strong>الكاش الختامي</strong> (المبلغ في الكاشير عند الإغلاق).",
+        "سجّل أي <strong>مشروبات إدارة</strong> تم توزيعها (مشروبات مجانية للمدير/المالك).",
+        "أضف أي ملاحظات عن الشيفت — أحداث غير عادية أو مشاكل أو معلومات للتسليم.",
+        "اضغط <strong>حفظ</strong>.",
+        "⚠ يجب إتمام إغلاق الشيفت قبل مغادرتك — لا تتجاوزه أبدًا.",
+      ],
+    },
+    {
+      icon: "🧹",
+      en_title: "Cleaning Log",
+      ar_title: "سجل النظافة",
+      en_steps: [
+        "Tap <strong>Cleaning Log</strong>.",
+        "Select your <strong>branch</strong>.",
+        "Take a <strong>photo of the cleaned area</strong> (bar, counter, machine, etc.).",
+        "Add a note describing what was cleaned.",
+        "Tap <strong>Submit</strong>.",
+        "Cleaning logs are reviewed by the owner — keep them accurate and honest.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>سجل النظافة</strong>.",
+        "اختر <strong>الفرع</strong>.",
+        "التقط <strong>صورة للمنطقة التي تم تنظيفها</strong> (البار، الكاونتر، الماكينة، إلخ).",
+        "أضف ملاحظة تصف ما تم تنظيفه.",
+        "اضغط <strong>إرسال</strong>.",
+        "يراجع المالك سجلات النظافة — كن دقيقاً وصادقاً.",
+      ],
+    },
+    {
+      icon: "📅",
+      en_title: "Weekly Schedule",
+      ar_title: "الجدول الأسبوعي",
+      en_steps: [
+        "Tap <strong>Weekly Schedule</strong> to see your shifts for the week.",
+        "The schedule shows Maadi and Zawya shifts side by side, day by day.",
+        "You can see who's working the morning and night shifts each day.",
+        "If you see an error in your schedule, contact the head barista or owner.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>الجدول الأسبوعي</strong> لمعرفة شيفتاتك خلال الأسبوع.",
+        "الجدول يُظهر شيفتات المعادي وزاوية جنباً إلى جنب، يوماً بيوم.",
+        "يمكنك رؤية من يعمل في الشيفت الصباحي والليلي كل يوم.",
+        "إذا لاحظت خطأ في جدولك، تواصل مع رئيس البريستا أو المالك.",
+      ],
+    },
+    {
+      icon: "📖",
+      en_title: "Barista Handbook (Recipes)",
+      ar_title: "دليل البريستا (الوصفات)",
+      en_steps: [
+        "Tap <strong>Barista Handbook</strong> to access the drink recipes guide.",
+        "Use the <strong>category tabs</strong> (Iced Coffee, Hot, etc.) to filter drinks.",
+        "Use the <strong>search bar</strong> to find a specific recipe quickly.",
+        "Each recipe card shows <strong>Ingredients</strong> and <strong>Step-by-step preparation</strong>.",
+        "Head baristas and owners can add or edit recipes.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>دليل البريستا</strong> للوصول إلى وصفات المشروبات.",
+        "استخدم <strong>تبويبات الفئات</strong> (قهوة باردة، ساخنة، إلخ) للفرز.",
+        "استخدم <strong>شريط البحث</strong> للعثور على وصفة محددة بسرعة.",
+        "كل بطاقة وصفة تعرض <strong>المكونات</strong> و<strong>خطوات التحضير</strong>.",
+        "رؤساء البريستا والملاك يمكنهم إضافة وصفات أو تعديلها.",
+      ],
+    },
+    {
+      icon: "🌴",
+      en_title: "Request Leave",
+      ar_title: "طلب إجازة",
+      en_steps: [
+        "Tap <strong>Request Leave</strong>.",
+        "Select the type: <strong>Annual Leave</strong> or <strong>Sick Leave</strong>.",
+        "Choose the <strong>start date</strong> and <strong>end date</strong>.",
+        "Write a short <strong>reason</strong>.",
+        "Tap <strong>Submit</strong> — an email is sent automatically to the head barista for approval.",
+        "You can track your request status in <strong>My Leaves</strong>.",
+        "⚠ Leave is not confirmed until you receive approval.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>طلب إجازة</strong>.",
+        "اختر النوع: <strong>إجازة سنوية</strong> أو <strong>إجازة مرضية</strong>.",
+        "اختر <strong>تاريخ البدء</strong> و<strong>تاريخ الانتهاء</strong>.",
+        "اكتب <strong>سبباً</strong> مختصراً.",
+        "اضغط <strong>إرسال</strong> — يُرسل بريد إلكتروني تلقائياً لرئيس البريستا للموافقة.",
+        "يمكنك متابعة حالة طلبك في <strong>إجازاتي</strong>.",
+        "⚠ الإجازة غير مؤكدة حتى تحصل على موافقة.",
+      ],
+    },
+
+
+
+    {
+      icon: "⚠️",
+      en_title: "Key Rules — Must Follow",
+      ar_title: "قواعد أساسية — يجب الالتزام بها",
+      en_steps: [
+        "<strong>🕐 Sign-In Stamp</strong>: Always stamp in the moment you arrive. Never stamp for someone else.",
+        "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small.",
+        "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
+        "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
+        "<strong>🔐 PIN</strong>: Never share your PIN with anyone. Each person logs in with their own PIN only.",
+      ],
+      ar_steps: [
+        "<strong>🕐 بصمة الحضور</strong>: دائماً قم بالبصمة فور وصولك. لا تبصّم لأحد آخر.",
+        "<strong>🗑️ سجل الهدر</strong>: سجّل كل هدر خلال شيفتك — بغض النظر عن الكمية.",
+        "<strong>🔒 إغلاق الشيفت</strong>: أكمل إغلاق الشيفت دائماً قبل المغادرة. لا تتجاوزه أبداً.",
+        "<strong>🧹 سجل النظافة</strong>: سجّل النظافة بصورة في كل شيفت.",
+        "<strong>🔐 الـ PIN</strong>: لا تشارك الـ PIN مع أحد. كل شخص يسجّل الدخول بـ PIN خاص به فقط.",
+      ],
+    },
+  ];
+
+  function renderGuide() {
+    guideBody.innerHTML = "";
+
+    // Intro card
+    const intro = el("div", { class: "card", style: { marginBottom: "14px", background: "var(--ink)", color: "var(--accent-2)" } });
+    intro.appendChild(el("div", { style: { fontSize: "28px", marginBottom: "8px", textAlign: "center" } }, "☕"));
+    intro.appendChild(el("div", { style: { fontWeight: "700", fontSize: "16px", marginBottom: "6px", textAlign: "center" } },
+      lang === "en" ? "Coffee Beats Operations App" : "تطبيق عمليات Coffee Beats"));
+    intro.appendChild(el("div", { style: { fontSize: "13px", textAlign: "center", opacity: "0.85" } },
+      lang === "en"
+        ? "This guide explains how to use every feature. Read it once, keep it as a reference."
+        : "هذا الدليل يشرح كيفية استخدام كل ميزة. اقرأه مرة واحدة واحتفظ به كمرجع."));
+    guideBody.appendChild(intro);
+
+    sections.forEach(sec => {
+      const card = el("div", { class: "card", style: { marginBottom: "12px" } });
+
+      // Section header
+      const hd = el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" } });
+      hd.appendChild(el("span", { style: { fontSize: "24px" } }, sec.icon));
+      hd.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px" } },
+        lang === "en" ? sec.en_title : sec.ar_title));
+      card.appendChild(hd);
+
+      // Steps
+      const steps = lang === "en" ? sec.en_steps : sec.ar_steps;
+      const ol = el("ol", { style: {
+        margin: "0", paddingInlineStart: "20px",
+        direction: lang === "ar" ? "rtl" : "ltr",
+        textAlign: lang === "ar" ? "right" : "left",
+        fontSize: "13.5px", lineHeight: "1.7", color: "var(--ink)"
+      }});
+      steps.forEach(step => {
+        const li = el("li", { style: { marginBottom: "7px" } });
+        li.innerHTML = step; // safe — we control the content
+        ol.appendChild(li);
+      });
+      card.appendChild(ol);
+      guideBody.appendChild(card);
+    });
+
+    guideBody.appendChild(el("div", { class: "card", style: { textAlign: "center", marginTop: "6px", background: "var(--surface-2)", border: "1px dashed var(--border)" } }, [
+      el("div", { style: { fontSize: "20px", marginBottom: "4px" } }, "💬"),
+      el("div", { style: { fontSize: "13px", color: "var(--ink-dim)" } },
+        lang === "en"
+          ? "Questions? Contact the head barista or owner. The app syncs to all devices in real time."
+          : "أسئلة؟ تواصل مع رئيس البريستا أو المالك. التطبيق يُزامن مع كل الأجهزة في الوقت الفعلي."),
+    ]));
+  }
+
+  // Language button handlers
+  btnEn.addEventListener("click", () => {
+    lang = "en";
+    btnEn.style.background = "var(--ink)"; btnEn.style.color = "var(--accent)";
+    btnAr.style.background = "var(--surface-2)"; btnAr.style.color = "var(--ink)";
+    renderGuide();
+  });
+  btnAr.addEventListener("click", () => {
+    lang = "ar";
+    btnAr.style.background = "var(--ink)"; btnAr.style.color = "var(--accent)";
+    btnEn.style.background = "var(--surface-2)"; btnEn.style.color = "var(--ink)";
+    renderGuide();
+  });
+
+  renderGuide();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+
+// ==============================================================
+
+// ==============================================================
+// KPI SCORECARD SYSTEM
+// ==============================================================
+
+// ─── Shared helpers ──────────────────────────────────────────────────────────
+const KPI_W = () => state.kpi_settings.weights;
+function save() { saveState(); }  // KPI module alias
+const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", training:"Training" };
+const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", training:"التدريب والتطور" };
+const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", training:"🌱" };
+const CLEAN_AR = [
+  "تنظيف رأس الإسبريسو وشطف الماكينة",
+  "مسح عصا البخار وتنقيتها بعد كل استخدام ✓",
+  "تنظيف الـ portafilters وتجفيفها",
+  "تنظيف كاونتر البار ومسحه",
+  "تنظيم ثلاجة الحليب بنظام FIFO",
+  "تفريغ وتنظيف صينية التصريف",
+  "تنظيف الطاحونة وفرشاة الحبوب",
+  "تنظيم وتعقيم الجزء الخلفي للبار",
+  "كنس الأرضية / مسحها بالماء",
+  "إعادة تعبئة الأكواب وتلميعها",
+];
+const CLEAN_EN = [
+  "Espresso machine group heads cleaned & flushed",
+  "Steam wands wiped & purged after every use ✓",
+  "Portafilters cleaned & dried",
+  "Bar counter cleared and wiped down",
+  "Milk fridge organized with FIFO dates",
+  "Drip tray emptied and cleaned",
+  "Grinder doser and burrs brushed",
+  "Back bar organized and sanitized",
+  "Floor swept / wet mopped",
+  "Cups and glasses restocked and polished",
+];
+
+function kpiCalcTotal(scores) {
+  const w = KPI_W();
+  return Object.keys(w).reduce((sum, k) => sum + ((scores||{})[k]||0) * w[k] / 100, 0);
+}
+function kpiScoreColor(n) { return n>=85?"var(--ok)":n>=65?"var(--warn)":"var(--bad)"; }
+function kpiGrade(n, isHead) {
+  const t = isHead?85:75;
+  if (n>=90) return "🥇 ذهبي";
+  if (n>=80) return "🥈 فضي";
+  if (n>=70) return "🥉 برونزي";
+  if (n>=t)  return "✅ ضمن الهدف";
+  return "📈 في تطور";
+}
+function kpiGradeEn(n) {
+  if (n>=90) return "🥇 Gold";
+  if (n>=80) return "🥈 Silver";
+  if (n>=70) return "🥉 Bronze";
+  return "📈 Rising";
+}
+
+// ─── Auto-score helpers ────────────────────────────────────────────────────
+function kpiLocalDateStr(ts) {
+  // Returns YYYY-MM-DD in local timezone from a timestamp or ISO string
+  const d = new Date(ts);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function kpiPunctualityScore(userId, cutoff) {
+  const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
+  if (!stamps.length) return null;
+  const scores = stamps.map(s => {
+    try {
+      const submitTime  = new Date(s.at);
+      const todayStr    = kpiLocalDateStr(submitTime);
+      const branch      = (s.branch || "maadi").toLowerCase();
+      const bot         = state.branch_opening_times || {};
+      const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+      const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
+      const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
+      return diff <= 0 ? 100 : diff <= 5 ? 95 : diff <= 15 ? 80 : diff <= 30 ? 60 : diff <= 60 ? 40 : 20;
+    } catch(e) { return 70; }
+  });
+  return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+}
+function kpiWasteScore(userId, cutoff) {
+  const entries = (state.waste||[]).filter(w => w.by === userId && new Date(w.at).getTime() >= cutoff);
+  if (!entries.length) return null;
+  // Group by calendar day
+  const byDay = {};
+  entries.forEach(w => {
+    const d = kpiLocalDateStr(new Date(w.at));
+    if (!byDay[d]) byDay[d] = [];
+    byDay[d].push(w);
+  });
+  const dayScores = Object.values(byDay).map(items => {
+    if (items.every(i => i.item_name === "— No waste —")) return 100;
+    let score = 100;
+    items.filter(w => w.item_name !== "— No waste —").forEach(w => {
+      const name = (w.item_name||"").toLowerCase();
+      const qty  = w.qty_canonical || 0;
+      const reason = (w.reason||"").toLowerCase();
+      const isCal = reason.includes("training") || reason.includes("calibr");
+      if (name.includes("espresso")||name.includes("shot")||name.includes("coffee")||name.includes("bean")) {
+        score -= isCal ? qty*2 : qty*6;           // 6 pts per shot (SCA: ≤3 shots/shift target)
+      } else if (name.includes("milk")||name.includes("oat")||name.includes("almond")||name.includes("soy")||name.includes("cream")) {
+        const ml = (w.unit==="L"||(w.unit||"").toLowerCase()==="litre") ? qty*1000 : qty;
+        score -= isCal ? Math.floor(ml/200)*3 : Math.floor(ml/100)*5; // 5 pts per 100ml (SCA: ≤100ml/shift)
+      } else {
+        score -= isCal ? qty*1 : qty*3;
+      }
+    });
+    return Math.max(Math.round(score), 10);
+  });
+  return Math.round(dayScores.reduce((a,b)=>a+b,0)/dayScores.length);
+}
+function kpiCleanlinessScore(userId, cutoff) {
+  const logs = (state.cleaning_logs||[]).filter(l => l.by === userId && new Date(l.at).getTime() >= cutoff);
+  if (!logs.length) return null;
+  const scores = logs.map(l => l.checklist_score != null ? l.checklist_score : 65); // legacy logs without checklist get 65
+  return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+}
+function kpiCustomerScore(userId) {
+  const user     = (state.users||[]).find(u => u.id === userId);
+  const userName = (user?.name || "").toLowerCase().trim();
+  const cutoff   = Date.now() - 30*24*60*60*1000; // rolling 30 days, same as other KPI categories
+
+  const feedbacks = (state.customer_feedback||[]).filter(f => {
+    // Match by user_id / barista_id (internal) OR by barista_name string (from coffeebeats.art)
+    const byId   = f.user_id === userId || f.barista_id === userId;
+    const bName  = (f.barista_name || "").toLowerCase().trim();
+    const byName = userName && bName && (bName === userName || bName.startsWith(userName) || userName.startsWith(bName));
+    const inWindow = (f.at ? new Date(f.at).getTime() : 0) >= cutoff;
+    return (byId || byName) && inWindow;
+  });
+
+  if (!feedbacks.length) return null;
+  const avg = feedbacks.reduce((s,f) => s + (f.rating||0), 0) / feedbacks.length;
+  return Math.round(avg * 20); // convert 0–5 stars to 0–100
+}
+
+// Pull the latest state from the sync URL to refresh customer_feedback without a full reload
+async function kpiFetchFeedback() {
+  const url    = state.settings?.sync_url;
+  const secret = state.settings?.sync_secret;
+  if (!url || !secret) return toast("Sync URL not configured — go to Settings → Sync to set it up.", "error");
+  try {
+    const res  = await fetch(url + "?action=pull&secret=" + encodeURIComponent(secret));
+    const data = await res.json();
+    if (!data.ok) return toast("Sync error: " + (data.err||"unknown"), "error");
+    if (Array.isArray(data.state?.customer_feedback)) {
+      state.customer_feedback = data.state.customer_feedback;
+      saveState();
+      toast("✅ Customer feedback refreshed — " + data.state.customer_feedback.length + " entries loaded.");
+      render(); // re-render to update scores
+    } else {
+      toast("No feedback data in sync yet.");
+    }
+  } catch(e) {
+    toast("Fetch failed: " + e.message, "error");
+  }
+}
+
+function kpiGetUserScores(userId) {
+  const cutoff = Date.now() - 30*24*60*60*1000;
+  const month  = new Date().toISOString().slice(0,7);
+
+  // ── AUTO from source tiles ──────────────────────────────────────────────
+  const punctuality  = kpiPunctualityScore(userId, cutoff);
+  const waste        = kpiWasteScore(userId, cutoff);
+  const cleanliness  = kpiCleanlinessScore(userId, cutoff);
+  const customer     = kpiCustomerScore(userId);
+
+  // ── MANUAL: entered monthly by owner / head barista in scorecard ─────────
+  const manual = ((state.kpi_manual||[]).find(m => m.user_id===userId && m.month===month)) || {};
+
+  const agg = {
+    punctuality,
+    waste,
+    cleanliness,
+    craft:     manual.craft     ?? null,
+    upselling: manual.upselling ?? null,
+    customer:  customer ?? (manual.customer ?? null),
+    teamwork:  manual.teamwork  ?? null,
+    training:  manual.training  ?? null,
+  };
+
+  const cats = Object.keys(KPI_W());
+  if (!cats.some(k=>agg[k]!=null)) return null;
+  return agg;
+}
+
+function kpiGetAllScores() {
+  const result = {};
+  for (const u of state.users) {
+    if (!["barista","head_barista"].includes(u.role)) continue;
+    const s = kpiGetUserScores(u.id);
+    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,training:null };
+  }
+  return result;
+}
+
+// ─── OWNER/HEAD BARISTA: Full team scorecard dashboard (English) ──────────────
+routes.scorecard = function(u) {
+  const wrap = el("div",{});
+  wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},"🏆 KPI Scorecards"));
+  wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"10px"}},"Team performance · last 30 days · auto-calculated from self-reports"));
+
+  // ── Customer feedback sync button ─────────────────────────────────────────
+  const fbCount = (state.customer_feedback||[]).length;
+  const fbBar = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"14px",flexWrap:"wrap"}});
+  fbBar.appendChild(el("div",{class:"muted small",style:{flex:"1"}},
+    fbCount
+      ? "😊 " + fbCount + " customer feedback entr" + (fbCount===1?"y":"ies") + " in sync — Customer Score is live"
+      : "😊 No customer feedback synced yet — ratings from coffeebeats.art will appear here after setup"
+  ));
+  const fbBtn = el("button",{class:"btn ghost",style:{fontSize:"12px",padding:"5px 12px"},
+    onClick: async () => { fbBtn.textContent="Fetching…"; fbBtn.disabled=true; await kpiFetchFeedback(); fbBtn.textContent="🔄 Sync feedback"; fbBtn.disabled=false; }
+  },"🔄 Sync feedback");
+  fbBar.appendChild(fbBtn);
+  wrap.appendChild(fbBar);
+
+  const allU = state.users.filter(x=>["barista","head_barista"].includes(x.role)&&x.active);
+  const allScores = kpiGetAllScores();
+  const cats = Object.keys(KPI_W());
+  const hasSomeData = allU.some(x => {
+    const s = allScores[x.id];
+    return s && cats.some(k=>s[k]!=null);
+  });
+
+  if (!hasSomeData) {
+    const empty = el("div",{class:"card",style:{textAlign:"center",padding:"32px"}});
+    empty.appendChild(el("div",{style:{fontSize:"36px",marginBottom:"8px"}},"📊"));
+    empty.appendChild(el("div",{style:{fontWeight:"700",fontSize:"15px"}},"No score data yet"));
+    empty.appendChild(el("div",{class:"muted",style:{marginTop:"8px"}},
+      "Baristas need to submit daily logs (\"سجّل شيفتي\") before scores appear here. Each submission auto-updates their rolling 30-day average."));
+    wrap.appendChild(empty);
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  // ── Leaderboard card ──
+  const lbCard = el("div",{class:"card",style:{marginBottom:"12px"}});
+  lbCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"🏆 Achievers Board"));
+  const sorted = allU.map(x=>{
+    const s = allScores[x.id];
+    const total = s && cats.some(k=>s[k]!=null) ? kpiCalcTotal(s) : null;
+    return {...x,total};
+  }).filter(x=>x.total!=null).sort((a,b)=>b.total-a.total);
+  const medals = ["🥇","🥈","🥉"];
+  sorted.forEach((m,i)=>{
+    const row = el("div",{style:{display:"flex",alignItems:"center",gap:"10px",padding:"7px 4px",borderBottom:"1px solid var(--border)"}});
+    row.appendChild(el("div",{style:{fontSize:"18px",width:"28px",textAlign:"center"}},medals[i]||String(i+1)));
+    row.appendChild(el("div",{style:{width:"32px",height:"32px",borderRadius:"50%",background:"var(--accent-2)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700",fontSize:"12px"}},
+      (m.name||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)));
+    const info = el("div",{style:{flex:"1"}});
+    info.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},m.name));
+    info.appendChild(el("div",{class:"muted small"},m.role==="head_barista"?"⭐ Head Barista":"Barista"));
+    row.appendChild(info);
+    const bar = el("div",{style:{flex:"2"}});
+    const barInner = el("div",{style:{height:"6px",background:"var(--surface-2)",borderRadius:"4px",overflow:"hidden"}});
+    barInner.appendChild(el("div",{style:{width:m.total+"%",height:"100%",background:kpiScoreColor(m.total),borderRadius:"4px"}}));
+    bar.appendChild(barInner);
+    row.appendChild(bar);
+    row.appendChild(el("div",{style:{fontWeight:"800",fontSize:"15px",color:kpiScoreColor(m.total),minWidth:"36px",textAlign:"right"}},m.total.toFixed(0)));
+    lbCard.appendChild(row);
+  });
+  wrap.appendChild(lbCard);
+
+  // ── Heatmap table ──
+  const hm = el("div",{class:"card",style:{overflowX:"auto",marginBottom:"12px"}});
+  hm.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"📊 Category Heatmap — All Baristas"));
+  const tbl = el("table",{});
+  const thead = el("thead",{});
+  const hrow = el("tr",{});
+  hrow.appendChild(el("th",{},"Barista"));
+  cats.forEach(k=>hrow.appendChild(el("th",{style:{textAlign:"center"}},KPI_ICONS[k]+" "+KPI_LABELS_EN[k])));
+  hrow.appendChild(el("th",{style:{textAlign:"center"}},"Total"));
+  thead.appendChild(hrow);
+  tbl.appendChild(thead);
+  const tbody = el("tbody",{});
+  allU.forEach(x=>{
+    const s = allScores[x.id];
+    const total = s && cats.some(k=>s[k]!=null) ? kpiCalcTotal(s) : null;
+    const row = el("tr",{});
+    const nameCell = el("td",{});
+    nameCell.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},x.name));
+    if (x.role==="head_barista") nameCell.appendChild(el("div",{class:"small muted"},"⭐ Head"));
+    row.appendChild(nameCell);
+    cats.forEach(k=>{
+      const v = s&&s[k]!=null ? s[k] : null;
+      const td = el("td",{class:"num"});
+      if (v!=null) {
+        const pill = el("span",{style:{display:"inline-block",background:v>=85?"rgba(47,138,85,.15)":v>=65?"rgba(183,121,31,.15)":"rgba(194,59,59,.15)",color:kpiScoreColor(v),borderRadius:"6px",padding:"2px 7px",fontWeight:"700",fontSize:"12px"}},String(v));
+        td.appendChild(pill);
+      } else {
+        td.appendChild(el("span",{class:"muted small"},"—"));
+      }
+      row.appendChild(td);
+    });
+    const totCell = el("td",{class:"num"});
+    if (total!=null) totCell.appendChild(el("b",{style:{color:kpiScoreColor(total)}},total.toFixed(0)));
+    else totCell.appendChild(el("span",{class:"muted small"},"—"));
+    row.appendChild(totCell);
+    tbody.appendChild(row);
+  });
+  tbl.appendChild(tbody);
+  hm.appendChild(tbl);
+  wrap.appendChild(hm);
+
+  // ── Individual deep-dive ──
+  const diveCard = el("div",{class:"card"});
+  diveCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"🔍 Individual Deep-Dive"));
+  const sel = el("select",{style:{marginBottom:"12px"}});
+  sel.appendChild(el("option",{value:""},"— Select a barista —"));
+  allU.forEach(x=>sel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
+  diveCard.appendChild(sel);
+  const diveBody = el("div",{});
+  diveCard.appendChild(diveBody);
+  sel.addEventListener("change",()=>{
+    diveBody.innerHTML="";
+    const uid = sel.value;
+    if (!uid) return;
+    const person = allU.find(x=>x.id===uid);
+    const s = allScores[uid];
+    if (!s||!cats.some(k=>s[k]!=null)) {
+      diveBody.appendChild(el("div",{class:"muted small"},"No logs submitted yet for this barista."));
+      return;
+    }
+    const total = kpiCalcTotal(s);
+    const isHead = person.role==="head_barista";
+    const tgt = isHead?85:75;
+    const summRow = el("div",{style:{display:"flex",alignItems:"center",gap:"14px",marginBottom:"14px",flexWrap:"wrap"}});
+    summRow.appendChild(el("div",{style:{fontWeight:"800",fontSize:"2rem",color:kpiScoreColor(total)}},total.toFixed(0)));
+    const summInfo = el("div",{});
+    summInfo.appendChild(el("div",{style:{fontWeight:"700"}},person.name));
+    summInfo.appendChild(el("div",{class:"muted small"},kpiGradeEn(total)+" · Target: "+tgt+"+"));
+    summRow.appendChild(summInfo);
+    diveBody.appendChild(summRow);
+    cats.forEach(k=>{
+      const v = s[k];
+      if (v==null) return;
+      const rowDiv = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"7px"}});
+      rowDiv.appendChild(el("div",{style:{width:"140px",fontSize:"12px",fontWeight:"600"}},KPI_ICONS[k]+" "+KPI_LABELS_EN[k]));
+      const barWrap = el("div",{style:{flex:"1",height:"7px",background:"var(--surface-2)",borderRadius:"4px",overflow:"hidden"}});
+      barWrap.appendChild(el("div",{style:{width:v+"%",height:"100%",background:kpiScoreColor(v),borderRadius:"4px"}}));
+      rowDiv.appendChild(barWrap);
+      rowDiv.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",color:kpiScoreColor(v),minWidth:"28px",textAlign:"right"}},String(v)));
+      rowDiv.appendChild(el("div",{class:"pill",style:{fontSize:"10px"}},KPI_W()[k]+"%"));
+      diveBody.appendChild(rowDiv);
+    });
+    // Recent logs for this person
+    const recent = (state.kpi_logs||[]).filter(l=>l.user_id===uid).sort((a,b)=>b.at-a.at).slice(0,5);
+    if (recent.length) {
+      diveBody.appendChild(el("div",{style:{fontWeight:"600",fontSize:"12px",color:"var(--ink-dim)",marginTop:"12px",marginBottom:"6px",textTransform:"uppercase",letterSpacing:".5px"}},"Recent Logs"));
+      const lt = el("table",{});
+      lt.appendChild(el("thead",{},[el("tr",{},[el("th",{},"Date"),el("th",{},"Shift"),el("th",{style:{textAlign:"right"}},"Punctuality"),el("th",{style:{textAlign:"right"}},"Waste"),el("th",{style:{textAlign:"right"}},"Cleanliness")])]));
+      const ltb = el("tbody",{});
+      recent.forEach(l=>{
+        ltb.appendChild(el("tr",{},[
+          el("td",{},fmtDay(l.at)),
+          el("td",{class:"muted"},l.shift||"—"),
+          el("td",{class:"num",style:{color:kpiScoreColor(l.punctuality||0)}},l.punctuality!=null?String(l.punctuality):"—"),
+          el("td",{class:"num",style:{color:kpiScoreColor(l.waste||0)}},l.waste!=null?String(l.waste):"—"),
+          el("td",{class:"num",style:{color:kpiScoreColor(l.cleanliness||0)}},l.cleanliness!=null?String(l.cleanliness):"—"),
+        ]));
+      });
+      lt.appendChild(ltb);
+      diveBody.appendChild(lt);
+    }
+  });
+  wrap.appendChild(diveCard);
+
+  // ── Manual monthly score entry ──────────────────────────────────────────────
+  if (u.role === "owner" || u.role === "head_barista") {
+    const manCard = el("div",{class:"card",style:{marginTop:"12px"}});
+    manCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},"✏️ Enter Monthly Manual Scores"));
+    manCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+      "Craft, Upselling, Customer (if not from coffeebeats.art), Teamwork & Training — set once per month per barista."));
+    const manSelWrap = el("div",{style:{marginBottom:"10px"}});
+    manSelWrap.appendChild(el("label",{},"Barista"));
+    const manSel = el("select",{});
+    manSel.appendChild(el("option",{value:""},"— Select barista —"));
+    allU.forEach(x=>manSel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
+    manSelWrap.appendChild(manSel);
+    manCard.appendChild(manSelWrap);
+    const manFields = el("div",{id:"man-fields-wrap",style:{display:"none"}});
+    manCard.appendChild(manFields);
+    const MAN_CATS = [
+      {k:"craft",     label:"☕ Coffee Craft",  hint:"SCA blind tasting & recipe adherence (0-100)"},
+      {k:"upselling", label:"📈 Upselling",      hint:"Avg ticket size vs branch target (0-100)"},
+      {k:"customer",  label:"😊 Customer Score", hint:"Review avg × 20 — or override coffeebeats.art data (0-100)"},
+      {k:"teamwork",  label:"👥 Teamwork",        hint:"Peer input, shoutouts received, shift coverage (0-100)"},
+      {k:"training",  label:"🌱 Training",        hint:"Modules completed ÷ modules assigned × 100 (0-100)"},
+    ];
+    manSel.addEventListener("change",()=>{
+      manFields.innerHTML="";
+      const uid = manSel.value;
+      if (!uid) { manFields.style.display="none"; return; }
+      manFields.style.display="block";
+      const month = new Date().toISOString().slice(0,7);
+      const existing = (state.kpi_manual||[]).find(m=>m.user_id===uid&&m.month===month)||{};
+      MAN_CATS.forEach(({k,label,hint})=>{
+        manFields.appendChild(el("label",{style:{marginTop:"10px"}},label));
+        manFields.appendChild(el("div",{class:"muted small",style:{marginBottom:"4px"}},hint));
+        const inp = el("input",{type:"range",min:"0",max:"100",value:existing[k]||50,id:"man_"+k});
+        const val = el("span",{style:{fontWeight:"700",color:"var(--accent)",marginLeft:"8px"}},String(inp.value));
+        inp.addEventListener("input",()=>{ val.textContent=inp.value; });
+        const row = el("div",{style:{display:"flex",alignItems:"center",gap:"6px"}});
+        row.appendChild(inp); row.appendChild(val);
+        manFields.appendChild(row);
+      });
+      const saveBtn = el("button",{class:"btn",style:{marginTop:"14px"},onClick:()=>{
+        const month2 = new Date().toISOString().slice(0,7);
+        const entry = { user_id:uid, month:month2 };
+        MAN_CATS.forEach(({k})=>{ entry[k]=parseInt(document.getElementById("man_"+k)?.value||50); });
+        if (!state.kpi_manual) state.kpi_manual=[];
+        const idx = state.kpi_manual.findIndex(m=>m.user_id===uid&&m.month===month2);
+        if (idx>=0) state.kpi_manual[idx]=entry; else state.kpi_manual.push(entry);
+        save();
+        toast("✅ Manual scores saved for "+allU.find(x=>x.id===uid)?.name);
+      }},"Save Manual Scores");
+      manFields.appendChild(saveBtn);
+    });
+    wrap.appendChild(manCard);
+
+    // ── Customer feedback entry ────────────────────────────────────────────
+    const cfCard = el("div",{class:"card",style:{marginTop:"12px"}});
+    cfCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},"😊 Customer Feedback Log"));
+    cfCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+      "Customer Score auto-feeds from coffeebeats.art reviews — ratings from the public form flow straight into each barista's KPI. Use 'Sync feedback' on the scorecard page to pull the latest, or override manually below."));
+    const cfSelWrap = el("div",{style:{marginBottom:"10px"}});
+    cfSelWrap.appendChild(el("label",{},"Barista"));
+    const cfSel = el("select",{});
+    cfSel.appendChild(el("option",{value:""},"— Select barista —"));
+    allU.forEach(x=>cfSel.appendChild(el("option",{value:x.id},x.name)));
+    cfSelWrap.appendChild(cfSel);
+    cfCard.appendChild(cfSelWrap);
+    cfCard.appendChild(el("label",{},"Star Rating (1–5)"));
+    const cfRating = el("input",{type:"number",min:"1",max:"5",step:"0.1",placeholder:"e.g. 4.7"});
+    cfCard.appendChild(cfRating);
+    cfCard.appendChild(el("label",{},"Source"));
+    const cfSrc = el("select",{},[
+      el("option",{value:"coffeebeats.art"},"coffeebeats.art review"),
+      el("option",{value:"google"},"Google Review"),
+      el("option",{value:"manual"},"Manual entry"),
+      el("option",{value:"in-store"},"In-store feedback card"),
+    ]);
+    cfCard.appendChild(cfSrc);
+    cfCard.appendChild(el("label",{},"Note (optional)"));
+    const cfNote = el("input",{type:"text",placeholder:"e.g. Mentioned barista by name, perfect latte art"});
+    cfCard.appendChild(cfNote);
+    cfCard.appendChild(el("button",{class:"btn",style:{marginTop:"12px"},onClick:()=>{
+      const uid = cfSel.value;
+      const rat = parseFloat(cfRating.value);
+      if (!uid||isNaN(rat)||rat<1||rat>5) { toast("Select barista and enter 1–5 rating","error"); return; }
+      if (!state.customer_feedback) state.customer_feedback=[];
+      state.customer_feedback.push({
+        id:uuid(), at:now(), by:u.id, by_name:u.name,
+        user_id:uid, barista_id:uid,
+        rating:rat, source:cfSrc.value, note:cfNote.value.trim(),
+        month:new Date().toISOString().slice(0,7),
+      });
+      save(); cfRating.value=""; cfNote.value="";
+      toast("✅ Customer feedback logged — Customer Score updated");
+    }},"Log Feedback"));
+    // Recent feedback table
+    const recentCF = (state.customer_feedback||[]).sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,8);
+    if (recentCF.length) {
+      const cft = el("table",{style:{marginTop:"10px"}});
+      cft.appendChild(el("thead",{},[el("tr",{},[el("th",{},"Barista"),el("th",{},"Rating"),el("th",{},"Source"),el("th",{},"Date")])]));
+      const cftb=el("tbody",{});
+      recentCF.forEach(f=>{
+        const bName=(allU.find(x=>x.id===f.user_id)||{}).name||f.user_id;
+        cftb.appendChild(el("tr",{},[
+          el("td",{},bName),
+          el("td",{class:"num",style:{color:kpiScoreColor(f.rating*20)}},"★"+f.rating.toFixed(1)),
+          el("td",{class:"muted"},f.source||""),
+          el("td",{class:"muted"},fmtDay(f.at||0)),
+        ]));
+      });
+      cft.appendChild(cftb);
+      cfCard.appendChild(cft);
+    }
+    wrap.appendChild(cfCard);
+  }
+
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ─── BARISTA/HEAD: Personal scorecard (Arabic) ────────────────────────────────
+routes.my_scorecard = function(u) {
+  const isAR = u.role==="barista"||u.role==="head_barista";
+  const dir  = isAR?"rtl":"ltr";
+  const wrap = el("div",{style:{direction:dir}});
+  const scores = kpiGetUserScores(u.id);
+  const cats = Object.keys(KPI_W());
+  const isHead = u.role==="head_barista";
+  const tgt = isHead?85:75;
+
+  // Header
+  const hdr = el("div",{class:"card",style:{textAlign:"center",marginBottom:"12px",background:"var(--ink)",color:"var(--accent-2)"}});
+  hdr.appendChild(el("div",{style:{fontSize:"12px",letterSpacing:"2px",opacity:".7",textTransform:"uppercase",marginBottom:"4px"}},"Coffee Beats · بطاقة الأداء"));
+  hdr.appendChild(el("div",{style:{fontSize:"20px",fontWeight:"800"}},u.name));
+  hdr.appendChild(el("div",{style:{fontSize:"13px",opacity:".8",marginTop:"4px"}},isHead?"⭐ رئيس بريستا":"بريستا"));
+  wrap.appendChild(hdr);
+
+  if (!scores||!cats.some(k=>scores[k]!=null)) {
+    const empty = el("div",{class:"card",style:{textAlign:"center",padding:"28px 16px"}});
+    empty.appendChild(el("div",{style:{fontSize:"34px",marginBottom:"8px"}},"📋"));
+    empty.appendChild(el("div",{style:{fontWeight:"700",fontSize:"15px"}},isAR?"لا توجد بيانات بعد":"No data yet"));
+    empty.appendChild(el("div",{class:"muted",style:{marginTop:"8px",fontSize:"13px"}},
+      isAR?"اضغط على 'سجّل شيفتي' لتبدأ بإدخال بياناتك اليومية. ستظهر نقاطك هنا تلقائياً.":"Submit daily logs to see your scores."));
+    wrap.appendChild(empty);
+    const emptyBtns = el("div",{class:"btn-row",style:{marginTop:"12px"}});
+    emptyBtns.appendChild(el("button",{class:"btn",onClick:()=>go("signin_stamp_new")},isAR?"🕐 سجّل حضورك":"🕐 Sign-In Stamp"));
+    emptyBtns.appendChild(el("button",{class:"btn secondary",onClick:()=>go("cleaning_log_new")},isAR?"🧹 سجل النظافة":"🧹 Cleaning Log"));
+    wrap.appendChild(emptyBtns);
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  const total = kpiCalcTotal(scores);
+  // Score ring (CSS only)
+  const scoreCard = el("div",{class:"card",style:{marginBottom:"12px"}});
+  const ringWrap = el("div",{style:{display:"flex",alignItems:"center",gap:"16px",flexWrap:"wrap"}});
+  const pct = Math.min(total,100);
+  const r=36,circ=2*Math.PI*r,dash=(pct/100)*circ;
+  const ringDiv = el("div",{style:{position:"relative",width:"88px",height:"88px",flexShrink:"0"}});
+  ringDiv.innerHTML=`<svg width="88" height="88" viewBox="0 0 88 88" style="transform:rotate(-90deg)"><circle cx="44" cy="44" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="8"/><circle cx="44" cy="44" r="${r}" fill="none" stroke="${kpiScoreColor(total)}" stroke-width="8" stroke-dasharray="${dash} ${circ}" stroke-linecap="round"/></svg><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;line-height:1"><span style="font-size:1.4rem;font-weight:800;color:${kpiScoreColor(total)}">${total.toFixed(0)}</span><br><span style="font-size:.55rem;color:var(--ink-dim)">/100</span></div>`;
+  ringWrap.appendChild(ringDiv);
+  const info = el("div",{style:{flex:"1"}});
+  info.appendChild(el("div",{style:{fontWeight:"700",fontSize:"15px"}},isAR?kpiGrade(total,isHead):kpiGradeEn(total)));
+  info.appendChild(el("div",{class:"muted",style:{fontSize:"12px",marginTop:"4px"}},isAR?`الهدف: ${tgt} نقطة أو أكثر`:`Target: ${tgt}+`));
+  // mini log button
+  const quickLinks = el("div",{class:"btn-row",style:{marginTop:"10px",gap:"6px"}});
+  quickLinks.appendChild(el("button",{class:"btn",style:{padding:"9px 12px",fontSize:"12px"},onClick:()=>go("signin_stamp_new")},isAR?"🕐 حضور":"🕐 Stamp"));
+  quickLinks.appendChild(el("button",{class:"btn secondary",style:{padding:"9px 12px",fontSize:"12px"},onClick:()=>go("waste_new")},isAR?"♻️ هدر":"♻️ Waste"));
+  quickLinks.appendChild(el("button",{class:"btn secondary",style:{padding:"9px 12px",fontSize:"12px"},onClick:()=>go("cleaning_log_new")},isAR?"🧹 نظافة":"🧹 Clean"));
+  info.appendChild(quickLinks);
+  ringWrap.appendChild(info);
+  scoreCard.appendChild(ringWrap);
+  wrap.appendChild(scoreCard);
+
+  // Category breakdown
+  const catCard = el("div",{class:"card",style:{marginBottom:"12px"}});
+  catCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},isAR?"تفصيل النقاط":"Score Breakdown"));
+  const SRC_LABELS = {
+    punctuality: isAR?"تلقائي: بصمة الحضور":"Auto: Sign-In Stamp",
+    waste:       isAR?"تلقائي: سجل الهدر":"Auto: Waste Log",
+    cleanliness: isAR?"تلقائي: سجل النظافة":"Auto: Cleaning Log",
+    craft:       isAR?"شهري: رئيس البريستا":"Monthly: Head Barista",
+    upselling:   isAR?"شهري: تقرير المبيعات":"Monthly: Sales Report",
+    customer:    isAR?"تلقائي: تقييمات العملاء":"Auto: Customer Reviews",
+    teamwork:    isAR?"شهري: تقييم الزملاء":"Monthly: Peer Input",
+    training:    isAR?"شهري: وحدات التدريب":"Monthly: Training Modules",
+  };
+  catCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+    isAR?"الأخضر = تلقائي من تصرفاتك · الرمادي = يدخله رئيس البريستا شهرياً":"Green = auto-calculated from your actions · Grey = entered monthly by management"));
+  cats.forEach(k=>{
+    const v = scores[k];
+    const label = isAR?KPI_LABELS_AR[k]:KPI_LABELS_EN[k];
+    const rowDiv = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}});
+    rowDiv.appendChild(el("div",{style:{fontSize:"16px",width:"24px",textAlign:"center"}},KPI_ICONS[k]));
+    rowDiv.appendChild(el("div",{style:{flex:"2",fontSize:"13px",fontWeight:"600"}},label));
+    const barWrap = el("div",{style:{flex:"3",height:"7px",background:"var(--surface-2)",borderRadius:"4px",overflow:"hidden"}});
+    const barVal = v!=null?v:0;
+    barWrap.appendChild(el("div",{style:{width:barVal+"%",height:"100%",background:kpiScoreColor(barVal),borderRadius:"4px"}}));
+    rowDiv.appendChild(barWrap);
+    const vEl = v!=null?el("div",{style:{fontWeight:"800",fontSize:"13px",color:kpiScoreColor(v),minWidth:"28px",textAlign:"right"}},String(v)):el("div",{class:"muted small",style:{minWidth:"28px",textAlign:"right"}},"—");
+    rowDiv.appendChild(vEl);
+    rowDiv.appendChild(el("div",{class:"pill",style:{fontSize:"10px"}},KPI_W()[k]+"%"));
+    catCard.appendChild(rowDiv);
+  });
+  wrap.appendChild(catCard);
+
+  // Rewards summary
+  const month = kpiGrade(total,isHead);
+  const rwdCard = el("div",{class:"card",style:{marginBottom:"12px",borderColor:total>=90?"gold":total>=80?"silver":"var(--border)"}});
+  rwdCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"8px"}},isAR?"🎁 مكافأتي هذا الشهر":"🎁 My Monthly Reward"));
+  const rwdText = {
+    90:{ar:"🥇 ذهبي — يوم إجازة مكافأة + كوبون هدية + أولوية في الجدول",en:"🥇 Gold — Bonus day off · Gift voucher · Priority schedule"},
+    80:{ar:"🥈 فضي — كوبون وجبة + تدريب من اختيارك + تهنئة على مستوى الفريق",en:"🥈 Silver — Meal voucher · Training of choice · Team shoutout"},
+    70:{ar:"🥉 برونزي — رسالة تقدير + أولوية في الجداول الزمنية",en:"🥉 Bronze — Recognition letter · Schedule preference"},
+    0: {ar:"📈 في تطور — حدد هدفاً مع رئيس البريستا هذا الشهر",en:"📈 Rising — Set a growth goal with Head Barista"},
+  };
+  const tier = total>=90?90:total>=80?80:total>=70?70:0;
+  rwdCard.appendChild(el("div",{style:{fontSize:"13px",lineHeight:"1.6"}},isAR?rwdText[tier].ar:rwdText[tier].en));
+  wrap.appendChild(rwdCard);
+
+  // Recent logs
+  const recent = (state.kpi_logs||[]).filter(l=>l.user_id===u.id).sort((a,b)=>b.at-a.at).slice(0,5);
+  if (recent.length) {
+    const logCard = el("div",{class:"card"});
+    logCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"8px"}},isAR?"آخر التسجيلات":"Recent Logs"));
+    const lt=el("table",{});
+    lt.appendChild(el("thead",{},[el("tr",{},[
+      el("th",{},isAR?"التاريخ":"Date"),
+      el("th",{style:{textAlign:"right"}},isAR?"الحضور":"Punct."),
+      el("th",{style:{textAlign:"right"}},isAR?"الهدر":"Waste"),
+      el("th",{style:{textAlign:"right"}},isAR?"النظافة":"Clean"),
+    ])]));
+    const ltb=el("tbody",{});
+    recent.forEach(l=>{
+      ltb.appendChild(el("tr",{},[
+        el("td",{},fmtDay(l.at)),
+        el("td",{class:"num",style:{color:kpiScoreColor(l.punctuality||0)}},l.punctuality!=null?String(l.punctuality):"—"),
+        el("td",{class:"num",style:{color:kpiScoreColor(l.waste||0)}},l.waste!=null?String(l.waste):"—"),
+        el("td",{class:"num",style:{color:kpiScoreColor(l.cleanliness||0)}},l.cleanliness!=null?String(l.cleanliness):"—"),
+      ]));
+    });
+    lt.appendChild(ltb);
+    logCard.appendChild(lt);
+    wrap.appendChild(logCard);
+  }
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+routes.kpi_log_new = function(u) {
+  const isAR = u.role==="barista"||u.role==="head_barista";
+  const dir  = isAR?"rtl":"ltr";
+  const wrap = el("div",{style:{direction:dir}});
+
+  wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},isAR?"📝 سجّل شيفتي اليوم":"📝 Log My Shift"));
+  wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"14px",fontSize:"13px"}},
+    isAR?"ملاحظة: الصدق يُكافأ — كل إدخال يُحسب لصالحك في بطاقة الأداء":"Honesty earns points — every entry improves your scorecard."));
+
+  const form = el("div",{class:"stack"});
+  // Date + shift
+  const dateCard = el("div",{class:"card"});
+  dateCard.appendChild(el("label",{},isAR?"📅 التاريخ":"📅 Date"));
+  const dateInp = el("input",{type:"date",value:fmtDay(now()),id:"kl_date_inp"});
+  dateCard.appendChild(dateInp);
+  dateCard.appendChild(el("label",{},isAR?"🌤️ نوع الشيفت":"🌤️ Shift Type"));
+  const shiftSel = el("select",{id:"kl_shift"});
+  shiftSel.appendChild(el("option",{value:"morning"},isAR?"☀️ صباحي (فتح)":"☀️ Morning (Opening)"));
+  shiftSel.appendChild(el("option",{value:"afternoon"},isAR?"🌤️ ظهر":"🌤️ Afternoon"));
+  shiftSel.appendChild(el("option",{value:"closing"},isAR?"🌙 إغلاق":"🌙 Closing"));
+  dateCard.appendChild(shiftSel);
+  form.appendChild(dateCard);
+
+  // Punctuality
+  const pCard = el("div",{class:"card"});
+  pCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"⏱️ الانضباط والحضور":"⏱️ Punctuality"));
+  pCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+    el("div",{},[el("label",{},isAR?"الوقت المحدد":"Scheduled"),el("input",{type:"time",value:"09:00",id:"kl_sched"})]),
+    el("div",{},[el("label",{},isAR?"وصلت في":"Actual clock-in"),el("input",{type:"time",id:"kl_actual",oninput:"kpiLivePunct()"})]),
+  ]));
+  const pRes = el("div",{id:"kpi_punct_res",class:"muted small",style:{marginTop:"6px"}},isAR?"أدخل وقت الحضور الفعلي لحساب النقاط":"Enter your actual clock-in time");
+  pCard.appendChild(pRes);
+  form.appendChild(pCard);
+
+  // Waste
+  const wCard = el("div",{class:"card"});
+  wCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"♻️ ترشيد الهدر":"♻️ Waste Control"));
+  wCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+    el("div",{},[el("label",{},isAR?"شوطات الإسبريسو المهدرة":"Espresso shots wasted"),el("input",{type:"number",min:"0",max:"50",placeholder:"0",id:"kl_shots",oninput:"kpiLiveWaste()"})]),
+    el("div",{},[el("label",{},isAR?"الحليب المهدر (مل)":"Milk wasted (ml)"),el("input",{type:"number",min:"0",placeholder:"0",id:"kl_milk",oninput:"kpiLiveWaste()"})]),
+  ]));
+  wCard.appendChild(el("label",{},isAR?"ملاحظات أخرى":"Other waste notes"));
+  wCard.appendChild(el("input",{type:"text",id:"kl_wnotes",placeholder:isAR?"مثال: زجاجة شراب سقطت، حليب أوت منتهي الصلاحية":"e.g. Dropped syrup, expired oat milk"}));
+  const wRes = el("div",{id:"kpi_waste_res",class:"muted small",style:{marginTop:"6px"}},"");
+  wCard.appendChild(wRes);
+  form.appendChild(wCard);
+
+  // Cleanliness checklist
+  const cCard = el("div",{class:"card"});
+  cCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"🧹 قائمة النظافة":"🧹 Cleanliness Checklist"));
+  const items = isAR?CLEAN_AR:CLEAN_EN;
+  items.forEach((item,i)=>{
+    const lbl = el("label",{style:{display:"flex",alignItems:"flex-start",gap:"8px",padding:"7px 0",borderBottom:"1px solid var(--border)",fontSize:"13px",cursor:"pointer"}});
+    lbl.appendChild(el("input",{type:"checkbox",id:"kl_clean_"+i,style:{width:"16px",height:"16px",marginTop:"2px",flexShrink:"0"},oninput:"kpiLiveClean()"}));
+    lbl.appendChild(el("span",{},item));
+    cCard.appendChild(lbl);
+  });
+  cCard.appendChild(el("div",{style:{marginTop:"8px",fontWeight:"600",fontSize:"13px"}},[ isAR?"النقاط: ":"Score: ", el("span",{id:"kpi_clean_score",style:{color:"var(--accent)"}},isAR?"٠/١٠٠":"0/100")]));
+  form.appendChild(cCard);
+
+  // Notes
+  const nCard = el("div",{class:"card"});
+  nCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"💬 ملاحظات الشيفت":"💬 Shift Notes"));
+  nCard.appendChild(el("label",{},isAR?"أبرز حدث اليوم (إيجابي أو تحدٍّ)":"Highlight or challenge today"));
+  nCard.appendChild(el("textarea",{id:"kl_notes",rows:"2",placeholder:isAR?"مثال: ضغط كبير في الصباح، لكن الفريق تعاون بشكل رائع":"e.g. Very busy morning but team worked great"}));
+  nCard.appendChild(el("label",{},isAR?"شكر خاص لزميل (اختياري)":"Team shoutout (optional)"));
+  nCard.appendChild(el("input",{type:"text",id:"kl_shout",placeholder:isAR?"مثال: رانا غطّت عني وقت الضغط — شكراً جزيلاً":"e.g. Rana covered for me during rush — huge help!"}));
+  form.appendChild(nCard);
+
+  wrap.appendChild(form);
+
+  const submitBtn = el("button",{class:"btn",style:{marginTop:"12px"},onClick:submitKpiLog},isAR?"✅ إرسال تقرير الشيفت":"✅ Submit Shift Log");
+  wrap.appendChild(submitBtn);
+  wrap.appendChild(btnBack());
+
+  // Live calc helpers attached to window for inline oninput handlers
+  window.kpiLivePunct = function() {
+    const sched = document.getElementById("kl_sched");
+    const actual = document.getElementById("kl_actual");
+    const res = document.getElementById("kpi_punct_res");
+    if (!sched||!actual||!res||!actual.value) return;
+    const [sh,sm]=sched.value.split(":").map(Number);
+    const [ah,am]=actual.value.split(":").map(Number);
+    const diff=(ah*60+am)-(sh*60+sm);
+    let score,msg;
+    if(diff<=0){score=100;msg=isAR?"🎉 في الموعد! علامة كاملة":"🎉 On time! Full marks";}
+    else if(diff<=5){score=90;msg=isAR?"✅ تأخير ٥ دقائق — ٩٠ نقطة":"✅ Within grace — 90 pts";}
+    else if(diff<=15){score=70;msg=isAR?"⚠️ تأخير ٦-١٥ دقيقة — ٧٠ نقطة":"⚠️ 6-15 min late — 70 pts";}
+    else if(diff<=30){score=50;msg=isAR?"⚠️ تأخير ١٦-٣٠ دقيقة — ٥٠ نقطة":"⚠️ 16-30 min late — 50 pts";}
+    else{score=20;msg=isAR?"❌ أكثر من ٣٠ دقيقة — ٢٠ نقطة":"❌ Over 30 min late — 20 pts";}
+    res.textContent=msg;
+    res.style.color=score>=90?"var(--ok)":score>=70?"var(--warn)":"var(--bad)";
+  };
+  window.kpiLiveWaste = function() {
+    const shots=parseInt(document.getElementById("kl_shots")?.value)||0;
+    const milk=parseInt(document.getElementById("kl_milk")?.value)||0;
+    let score=100;
+    if(shots>3)score-=(shots-3)*10;
+    if(milk>100)score-=Math.floor((milk-100)/50)*10;
+    score=Math.max(score,10);
+    const el2=document.getElementById("kpi_waste_res");
+    if(el2){el2.textContent=(isAR?"نقاط الهدر: ":"Waste score: ")+score+"/100";el2.style.color=kpiScoreColor(score);}
+  };
+  window.kpiLiveClean = function() {
+    const boxes=document.querySelectorAll("[id^='kl_clean_']");
+    const checked=Array.from(boxes).filter(b=>b.checked).length;
+    const score=Math.round((checked/boxes.length)*100);
+    const el2=document.getElementById("kpi_clean_score");
+    if(el2){el2.textContent=score+"/100";el2.style.color=kpiScoreColor(score);}
+  };
+
+  function submitKpiLog() {
+    const sched = document.getElementById("kl_sched")?.value||"09:00";
+    const actual= document.getElementById("kl_actual")?.value||"";
+    let pScore=70;
+    if(actual){
+      const [sh,sm]=sched.split(":").map(Number);
+      const [ah,am]=actual.split(":").map(Number);
+      const diff=(ah*60+am)-(sh*60+sm);
+      pScore=diff<=0?100:diff<=5?90:diff<=15?70:diff<=30?50:20;
+    }
+    const shots=parseInt(document.getElementById("kl_shots")?.value)||0;
+    const milk=parseInt(document.getElementById("kl_milk")?.value)||0;
+    let wScore=100;
+    if(shots>3)wScore-=(shots-3)*10;
+    if(milk>100)wScore-=Math.floor((milk-100)/50)*10;
+    wScore=Math.max(wScore,10);
+    const boxes=document.querySelectorAll("[id^='kl_clean_']");
+    const cleanScore=boxes.length?Math.round(Array.from(boxes).filter(b=>b.checked).length/boxes.length*100):0;
+    const entry = {
+      id:uuid(), user_id:u.id, at:now(),
+      date:document.getElementById("kl_date_inp")?.value||fmtDay(now()),
+      shift:document.getElementById("kl_shift")?.value||"morning",
+      punctuality:pScore, waste:wScore, cleanliness:cleanScore,
+      waste_notes:document.getElementById("kl_wnotes")?.value||"",
+      notes:document.getElementById("kl_notes")?.value||"",
+      shoutout:document.getElementById("kl_shout")?.value||"",
+    };
+    if(!state.kpi_logs) state.kpi_logs=[];
+    state.kpi_logs.unshift(entry);
+    save();
+    toast(isAR?"✅ تم إرسال التقرير! شكراً على التزامك ⭐":"✅ Log submitted! Scores updated.");
+    go("my_scorecard");
+  }
+  return wrap;
+};
+
+// ─── JOB DESCRIPTION (Arabic for barista, English for owner) ─────────────────
+routes.my_jd = function(u) {
+  const isOwner = u.role==="owner"||u.role==="accountant";
+  const isHead  = u.role==="head_barista";
+  const isAR    = !isOwner;
+  const dir     = isAR?"rtl":"ltr";
+  const wrap    = el("div",{style:{direction:dir}});
+
+  // Role toggle for owner
+  let viewRole = isHead||isOwner?"head":"barista";
+  if (u.role==="barista") viewRole="barista";
+
+  function renderJD() {
+    wrap.innerHTML="";
+    if(isOwner){
+      const tabs=el("div",{class:"tabs",style:{direction:"ltr"}});
+      const tHead=el("button",{class:"tab"+(viewRole==="head"?" on":""),onClick:()=>{viewRole="head";renderJD();}},isOwner?"⭐ Head Barista JD":"");
+      const tBar =el("button",{class:"tab"+(viewRole==="barista"?" on":""),onClick:()=>{viewRole="barista";renderJD();}},isOwner?"👤 Barista JD":"");
+      tabs.appendChild(tHead); tabs.appendChild(tBar);
+      wrap.appendChild(tabs);
+    }
+
+    const title = viewRole==="head"
+      ? (isAR?"⭐ رئيس البريستا — الوصف الوظيفي":"⭐ Head Barista — Job Description")
+      : (isAR?"👤 البريستا — الوصف الوظيفي":"👤 Barista — Job Description");
+    const subtitle = viewRole==="head"
+      ? (isAR?"القائد الإبداعي والتقني للبار في Coffee Beats":"The creative and technical leader of the bar at Coffee Beats")
+      : (isAR?"روح البار في Coffee Beats — حيث يلتقي الفن بالقهوة":"The soul of the bar at Coffee Beats — where art meets coffee");
+
+    const hCard=el("div",{class:"card",style:{marginBottom:"12px",background:"var(--ink)",color:"var(--accent-2)"}});
+    hCard.appendChild(el("div",{style:{fontSize:"11px",letterSpacing:"1.5px",opacity:".7",textTransform:"uppercase",marginBottom:"4px"}},"Coffee Beats · Specialty Coffee for Creatives"));
+    hCard.appendChild(el("div",{style:{fontSize:"18px",fontWeight:"800",marginBottom:"4px"}},title));
+    hCard.appendChild(el("div",{style:{fontSize:"13px",opacity:".8",lineHeight:"1.5"}},subtitle));
+    wrap.appendChild(hCard);
+
+    // KPI target card
+    const tCard=el("div",{class:"card",style:{marginBottom:"12px"}});
+    const tgt=viewRole==="head"?85:75;
+    tCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+      el("div",{class:"card",style:{textAlign:"center",background:"var(--surface-2)"}},[
+        el("div",{style:{fontSize:"2rem",fontWeight:"800",color:"var(--accent)"}},String(tgt)+"+"),
+        el("div",{class:"muted small"},isAR?"هدف النقاط الشهرية":"Monthly KPI Target"),
+      ]),
+      el("div",{class:"card",style:{textAlign:"center",background:"var(--surface-2)"}},[
+        el("div",{style:{fontSize:"2rem",fontWeight:"800",color:"var(--ok)"}},viewRole==="head"?"4.5★":"4.0★"),
+        el("div",{class:"muted small"},isAR?"هدف رضا العملاء":"Customer Score Target"),
+      ]),
+    ]));
+    wrap.appendChild(tCard);
+
+    const sections = viewRole==="head" ? [
+      {
+        icon:"☕",
+        en:"Coffee Craft & SCA Standards",ar:"فن القهوة — معايير SCA",
+        items_en:[
+          "Espresso dose: 18–21g ±0.5g · Extraction: 25–32s · Brew ratio: 1:2 to 1:2.5 — calibrate every 4-hour block · KPI: Extraction Consistency ≥ 90%",
+          "Milk steaming: 60–65°C, never above 68°C · Microfoam texture: 3–4mm for flat white, 5–7mm for cappuccino · KPI: Milk Temp Accuracy ≥ 90%",
+          "Grind-to-pull gap: < 30 seconds (espresso oxidises in 30s) · KPI: Zero pre-ground espresso incidents",
+          "Latte art standard: consistent pattern (rosetta, tulip or heart) on every single milk drink · KPI: Latte Art Completion ≥ 95%",
+          "Blind tasting calibration: conduct minimum 1 per week with team — record results · KPI: Team Consistency ≥ 85%",
+          "Out-of-spec drinks: empower any barista to remake without question · KPI: Remake Rate ≤ 2%",
+          "Espresso waste during calibration: ≤ 5 shots per calibration session · KPI: Calibration Efficiency ≥ 80%",
+        ],
+        items_ar:[
+          "جرعة الإسبريسو: ١٨-٢١ جم ±٠.٥ جم · استخلاص: ٢٥-٣٢ ثانية · نسبة التحضير ١:٢ إلى ١:٢.٥ — معايرة كل ٤ ساعات · الهدف: اتساق الاستخلاص ≥ ٩٠٪",
+          "تبخير الحليب: ٦٠-٦٥°م، لا يتجاوز ٦٨°م · ميكروفوم: ٣-٤ مم للفلات وايت، ٥-٧ مم للكابتشينو · الهدف: دقة درجة حرارة الحليب ≥ ٩٠٪",
+          "الفجوة بين الطحن والسحب: أقل من ٣٠ ثانية (الإسبريسو يتأكسد في ٣٠ ثانية) · الهدف: صفر حوادث إسبريسو مطحون مسبقاً",
+          "فن الحليب: نمط ثابت (روزيتا، توليب أو قلب) على كل مشروب حليبي · الهدف: اكتمال لاتيه آرت ≥ ٩٥٪",
+          "معايرة التذوق الأعمى: الحد الأدنى مرة أسبوعياً مع الفريق — تسجيل النتائج · الهدف: اتساق الفريق ≥ ٨٥٪",
+          "المشروبات خارج المعيار: تمكين أي بريستا من إعادة الصنع بدون سؤال · الهدف: معدل إعادة الصنع ≤ ٢٪",
+          "هدر الإسبريسو أثناء المعايرة: ≤ ٥ شوطات لكل جلسة معايرة · الهدف: كفاءة المعايرة ≥ ٨٠٪",
+        ],
+      },
+      {
+        icon:"👥",
+        en:"Team Leadership, Coaching & Culture",ar:"القيادة والتدريب وبناء الثقافة",
+        items_en:[
+          "Daily side-by-side coaching — observe technique live, give specific feedback within the shift · KPI: Team Avg KPI Score ≥ 75",
+          "Monthly structured 1:1 per barista: review scorecard, set SMART goal, document outcome · KPI: 1:1 Completion ≥ 90%",
+          "Onboarding: certify new hires on extraction, milk, menu and hygiene within 14 calendar days · KPI: Onboarding Completion ≤ 14 days",
+          "Pre-shift huddle: 10-min brief every opening shift — cover menu, events, waste target, yesterday's wins · KPI: Huddle Compliance ≥ 90%",
+          "Team morale: foster a rewarding-over-penalising culture — acknowledge wins publicly, address challenges privately · KPI: Team Shoutout Count ≥ 8/month",
+          "Cross-training: ensure every barista can cover every station — no single points of failure · KPI: Cross-Training Coverage ≥ 90%",
+        ],
+        items_ar:[
+          "تدريب جنباً إلى جنب يومياً — مراقبة التقنية مباشرة وتقديم تغذية راجعة محددة خلال الشيفت · الهدف: متوسط نقاط KPI للفريق ≥ ٧٥",
+          "جلسة 1:1 منظمة شهرياً لكل بريستا: مراجعة بطاقة الأداء، تحديد هدف SMART، توثيق النتيجة · الهدف: إتمام الجلسات ≥ ٩٠٪",
+          "التأهيل: اعتماد الموظفين الجدد على الاستخلاص، الحليب، القائمة والنظافة خلال ١٤ يوماً · الهدف: إتمام التأهيل ≤ ١٤ يوماً",
+          "اجتماع ما قبل الشيفت: إيجاز ١٠ دقائق في كل شيفت فتح — يشمل القائمة، الفعاليات، هدف الهدر، إنجازات الأمس · الهدف: التزام الاجتماع ≥ ٩٠٪",
+          "الروح المعنوية: تعزيز ثقافة المكافأة قبل العقوبة — الاعتراف بالإنجاز علناً، معالجة التحديات بشكل خاص · الهدف: عدد الشكر العلني ≥ ٨/شهر",
+          "التدريب المتقاطع: التأكد من قدرة كل بريستا على تغطية كل محطة — لا نقاط ضعف منفردة · الهدف: تغطية التدريب المتقاطع ≥ ٩٠٪",
+        ],
+      },
+      {
+        icon:"⏱️",
+        en:"Punctuality, Attendance & Operations Discipline",ar:"الانضباط والحضور وانضباط العمليات",
+        items_en:[
+          "Arrive 15 min before shift start for machine warm-up and team briefing — non-negotiable · KPI: Late Arrivals ≤ 1/month (Punctuality Score auto from stamp)",
+          "Attendance ≥ 95% of scheduled shifts — arrange cover proactively, never last-minute · KPI: Attendance ≥ 95%",
+          "Submit Cleaning Log + Waste Log personally every shift you work — lead by example · KPI: Personal Log Compliance 100%",
+          "Ensure every barista submits their Shift Close before leaving — bar cannot close without it · KPI: Shift Close Rate 100%",
+          "Temperature and equipment checks: espresso machine at temperature within 20 min of opening (measured) · KPI: Equipment Readiness 100%",
+        ],
+        items_ar:[
+          "الوصول قبل ١٥ دقيقة من بداية الشيفت لتسخين الماكينة وإيجاز الفريق — غير قابل للتفاوض · الهدف: تأخيرات ≤ ١/شهر (نقاط الانضباط تلقائية من البصمة)",
+          "الحضور ≥ ٩٥٪ من الشيفتات المجدولة — ترتيب البديل مسبقاً، لا لحظة أخيرة أبداً · الهدف: ≥ ٩٥٪",
+          "إرسال سجل النظافة وسجل الهدر شخصياً في كل شيفت تعمله — قُدوة للفريق · الهدف: الالتزام الشخصي ١٠٠٪",
+          "التأكد من إرسال كل بريستا إغلاق الشيفت قبل المغادرة — البار لا يُغلق بدونه · الهدف: معدل إغلاق الشيفت ١٠٠٪",
+          "فحص الحرارة والمعدات: ماكينة الإسبريسو على درجة الحرارة خلال ٢٠ دقيقة من الفتح (قياس فعلي) · الهدف: جاهزية المعدات ١٠٠٪",
+        ],
+      },
+      {
+        icon:"♻️",
+        en:"Waste Ownership & Cost Intelligence",ar:"ملكية الهدر والذكاء التكلفي",
+        items_en:[
+          "Own all waste tracking for the bar: personally log every shift + verify team logs are submitted · KPI: Bar Waste ≤ 5 shots/shift avg across team",
+          "Milk waste target: ≤ 100ml/shift (SCA specialty standard) — track team average weekly · KPI: Team Milk Waste ≤ 100ml/shift avg",
+          "Brief team on waste targets at every shift start — 60-second waste prompt, not a lecture · KPI: Briefing Compliance ≥ 90%",
+          "Monthly waste analysis: present top 3 waste drivers + action plan to management · KPI: Monthly Waste Report submitted",
+          "Inventory par levels: flag low stock 48h before critical — no stockout acceptable · KPI: Zero stockouts caused by late escalation",
+          "Calibration waste: track and report separately — target < 15 shots/week for calibration · KPI: Calibration Efficiency tracked",
+        ],
+        items_ar:[
+          "ملكية تتبع الهدر الكامل للبار: التسجيل الشخصي كل شيفت + التحقق من إرسال سجلات الفريق · الهدف: هدر البار ≤ ٥ شوطات/شيفت متوسط عبر الفريق",
+          "هدف هدر الحليب: ≤ ١٠٠ مل/شيفت (معيار SCA للقهوة المتخصصة) — تتبع متوسط الفريق أسبوعياً · الهدف: متوسط هدر حليب الفريق ≤ ١٠٠ مل/شيفت",
+          "إيجاز الفريق عن أهداف الهدر في بداية كل شيفت — ٦٠ ثانية تذكير، ليس محاضرة · الهدف: الالتزام بالإيجاز ≥ ٩٠٪",
+          "تحليل شهري للهدر: تقديم أهم ٣ أسباب للهدر + خطة عمل للإدارة · الهدف: تقديم تقرير الهدر الشهري",
+          "مستويات المخزون الحدية: الإبلاغ عن نقص المخزون قبل ٤٨ ساعة من الأزمة — لا نفاد مخزون مقبول · الهدف: صفر نفاد مخزون بسبب تأخر الإبلاغ",
+          "هدر المعايرة: تتبع وإبلاغ منفصل — الهدف < ١٥ شوطة/أسبوع للمعايرة · الهدف: تتبع كفاءة المعايرة",
+        ],
+      },
+      {
+        icon:"😊",
+        en:"Customer Experience & Cultural Curation",ar:"تجربة العملاء والتنظيم الثقافي",
+        items_en:[
+          "Customer score target: ≥ 4.3/5 stars from coffeebeats.art and Google reviews · KPI: Customer Score ≥ 4.3/5 (auto from feedback)",
+          "Complaint SLA: resolve personally within 5 min — solution + gesture, not just an apology · KPI: Complaint Resolution ≤ 5 min, Zero unresolved",
+          "Bar atmosphere: curate music tempo, aroma, and counter presentation for each session type (creative/filming/casual) · KPI: Atmosphere Consistency",
+          "Named review targets: aim for 2+ named mentions of team per week on public review platforms · KPI: Named Reviews ≥ 8/month",
+          "Community activation: propose 1 creative collaboration or event concept per month to management · KPI: Proposals ≥ 1/month",
+          "Sensory consistency: conduct daily taste-check on every brew offering before it goes to customers · KPI: Morning Taste-Check Compliance 100%",
+        ],
+        items_ar:[
+          "هدف رضا العملاء: ≥ ٤.٣/٥ نجوم من تقييمات coffeebeats.art وGoogle · الهدف: رضا العملاء ≥ ٤.٣/٥ (تلقائي من التغذية الراجعة)",
+          "SLA الشكاوى: الحل شخصياً خلال ٥ دقائق — حل + بادرة، ليس مجرد اعتذار · الهدف: حل الشكاوى ≤ ٥ دقائق، صفر شكاوى معلقة",
+          "أجواء البار: تنظيم إيقاع الموسيقى، الرائحة، وتقديم الكاونتر حسب كل نوع جلسة (إبداعية/تصوير/عادية) · الهدف: اتساق الأجواء",
+          "أهداف المراجعات المُسمّاة: الهدف ٢+ ذكر مُسمّى لأعضاء الفريق أسبوعياً على منصات المراجعة العامة · الهدف: المراجعات المُسمّاة ≥ ٨/شهر",
+          "التفعيل المجتمعي: اقتراح تعاون إبداعي واحد أو فكرة فعالية شهرياً للإدارة · الهدف: المقترحات ≥ ١/شهر",
+          "الاتساق الحسّي: إجراء اختبار تذوق يومي لكل عرض تحضير قبل تقديمه للعملاء · الهدف: الالتزام باختبار الصباح ١٠٠٪",
+        ],
+      },
+    ] : [
+      {
+        icon:"☕",
+        en:"Coffee Craft & Recipe Execution",ar:"جودة صنع القهوة وتطبيق الوصفات",
+        items_en:[
+          "Follow calibration set by Head Barista at shift start — no freelancing on dose, ratio or temperature · KPI: Recipe Adherence ≥ 85%",
+          "Espresso dose accuracy: ±0.5g of recipe card (weigh every shot, no eyeballing) · KPI: Dose Accuracy ≥ 90%",
+          "Extraction time: 25–32s — stop and re-calibrate if pulling outside range · KPI: 0 out-of-range shots served",
+          "Milk temperature: 60–65°C every time — thermometer available at all times · KPI: Milk Temp Accuracy ≥ 90%",
+          "Milk texturing: 3–4mm microfoam for flat white / long black with milk, 5–7mm for cappuccino/latte · KPI: Texture Compliance ≥ 85%",
+          "Latte art: consistent pattern (rosetta, tulip or heart) on every milk drink — guest-facing quality always · KPI: Latte Art Rate ≥ 90%",
+          "Drink speed: espresso-based within 3.5 min of order, cold drinks within 2 min · KPI: On-Time Delivery ≥ 95%",
+          "Remake standard: proactively remake any drink that falls below recipe — never serve a substandard drink · KPI: Remake Rate ≤ 3%",
+          "Grind-to-pull: < 30 seconds for every espresso shot — oxidation starts immediately · KPI: Zero pre-ground incidents",
+        ],
+        items_ar:[
+          "اتباع المعايرة التي يحددها رئيس البريستا في بداية الشيفت — لا اجتهاد في الجرعة أو النسبة أو الحرارة · الهدف: الالتزام بالوصفة ≥ ٨٥٪",
+          "دقة جرعة الإسبريسو: ±٠.٥ جم من بطاقة الوصفة (وزن كل شوطة، لا تخمين) · الهدف: دقة الجرعة ≥ ٩٠٪",
+          "وقت الاستخلاص: ٢٥-٣٢ ثانية — توقف وأعد المعايرة فور الخروج عن النطاق · الهدف: صفر شوطات خارج النطاق تُقدَّم",
+          "درجة حرارة الحليب: ٦٠-٦٥°م في كل مرة — الميزان الحراري متاح دائماً · الهدف: دقة حرارة الحليب ≥ ٩٠٪",
+          "قوام الحليب: ميكروفوم ٣-٤ مم للفلات وايت، ٥-٧ مم للكابتشينو والقهوة باللاتيه · الهدف: الالتزام بالقوام ≥ ٨٥٪",
+          "فن الحليب: نمط ثابت (روزيتا، توليب أو قلب) على كل مشروب — جودة مرئية دائماً للعميل · الهدف: نسبة اللاتيه آرت ≥ ٩٠٪",
+          "سرعة التقديم: الإسبريسو خلال ٣.٥ دقيقة، المشروبات الباردة خلال دقيقتين · الهدف: التسليم في الوقت ≥ ٩٥٪",
+          "معيار إعادة الصنع: أعد صنع أي مشروب دون معيار بشكل استباقي — لا تقدّم مشروباً دون مستوى أبداً · الهدف: ≤ ٣٪",
+          "الطحن قبل السحب: أقل من ٣٠ ثانية لكل شوطة إسبريسو — الأكسدة تبدأ فوراً · الهدف: صفر حوادث طحن مسبق",
+        ],
+      },
+      {
+        icon:"⏱️",
+        en:"Punctuality & Attendance",ar:"الانضباط والحضور",
+        items_en:[
+          "Arrive and clock in on time — measured daily via Sign-In Stamp · KPI: Punctuality Score ≥ 80 (auto-calculated)",
+          "Late ≤ 2 times per month (>5 min counts as late) · KPI: Late Arrivals ≤ 2/month",
+          "Attendance ≥ 90% of scheduled shifts — proactive communication required for any absence · KPI: Attendance ≥ 90%",
+          "No-show without notice: automatic full-day deduction + flag on scorecard",
+          "Submit Cleaning Log and Waste Log by end of every shift — completion tracked automatically · KPI: Shift Compliance ≥ 90%",
+        ],
+        items_ar:[
+          "الحضور والبصمة في الوقت المحدد — قياس يومي عبر بصمة الحضور · الهدف: نقاط الانضباط ≥ ٨٠ (حساب تلقائي)",
+          "تأخير ≤ مرتين في الشهر (أكثر من ٥ دقائق يُحسب تأخيراً) · الهدف: التأخيرات ≤ ٢/شهر",
+          "الحضور ≥ ٩٠٪ من الشيفتات المجدولة — التواصل المسبق مطلوب عند أي غياب · الهدف: ≥ ٩٠٪",
+          "الغياب بدون إشعار: خصم يوم كامل تلقائي + تسجيل في بطاقة الأداء",
+          "إرسال سجل النظافة وسجل الهدر قبل نهاية كل شيفت — يُتابَع تلقائياً · الهدف: الالتزام بالشيفت ≥ ٩٠٪",
+        ],
+      },
+      {
+        icon:"♻️",
+        en:"Waste Control (SCA Standards)",ar:"ترشيد الهدر — معايير SCA",
+        items_en:[
+          "Espresso shots wasted per shift: target ≤ 3 (excludes calibration) · KPI: Shot Waste ≤ 3/shift (auto from Waste Log)",
+          "Milk waste per shift: target ≤ 100ml (SCA specialty standard) · KPI: Milk Waste ≤ 100ml/shift (auto)",
+          "Log all waste in real-time via the Waste Log tile — honesty is mandatory · KPI: Zero unreported waste incidents",
+          "Calibration waste: up to 10 shots acceptable — must tag reason as 'calibration' in log",
+          "Improve personal waste score month-over-month — trend tracked in scorecard · KPI: MoM Waste Improvement",
+        ],
+        items_ar:[
+          "شوطات الإسبريسو المهدرة لكل شيفت: الهدف ≤ ٣ (لا تشمل المعايرة) · الهدف: هدر الشوطات ≤ ٣/شيفت (تلقائي من سجل الهدر)",
+          "هدر الحليب لكل شيفت: الهدف ≤ ١٠٠ مل (معيار SCA للقهوة المتخصصة) · الهدف: هدر الحليب ≤ ١٠٠ مل/شيفت (تلقائي)",
+          "تسجيل كل الهدر فوراً عبر تايل سجل الهدر — الصدق إلزامي · الهدف: صفر حوادث هدر غير مُبلَّغ عنها",
+          "هدر المعايرة: حتى ١٠ شوطات مقبولة — يجب وضع سبب 'معايرة' في السجل",
+          "تحسين نقاط الهدر الشخصية شهراً بعد شهر — التطور يُتابع في بطاقة الأداء · الهدف: تحسن شهري في الهدر",
+        ],
+      },
+      {
+        icon:"🧹",
+        en:"Station Hygiene & Cleanliness",ar:"نظافة المحطة وترتيب البار",
+        items_en:[
+          "Complete 10-item cleaning checklist (opening/closing) — submitted with photo evidence via Cleaning Log tile · KPI: Cleanliness Score ≥ 85% (auto)",
+          "Steam wand: purge and wipe with dedicated cloth after EVERY use without exception · KPI: Zero steam wand hygiene incidents",
+          "Group heads: flush 3+ seconds between each shot — clear grounds & oils · KPI: Daily Flush Compliance 100%",
+          "Grinder: brush hourly and fully clean every 3 days (record in notes) · KPI: Grinder Maintenance ≥ 90%",
+          "Bar surface: clear, sanitised, and free of water marks during all service hours · KPI: Visual Standard 100%",
+          "FIFO on all perishables: rotate stock every shift, check dates, escalate anything within 24h of expiry · KPI: Zero expired product incidents",
+          "Temperature control: milk fridge 1–4°C, cold brew at 4–8°C — check daily with thermometer · KPI: Temp Compliance 100%",
+        ],
+        items_ar:[
+          "إكمال قائمة النظافة ١٠ بنود (فتح/إغلاق) — إرسالها مع صورة دليل عبر تايل سجل النظافة · الهدف: نقاط النظافة ≥ ٨٥٪ (تلقائي)",
+          "عصا البخار: تنقية ومسح بقماش مخصص بعد كل استخدام بلا استثناء · الهدف: صفر حوادث عدم نظافة عصا البخار",
+          "رأس الماكينة: شطف ٣+ ثوانٍ بين كل شوطة — لإزالة التفل والزيوت · الهدف: الالتزام بالشطف اليومي ١٠٠٪",
+          "الطاحونة: فرشاة كل ساعة وتنظيف كامل كل ٣ أيام (التسجيل في الملاحظات) · الهدف: صيانة الطاحونة ≥ ٩٠٪",
+          "سطح البار: نظيف ومعقّم وخالٍ من بقع المياه طوال وقت الخدمة · الهدف: المعيار البصري ١٠٠٪",
+          "FIFO لجميع المنتجات القابلة للتلف: تدوير المخزون كل شيفت، فحص التواريخ، إبلاغ فوري عند أي منتج يقترب من الانتهاء · الهدف: صفر حوادث منتج منتهٍ",
+          "ضبط الحرارة: ثلاجة الحليب ١-٤°م، القهوة الباردة ٤-٨°م — فحص يومي بالميزان الحراري · الهدف: الالتزام الحراري ١٠٠٪",
+        ],
+      },
+      {
+        icon:"📈",
+        en:"Upselling & Menu Knowledge",ar:"البيع الإضافي ومعرفة القائمة",
+        items_en:[
+          "Know the full menu: ingredients, allergens, origin of beans, and the story behind every signature drink · KPI: Menu Quiz ≥ 80%",
+          "Suggest one personalised add-on or upgrade per order naturally (not scripted) · KPI: Upsell Attempt Rate ≥ 80%",
+          "Average ticket size: meet monthly branch target set by management · KPI: Avg Ticket ≥ Target (from sales report)",
+          "Seasonal specials: actively recommend new items in the first 2 weeks of launch · KPI: New Item Mention Rate ≥ 70%",
+          "Food pairing: suggest a food item or snack with every drink order · KPI: Pairing Suggestion Rate ≥ 60%",
+        ],
+        items_ar:[
+          "معرفة القائمة الكاملة: المكونات، مسببات الحساسية، أصل الحبوب، وقصة كل مشروب مميز · الهدف: اختبار القائمة ≥ ٨٠٪",
+          "اقتراح إضافة واحدة مخصصة أو ترقية بشكل طبيعي لكل طلب (بدون نص محفوظ) · الهدف: نسبة محاولات البيع الإضافي ≥ ٨٠٪",
+          "متوسط الفاتورة: تحقيق الهدف الشهري للفرع الذي تحدده الإدارة · الهدف: متوسط الفاتورة ≥ الهدف (من تقرير المبيعات)",
+          "المقترحات الموسمية: ترشيح العناصر الجديدة بفاعلية في أول أسبوعين من الإطلاق · الهدف: نسبة ذكر العنصر الجديد ≥ ٧٠٪",
+          "الإقران مع الطعام: اقتراح طعام أو وجبة خفيفة مع كل طلب مشروب · الهدف: نسبة اقتراح الإقران ≥ ٦٠٪",
+        ],
+      },
+      {
+        icon:"😊",
+        en:"Customer Experience",ar:"تجربة العملاء",
+        items_en:[
+          "Greet every customer by name (if known) within 5 seconds of approaching — warm, genuine, no scripts · KPI: Customer Score ≥ 4.0/5 (from reviews)",
+          "Remember regular orders: target 10+ regulars per month by name and drink preference · KPI: Regulars Remembered ≥ 10",
+          "Wait time: deliver every drink within 3.5 minutes of confirmed order — self-monitor and communicate delays · KPI: On-Time ≥ 95%",
+          "Complaint response: escalate to Head Barista within 2 minutes — never minimise a complaint · KPI: Zero unescalated complaints",
+          "Farewell: thank every customer by name, invite them back — this is the Coffee Beats community signature · KPI: Cultural Engagement",
+          "Positive review mentions: aim for 1 named mention per week on coffeebeats.art or Google · KPI: Review Mentions ≥ 4/month",
+        ],
+        items_ar:[
+          "الترحيب بكل عميل بالاسم (إن عُرف) خلال ٥ ثوانٍ من اقترابه — بدفء وصدق، بدون نصوص محفوظة · الهدف: رضا العملاء ≥ ٤.٠/٥ (من التقييمات)",
+          "تذكر الطلبات المنتظمة: الهدف ١٠+ عملاء منتظمين شهرياً بالاسم وتفضيلات الطلب · الهدف: عملاء منتظمون محفوظون ≥ ١٠",
+          "وقت الانتظار: تقديم كل مشروب خلال ٣.٥ دقيقة من تأكيد الطلب — مراقبة ذاتية وإبلاغ عن التأخير · الهدف: ≥ ٩٥٪ في الوقت",
+          "الاستجابة للشكاوى: الإحالة لرئيس البريستا خلال دقيقتين — لا تستهين بأي شكوى أبداً · الهدف: صفر شكاوى غير محالة",
+          "الوداع: شكر كل عميل بالاسم ودعوته للعودة — هذا هو توقيع مجتمع Coffee Beats · الهدف: التفاعل الثقافي",
+          "ذكر المراجعات الإيجابية: استهداف ذكر واحد بالاسم أسبوعياً على coffeebeats.art أو Google · الهدف: الذكر في المراجعات ≥ ٤/شهر",
+        ],
+      },
+      {
+        icon:"🌱",
+        en:"Growth, Training & Development",ar:"النمو والتدريب والتطور",
+        items_en:[
+          "Complete at least 1 structured training module per month (latte art, extraction science, origins, food pairing) · KPI: Training Completion ≥ 1 module/month",
+          "Attend all monthly team calibration sessions — no exceptions unless approved leave · KPI: Calibration Attendance ≥ 90%",
+          "Set and review one personal SMART growth goal monthly with Head Barista · KPI: Goals Set & Reviewed ≥ 10/12 months",
+          "SCA barista skills (Foundation): complete within first 3 months of employment · KPI: SCA Foundation — pass by Month 3",
+          "Latte art progression: rosetta ≥ 90% success rate by Month 2, free pour milk by Month 4 · KPI: Art Progression milestones",
+          "Cross-training: learn and execute at least 2 brew methods (V60, Chemex, AeroPress, syphon) · KPI: Brew Methods ≥ 2",
+        ],
+        items_ar:[
+          "إكمال وحدة تدريبية منظمة واحدة على الأقل شهرياً (لاتيه آرت، علم الاستخلاص، أصول القهوة، الإقران مع الطعام) · الهدف: إتمام التدريب ≥ وحدة/شهر",
+          "حضور جميع جلسات المعايرة الشهرية — بلا استثناء إلا بإجازة مقررة · الهدف: حضور المعايرة ≥ ٩٠٪",
+          "تحديد ومراجعة هدف SMART شخصي شهرياً مع رئيس البريستا · الهدف: الأهداف المحددة والمراجعة ≥ ١٠/١٢ شهراً",
+          "SCA مهارات البريستا (أساسي): الإتمام خلال أول ٣ أشهر من التوظيف · الهدف: اجتياز SCA Foundation بحلول الشهر الثالث",
+          "تقدم لاتيه آرت: روزيتا ≥ ٩٠٪ نجاح بحلول الشهر الثاني، الصب الحر بحلول الشهر الرابع · الهدف: معالم التقدم الفني",
+          "التدريب المتقاطع: تعلم وتنفيذ طريقتي تحضير على الأقل (V60، كيمكس، إيروبريس، سيفون) · الهدف: طرق التحضير ≥ ٢",
+        ],
+      },
+    ];
+
+    sections.forEach(sec=>{
+      const sCard=el("div",{class:"card",style:{marginBottom:"10px"}});
+      const sHd=el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}});
+      sHd.appendChild(el("span",{style:{fontSize:"20px"}},sec.icon));
+      sHd.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px"}},isAR?sec.ar:sec.en));
+      sCard.appendChild(sHd);
+      const itemsToShow = isAR?sec.items_ar:sec.items_en;
+      const ol=el("ol",{style:{margin:"0",paddingInlineStart:"18px",fontSize:"13px",lineHeight:"1.8",color:"var(--ink-dim)"}});
+      itemsToShow.forEach(item=>{
+        const li=el("li",{style:{marginBottom:"5px"}});
+        li.textContent=item;
+        // highlight KPI targets
+        if(item.includes("الهدف:")||item.includes("· KPI:")||item.includes("KPI:")){
+          li.innerHTML=item.replace(/·\s*(KPI:[^,.<]+|الهدف:[^,.<]+)/g,'<span style="color:var(--accent);font-weight:700"> · $1</span>');
+        }
+        ol.appendChild(li);
+      });
+      sCard.appendChild(ol);
+      wrap.appendChild(sCard);
+    });
+    wrap.appendChild(btnBack());
+  }
+  renderJD();
+  return wrap;
+};
+
 // export helpers
 // ==============================================================
 function download(name, blob) {
@@ -6789,6 +8932,7 @@ function exportAllCSVZip() {
     "menu.csv": toCSV(state.menu.map(({ branches, ...rest }) => ({ ...rest, branches: (branches||[]).join("|") }))),
     "snapshots.csv": toCSV(state.snapshots.flatMap(s => s.entries.map(e => ({ snapshot_id: s.id, as_of: s.as_of, created_at: s.created_at, created_by: s.created_by_name||s.created_by, branch: e.branch, item_id: e.item_id, qty: e.qty })))),
     "waste.csv": toCSV(state.waste),
+    "assets.csv": toCSV(state.assets || []),
     "purchases_header.csv": toCSV(state.purchases.map(({ lines, ...rest }) => rest)),
     "purchases_lines.csv": toCSV(state.purchases.flatMap(p => p.lines.map(l => ({ purchase_id: p.id, date: p.date, branch: p.branch, supplier: p.supplier, ...l })))),
     "petty_cash.csv": toCSV(state.petty_cash),
