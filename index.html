@@ -1376,7 +1376,7 @@ function loginView() {
       const snap = await db.collection("staff_public").where("active", "==", true).get();
       if (!snap.empty) {
         const people = [];
-        snap.forEach(doc => people.push(doc.data()));
+        snap.forEach(doc => people.push({ id: doc.id, ...doc.data() }));
         return people;
       }
     } catch (_) {}
