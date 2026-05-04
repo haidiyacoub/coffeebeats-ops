@@ -37,6 +37,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Email subscribers from coffeebeats.art — public write only
+    match /email_subscribers/{docId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
     // Deny everything else
     match /{document=**} {
       allow read, write: if false;

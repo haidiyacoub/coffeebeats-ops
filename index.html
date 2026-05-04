@@ -5724,20 +5724,30 @@ routes.settings = function (u) {
         const otherBranch = b === "maadi" ? "zawya" : "maadi";
         const hasOther = bUser.branches.includes(otherBranch);
         const toggleBtn = el("button", { class: "btn ghost", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, hasOther ? `Also ${otherBranch} ✓` : `Add to ${otherBranch}`);
-        toggleBtn.addEventListener("click", () => {
-          if (hasOther) {
-            bUser.branches = bUser.branches.filter(br => br !== otherBranch);
-          } else {
-            bUser.branches = [...new Set([...bUser.branches, otherBranch])];
+        toggleBtn.addEventListener("click", async () => {
+          const newBranches = hasOther
+            ? bUser.branches.filter(br => br !== otherBranch)
+            : [...new Set([...bUser.branches, otherBranch])];
+          if (bUser.staff_uid) {
+            try {
+              await functions.httpsCallable("setStaffRole")({ targetUid: bUser.staff_uid, role: bUser.role, branches: newBranches });
+            } catch (e) { toast(e.message || "Failed to update Firebase", "error"); return; }
           }
+          bUser.branches = newBranches;
           saveState(); renderTeam();
         });
         row.appendChild(toggleBtn);
 
         // Active toggle
         const activeBtn = el("button", { class: bUser.active ? "btn ghost" : "btn secondary", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, bUser.active ? "Deactivate" : "Reactivate");
-        activeBtn.addEventListener("click", () => {
-          bUser.active = !bUser.active;
+        activeBtn.addEventListener("click", async () => {
+          const newActive = !bUser.active;
+          if (bUser.staff_uid) {
+            try {
+              await functions.httpsCallable("setStaffActive")({ targetUid: bUser.staff_uid, active: newActive });
+            } catch (e) { toast(e.message || "Failed to update Firebase", "error"); return; }
+          }
+          bUser.active = newActive;
           saveState(); renderTeam();
         });
         row.appendChild(activeBtn);
