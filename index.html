@@ -332,8 +332,10 @@ Content-Type: text/html; charset=UTF-8
   a.gallery-row:hover { background: var(--surface-2) !important; }
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 </head>
 <body>
 <div id="app"></div>
@@ -354,8 +356,44 @@ const _fbApp = firebase.initializeApp({
   appId: "1:1046768234777:web:ca6193791030e2fbde5588",
   measurementId: "G-7DHMD6QXL8",
 });
-const db      = firebase.firestore();
-const storage = firebase.storage();
+const db        = firebase.firestore();
+const storage   = firebase.storage();
+const auth      = firebase.auth();
+const functions = firebase.functions();
+
+function startReviewsListener() {
+  db.collection("reviews").orderBy("at", "asc").onSnapshot(snap => {
+    if (!state.customer_feedback) state.customer_feedback = [];
+    const existingIds = new Set(state.customer_feedback.map(f => f.id));
+    let added = 0;
+    snap.docChanges().forEach(change => {
+      if (change.type !== "added") return;
+      const doc = change.doc;
+      if (existingIds.has(doc.id)) return;
+      const d = doc.data();
+      const matchUser = (state.users || []).find(u =>
+        u.name && d.barista && u.name.toLowerCase().startsWith(d.barista.toLowerCase().split(' ')[0])
+      );
+      state.customer_feedback.push({
+        id: doc.id,
+        at: d.at || new Date(d.timestamp).getTime(),
+        by: "website",
+        by_name: "coffeebeats.art",
+        barista_name: d.barista || "",
+        barista_id: matchUser?.id || null,
+        user_id: matchUser?.id || null,
+        rating: d.rating || 0,
+        source: "coffeebeats.art",
+        note: [d.feedback, d.standout].filter(Boolean).join(' | '),
+        branch: d.branch || "",
+        month: new Date(d.at || Date.now()).toISOString().slice(0, 7)
+      });
+      existingIds.add(doc.id);
+      added++;
+    });
+    if (added > 0) { saveState(); render(); }
+  }, err => console.warn("Reviews listener error:", err));
+}
 /* ========= Coffee Beats Operations — v1 =========
  * Single-file PWA. Persists to localStorage. Photos to IndexedDB.
  * Roles: owner, head_barista, barista
@@ -964,14 +1002,13 @@ async function pullFromFirestore() {
     }
     if (!remote.users && !remote.items) return { ok: false, err: "No data in Firestore yet" };
     const settingsBak = state.settings;
-    const sessionBak  = state.session;
     Object.assign(state, remote);
     migrateState(state);
     state.settings = { ...remote.settings, ...settingsBak };
-    state.session  = sessionBak;
     state.settings.last_pull = now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     doSync(); // push back any migration fixes
+    startReviewsListener();
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -999,15 +1036,29 @@ async function autoPullOnStart() {
 }
 
 // ----- auth / session -----
-function setSession(user) {
-  state.session = user ? { user_id: user.id, login_at: now() } : null;
-  saveState();
-  if (user) startIdleTimer(); else stopIdleTimer();
-  render();
-}
+// state._auth holds the resolved user profile for the current Firebase Auth session.
+// It is in-memory only — never persisted to localStorage or Firestore.
 function currentUser() {
-  if (!state.session) return null;
-  return state.users.find(u => u.id === state.session.user_id) || null;
+  return state._auth || null;
+}
+
+async function _resolveAuth(fbUser) {
+  if (!fbUser) { state._auth = null; return; }
+  const claims   = (await fbUser.getIdTokenResult()).claims;
+  const staffSnap = await db.collection("staff").doc(fbUser.uid).get();
+  const staffData = staffSnap.exists ? staffSnap.data() : {};
+  // Merge claims (role, branches from JWT) with per-user overrides from Firestore
+  state._auth = {
+    uid:          fbUser.uid,
+    id:           fbUser.uid,  // alias so legacy code using u.id still works
+    name:         staffData.name  || fbUser.displayName || "Staff",
+    role:         claims.role     || staffData.role,
+    branches:     claims.branches || staffData.branches || [],
+    active:       staffData.active !== false,
+    deny_access:  staffData.deny_access  || [],
+    extra_access: staffData.extra_access || [],
+    legacy_id:    staffData.legacy_id    || null,
+  };
 }
 
 // ----- inactivity auto-logout (10 minutes) -----
@@ -1020,7 +1071,7 @@ function startIdleTimer() {
   stopIdleTimer();
   // Show a 60-second warning banner before logging out
   _idleWarnTimer = setTimeout(() => {
-    if (!state.session) return;
+    if (!state._auth) return;
     if (_idleBanner) return;
     _idleBanner = document.createElement("div");
     _idleBanner.id = "idle-banner";
@@ -1037,17 +1088,17 @@ function startIdleTimer() {
   }, IDLE_TIMEOUT_MS - 60000);
 
   _idleTimer = setTimeout(() => {
-    if (!state.session) return;
+    if (!state._auth) return;
     if (_idleBanner) { _idleBanner.remove(); _idleBanner = null; }
-    setSession(null);
-    // Show a brief notice on the login screen
-    setTimeout(() => {
-      const note = document.createElement("div");
-      note.style.cssText = "background:#f5e6d0;color:#2b1810;padding:10px 16px;border-radius:10px;font-size:14px;text-align:center;margin-bottom:12px;font-weight:600;";
-      note.textContent = "You were signed out after 10 minutes of inactivity.";
-      const loginCard = document.querySelector(".card");
-      if (loginCard) loginCard.insertAdjacentElement("beforebegin", note);
-    }, 150);
+    auth.signOut().then(() => {
+      setTimeout(() => {
+        const note = document.createElement("div");
+        note.style.cssText = "background:#f5e6d0;color:#2b1810;padding:10px 16px;border-radius:10px;font-size:14px;text-align:center;margin-bottom:12px;font-weight:600;";
+        note.textContent = "You were signed out after 10 minutes of inactivity.";
+        const loginCard = document.querySelector(".card");
+        if (loginCard) loginCard.insertAdjacentElement("beforebegin", note);
+      }, 150);
+    });
   }, IDLE_TIMEOUT_MS);
 }
 
@@ -1059,7 +1110,7 @@ function stopIdleTimer() {
 }
 
 function resetIdleTimer() {
-  if (!state.session) return;
+  if (!state._auth) return;
   if (_idleBanner) { _idleBanner.remove(); _idleBanner = null; }
   startIdleTimer();
 }
@@ -1258,9 +1309,9 @@ function canAccess(routeName, u) {
 function render() {
   const root = $("#app");
   root.innerHTML = "";
-  if (!state.session) { stopIdleTimer(); root.appendChild(loginView()); return; }
+  if (!state._auth) { stopIdleTimer(); root.appendChild(loginView()); return; }
   const u = currentUser();
-  if (!u || !u.active) { setSession(null); return; }
+  if (!u || !u.active) { auth.signOut(); return; }
   // Guard direct-access to restricted routes
   if (!canAccess(route.name, u)) {
     route = { name: "home", params: {} };
@@ -1283,7 +1334,7 @@ function topbar(u) {
     el("img", { class: "logo", src: CB_LOGO_SRC, alt: "Coffee Beats", style: { height: "52px" } }),
     el("div", { style: { flex: "1" } }),
     el("span", { class: "chip" }, roleLabel),
-    el("button", { class: "chip", onClick: () => { if (confirm("Sign out?")) setSession(null); } }, "Logout"),
+    el("button", { class: "chip", onClick: () => { if (confirm("Sign out?")) auth.signOut(); } }, "Logout"),
   ]);
   return t;
 }
@@ -1294,6 +1345,7 @@ function topbar(u) {
 function loginView() {
   let pick = null;
   let pin = "";
+  let _busy = false;
   const wrap = el("div", {});
   wrap.appendChild(el("div", { class: "topbar" }, [
     el("img", { class: "logo", src: CB_LOGO_SRC, alt: "Coffee Beats", style: { height: "52px" } }),
@@ -1302,47 +1354,59 @@ function loginView() {
   const main = el("main", {});
   wrap.appendChild(main);
 
-  // Big brand hero on the login screen
-  const hero = el("div", {
+  main.appendChild(el("div", {
     style: { textAlign: "center", padding: "18px 0 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }
   }, [
     el("img", { src: CB_LOGO_SRC, alt: "Coffee Beats", style: { height: "84px", width: "auto" } }),
-    el("div", {
-      style: { fontSize: "11px", letterSpacing: "2px", color: "#EFBBA3", textTransform: "uppercase", fontWeight: "700" }
-    }, "Specialty Coffee for Creators"),
-  ]);
-  main.appendChild(hero);
+    el("div", { style: { fontSize: "11px", letterSpacing: "2px", color: "#EFBBA3", textTransform: "uppercase", fontWeight: "700" } }, "Specialty Coffee for Creators"),
+  ]));
 
-  const banner = el("div", { class: "banner-arch" }, "Tap your name, then enter your 4-digit PIN. Owner can change or reset PINs in Settings.");
-  main.appendChild(banner);
+  main.appendChild(el("div", { class: "banner-arch" }, "Tap your name, then enter your 4-digit PIN."));
 
   const userList = el("div", { class: "list" });
-  const people = state.users.filter(u => u.active);
-  for (const u of people) {
-    const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
-    const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
-    const branchLabel = u.role === "barista" ? "rotates" : (u.role === "accountant" ? "all branches" : u.branches.join(", "));
-    const r = el("div", { class: "row", onClick: () => selectUser(u) }, [
-      el("div", { class: "icon", style: { fontSize: "22px" } }, icon),
-      el("div", { class: "grow" }, [
-        el("div", { class: "title" }, u.name),
-        el("div", { class: "sub" }, `${roleMap[u.role] || u.role} · ${branchLabel}`),
-      ]),
-      el("div", { class: "pill" }, "Tap"),
-    ]);
-    userList.appendChild(r);
-  }
   main.appendChild(userList);
 
   const pinPad = el("div", { class: "card", style: { marginTop: "16px", display: "none" } });
   main.appendChild(pinPad);
+
+  // Load staff from staff_public (public Firestore collection, no auth needed).
+  // Falls back to state.users (localStorage cache) if Firestore is unavailable.
+  async function loadPeople() {
+    try {
+      const snap = await db.collection("staff_public").where("active", "==", true).get();
+      if (!snap.empty) {
+        const people = [];
+        snap.forEach(doc => people.push(doc.data()));
+        return people;
+      }
+    } catch (_) {}
+    // Fallback: use cached state.users (pre-migration or offline)
+    return (state.users || []).filter(u => u.active);
+  }
+
+  loadPeople().then(people => {
+    userList.innerHTML = "";
+    const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
+    for (const u of people) {
+      const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
+      const branchLabel = u.role === "barista" ? "rotates" : (u.role === "accountant" ? "all branches" : (u.branches || []).join(", "));
+      userList.appendChild(el("div", { class: "row", onClick: () => selectUser(u) }, [
+        el("div", { class: "icon", style: { fontSize: "22px" } }, icon),
+        el("div", { class: "grow" }, [
+          el("div", { class: "title" }, u.name),
+          el("div", { class: "sub" }, `${roleMap[u.role] || u.role} · ${branchLabel}`),
+        ]),
+        el("div", { class: "pill" }, "Tap"),
+      ]));
+    }
+  });
 
   function selectUser(u) {
     pick = u; pin = "";
     pinPad.style.display = "block";
     pinPad.innerHTML = "";
     pinPad.appendChild(el("h2", {}, `PIN for ${u.name}`));
-    const dots = el("div", { class: "pin-dots" }, [0,1,2,3].map(i => el("div", { class: "d" + (i < pin.length ? " on" : "") })));
+    const dots = el("div", { class: "pin-dots" }, [0,1,2,3].map(i => el("div", { class: "d" })));
     pinPad.appendChild(dots);
     const grid = el("div", { class: "pin-grid" });
     pinPad.appendChild(grid);
@@ -1355,13 +1419,28 @@ function loginView() {
       [0,1,2,3].forEach(i => dots.appendChild(el("div", { class: "d" + (i < pin.length ? " on" : "") })));
     }
     function press(k) {
+      if (_busy) return;
       if (k === "⌫") { pin = pin.slice(0,-1); refresh(); return; }
       if (k === "OK") { tryLogin(); return; }
       if (pin.length < 4) { pin += k; refresh(); if (pin.length === 4) tryLogin(); }
     }
-    function tryLogin() {
-      if (pin === pick.pin) { setSession(pick); }
-      else { toast("Wrong PIN", "error"); pin = ""; refresh(); }
+    async function tryLogin() {
+      if (_busy || pin.length < 4) return;
+      _busy = true;
+      // staffId is the Firebase UID (uid field, set during migration).
+      // Falls back to legacy id for pre-migration state.users entries.
+      const staffId = pick.uid || pick.id;
+      try {
+        const verifyPin = functions.httpsCallable("verifyPin");
+        const { data } = await verifyPin({ staffId, pin });
+        await auth.signInWithCustomToken(data.token);
+        // onAuthStateChanged fires automatically → _resolveAuth → render()
+      } catch (e) {
+        const msg = e.code === "functions/unauthenticated" ? "Wrong PIN" : (e.message || "Login failed");
+        toast(msg, "error");
+        pin = ""; refresh();
+        _busy = false;
+      }
     }
   }
 
@@ -2976,7 +3055,7 @@ routes.salaries = function (u) {
           ]),
           el("div", { class: "v", style: { display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"4px" } }, [
             statusPill,
-            ...((!r.approved && (u.role === "owner")) ? [el("button", { class: "btn ghost", style: { fontSize:"11px", padding:"4px 10px", minHeight:"unset" }, onClick: () => { r.approved = true; r.approved_by = state.session; saveState(); drawBody(); } }, "Approve")] : []),
+            ...((!r.approved && (u.role === "owner")) ? [el("button", { class: "btn ghost", style: { fontSize:"11px", padding:"4px 10px", minHeight:"unset" }, onClick: () => { r.approved = true; r.approved_by = state._auth?.uid || null; saveState(); drawBody(); } }, "Approve")] : []),
           ]),
         ]));
       }
@@ -5731,15 +5810,44 @@ routes.settings = function (u) {
     });
     tcRow.appendChild(tcSave);
 
-    const tcLock = el("button", { class: "btn ghost" }, "Lock this device");
-    tcLock.addEventListener("click", () => {
-      if (!confirm("Lock this device? You'll need to enter the access code again.")) return;
-      Gate.lock();
-      location.reload();
-    });
-    tcRow.appendChild(tcLock);
     tc.appendChild(tcRow);
     wrap.appendChild(tc);
+  }
+
+  // ── Firebase Auth migration (owner only, one-time) ─────────────────────────
+  if (u.role === "owner") {
+    const migCard = el("div", { class: "card", style: { marginTop: "14px" } });
+    migCard.appendChild(el("h2", {}, "🔐 Firebase Auth Migration"));
+    migCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+      "One-time setup: creates a secure Firebase Auth account for each staff member. Run this once after deploying Cloud Functions. Existing staff PINs will be hashed server-side."));
+    const migLog = el("div", { style: { fontFamily: "monospace", fontSize: "12px", background: "var(--surface-2)", padding: "10px", borderRadius: "8px", maxHeight: "160px", overflowY: "auto", marginBottom: "10px", display: "none" } });
+    migCard.appendChild(migLog);
+    const migBtn = el("button", { class: "btn", onClick: async () => {
+      if (!confirm("Create Firebase Auth accounts for all active staff? Existing accounts will be skipped.")) return;
+      migBtn.disabled = true; migBtn.textContent = "Migrating…";
+      migLog.style.display = "block"; migLog.innerHTML = "";
+      const migrateUser = functions.httpsCallable("migrateUser");
+      const users = (state.users || []).filter(u => u.active && u.role !== "manager" && u.role !== "helper");
+      let ok = 0, skip = 0;
+      for (const su of users) {
+        if (su.staff_uid) { migLog.innerHTML += `⏭ ${su.name} — already migrated<br>`; skip++; continue; }
+        try {
+          const { data } = await migrateUser({ name: su.name, role: su.role, branches: su.branches || [], pin: su.pin || "0000", legacyId: su.id });
+          su.staff_uid = data.uid;
+          migLog.innerHTML += `✅ ${su.name} → ${data.uid}<br>`;
+          ok++;
+        } catch (e) {
+          migLog.innerHTML += `❌ ${su.name} — ${e.message}<br>`;
+        }
+        migLog.scrollTop = migLog.scrollHeight;
+      }
+      saveState();
+      migLog.innerHTML += `<br><b>Done: ${ok} created, ${skip} skipped.</b>`;
+      migBtn.textContent = "Run Migration"; migBtn.disabled = false;
+      toast(`Migration complete — ${ok} accounts created`);
+    } }, "Run Migration");
+    migCard.appendChild(migBtn);
+    wrap.appendChild(migCard);
   }
 
   // danger
@@ -7774,22 +7882,6 @@ function kpiCustomerScore(userId) {
   return Math.round(avg * 20); // convert 0–5 stars to 0–100
 }
 
-// Pull the latest customer_feedback from Firestore to refresh KPI scores
-async function kpiFetchFeedback() {
-  try {
-    const doc = await db.collection("state").doc("kpi").get();
-    if (doc.exists && Array.isArray(doc.data()?.customer_feedback)) {
-      state.customer_feedback = doc.data().customer_feedback;
-      saveState();
-      toast("✅ Customer feedback refreshed — " + state.customer_feedback.length + " entries loaded.");
-      render();
-    } else {
-      toast("No feedback data in Firestore yet.");
-    }
-  } catch(e) {
-    toast("Fetch failed: " + e.message, "error");
-  }
-}
 
 function kpiGetUserScores(userId) {
   const cutoff = Date.now() - 30*24*60*60*1000;
@@ -7836,19 +7928,13 @@ routes.scorecard = function(u) {
   wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},"🏆 KPI Scorecards"));
   wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"10px"}},"Team performance · last 30 days · auto-calculated from self-reports"));
 
-  // ── Customer feedback sync button ─────────────────────────────────────────
+  // ── Customer feedback live count ──────────────────────────────────────────
   const fbCount = (state.customer_feedback||[]).length;
-  const fbBar = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"14px",flexWrap:"wrap"}});
-  fbBar.appendChild(el("div",{class:"muted small",style:{flex:"1"}},
+  wrap.appendChild(el("div",{class:"muted small",style:{marginBottom:"14px"}},
     fbCount
-      ? "😊 " + fbCount + " customer feedback entr" + (fbCount===1?"y":"ies") + " in sync — Customer Score is live"
-      : "😊 No customer feedback synced yet — ratings from coffeebeats.art will appear here after setup"
+      ? "😊 " + fbCount + " customer feedback entr" + (fbCount===1?"y":"ies") + " — live from coffeebeats.art"
+      : "😊 No customer reviews yet — they'll appear here automatically once customers submit on coffeebeats.art"
   ));
-  const fbBtn = el("button",{class:"btn ghost",style:{fontSize:"12px",padding:"5px 12px"},
-    onClick: async () => { fbBtn.textContent="Fetching…"; fbBtn.disabled=true; await kpiFetchFeedback(); fbBtn.textContent="🔄 Sync feedback"; fbBtn.disabled=false; }
-  },"🔄 Sync feedback");
-  fbBar.appendChild(fbBtn);
-  wrap.appendChild(fbBar);
 
   const allU = state.users.filter(x=>["barista","head_barista"].includes(x.role)&&x.active);
   const allScores = kpiGetAllScores();
@@ -8058,7 +8144,7 @@ routes.scorecard = function(u) {
     const cfCard = el("div",{class:"card",style:{marginTop:"12px"}});
     cfCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},"😊 Customer Feedback Log"));
     cfCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
-      "Customer Score auto-feeds from coffeebeats.art reviews — ratings from the public form flow straight into each barista's KPI. Use 'Sync feedback' on the scorecard page to pull the latest, or override manually below."));
+      "Customer Score auto-feeds from coffeebeats.art reviews — ratings from the public form flow straight into each barista's KPI in real-time. Override manually below if needed."));
     const cfSelWrap = el("div",{style:{marginBottom:"10px"}});
     cfSelWrap.appendChild(el("label",{},"Barista"));
     const cfSel = el("select",{});
@@ -8760,18 +8846,18 @@ function exportAllCSVZip() {
 // ==============================================================
 state = loadState();
 
-function bootApp() {
+// Firebase Auth drives the entire session lifecycle.
+// onAuthStateChanged fires on every page load and after signIn/signOut.
+auth.onAuthStateChanged(async fbUser => {
+  await _resolveAuth(fbUser);
   render();
-  if (state.session) startIdleTimer();
-  autoPullOnStart();
-}
-
-if (Gate.isUnlocked()) {
-  bootApp();
-} else {
-  // Show gate — use state.settings.team_code as the correct code
-  Gate.show(state.settings.team_code || "coffeeteam2026", bootApp);
-}
+  if (state._auth) {
+    startIdleTimer();
+    autoPullOnStart();
+  } else {
+    stopIdleTimer();
+  }
+});
 </script>
 </body>
 </html>

@@ -30,3 +30,10 @@ Skills/
 # Alternate / eval HTML pages
 index_coffeebeatsart.html
 zawya-item-filter-eval-review.html
+
+# Firebase / Node
+functions/node_modules/
+functions/package-lock.json
+firebase-debug*.log
+functions/firebase-debug*.log
+.firebase/
