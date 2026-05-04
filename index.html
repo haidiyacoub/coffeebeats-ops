@@ -5704,89 +5704,95 @@ routes.settings = function (u) {
   const teamBody = el("div", {});
   tm.appendChild(teamBody);
 
-  function renderTeam() {
-    teamBody.innerHTML = "";
+  async function renderTeam() {
+    teamBody.innerHTML = '<div class="muted small" style="padding:8px">Loading…</div>';
 
-    // ── per-branch barista lists ──
-    for (const b of ["maadi", "zawya"]) {
-      const branchBaristas = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.branches.includes(b));
-      const sect = el("div", { style: { marginBottom: "16px" } });
-      sect.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", marginBottom: "8px" } }, b === "maadi" ? "☕ Maadi" : "🏙 Zawya"));
-
-      if (branchBaristas.length === 0) {
-        sect.appendChild(el("div", { class: "muted small" }, "No baristas assigned yet."));
-      }
-      for (const bUser of branchBaristas) {
-        const row = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "7px 10px", background: bUser.active ? "var(--surface-2)" : "#fdecea", borderRadius: "8px", marginBottom: "6px" } });
-        row.appendChild(el("span", { style: { flex: "1", fontSize: "14px" } }, bUser.name + (bUser.role === "head_barista" ? " ⭐" : "") + (!bUser.active ? " (inactive)" : "")));
-
-        // Toggle other branch
-        const otherBranch = b === "maadi" ? "zawya" : "maadi";
-        const hasOther = bUser.branches.includes(otherBranch);
-        const toggleBtn = el("button", { class: "btn ghost", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, hasOther ? `Also ${otherBranch} ✓` : `Add to ${otherBranch}`);
-        toggleBtn.addEventListener("click", async () => {
-          const newBranches = hasOther
-            ? bUser.branches.filter(br => br !== otherBranch)
-            : [...new Set([...bUser.branches, otherBranch])];
-          if (bUser.staff_uid) {
-            try {
-              await functions.httpsCallable("setStaffRole")({ targetUid: bUser.staff_uid, role: bUser.role, branches: newBranches });
-            } catch (e) { toast(e.message || "Failed to update Firebase", "error"); return; }
-          }
-          bUser.branches = newBranches;
-          saveState(); renderTeam();
-        });
-        row.appendChild(toggleBtn);
-
-        // Active toggle
-        const activeBtn = el("button", { class: bUser.active ? "btn ghost" : "btn secondary", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, bUser.active ? "Deactivate" : "Reactivate");
-        activeBtn.addEventListener("click", async () => {
-          const newActive = !bUser.active;
-          if (bUser.staff_uid) {
-            try {
-              await functions.httpsCallable("setStaffActive")({ targetUid: bUser.staff_uid, active: newActive });
-            } catch (e) { toast(e.message || "Failed to update Firebase", "error"); return; }
-          }
-          bUser.active = newActive;
-          saveState(); renderTeam();
-        });
-        row.appendChild(activeBtn);
-        sect.appendChild(row);
-      }
-      teamBody.appendChild(sect);
+    let allStaff;
+    try {
+      const snap = await db.collection("staff_public").get();
+      allStaff = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+      allStaff.sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      teamBody.innerHTML = `<div class="muted small" style="color:var(--bad)">Failed to load staff: ${e.message}</div>`;
+      return;
     }
 
-    // ── Add new barista ──
+    teamBody.innerHTML = "";
+    const roleLabel = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
+
+    for (const s of allStaff) {
+      const row = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "9px 10px", background: s.active ? "var(--surface-2)" : "#fdecea", borderRadius: "8px", marginBottom: "6px" } });
+
+      const info = el("div", { style: { flex: "1" } });
+      info.appendChild(el("div", { style: { fontSize: "14px", fontWeight: "600" } }, s.name + (s.role === "head_barista" ? " ⭐" : "")));
+      info.appendChild(el("div", { class: "muted small" }, `${roleLabel[s.role] || s.role}${s.branches?.length ? " · " + s.branches.join(", ") : ""}${!s.active ? " · inactive" : ""}`));
+      row.appendChild(info);
+
+      if (s.role === "barista" || s.role === "head_barista") {
+        for (const b of ["maadi", "zawya"]) {
+          const has = (s.branches || []).includes(b);
+          const bBtn = el("button", { class: has ? "btn secondary" : "btn ghost", style: { width: "auto", padding: "4px 9px", fontSize: "11px" } }, has ? `${b} ✓` : b);
+          bBtn.addEventListener("click", async () => {
+            const newBranches = has ? (s.branches || []).filter(br => br !== b) : [...new Set([...(s.branches || []), b])];
+            bBtn.disabled = true;
+            try {
+              await functions.httpsCallable("setStaffRole")({ targetUid: s.uid, role: s.role, branches: newBranches });
+              renderTeam();
+            } catch (e) { toast(e.message || "Failed to update", "error"); bBtn.disabled = false; }
+          });
+          row.appendChild(bBtn);
+        }
+      }
+
+      const activeBtn = el("button", { class: s.active ? "btn ghost" : "btn secondary", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, s.active ? "Deactivate" : "Reactivate");
+      activeBtn.addEventListener("click", async () => {
+        activeBtn.disabled = true;
+        try {
+          await functions.httpsCallable("setStaffActive")({ targetUid: s.uid, active: !s.active });
+          renderTeam();
+        } catch (e) { toast(e.message || "Failed to update", "error"); activeBtn.disabled = false; }
+      });
+      row.appendChild(activeBtn);
+      teamBody.appendChild(row);
+    }
+
+    // ── Add new staff member ──
     const addCard = el("div", { style: { background: "var(--surface-2)", borderRadius: "10px", padding: "12px", marginTop: "8px" } });
-    addCard.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", marginBottom: "10px" } }, "Add new barista"));
-    const nameIn   = el("input", { type: "text",   placeholder: "Full name",   style: { marginBottom: "8px" } });
-    const pinIn    = el("input", { type: "text",   placeholder: "PIN (4 digits)", style: { marginBottom: "8px" } });
-    const roleIn   = el("select", { style: { marginBottom: "8px" } }, [
-      el("option", { value: "barista" }, "Barista"),
+    addCard.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", marginBottom: "10px" } }, "Add new staff member"));
+    const nameIn = el("input", { type: "text", placeholder: "Full name", style: { marginBottom: "8px" } });
+    const pinIn  = el("input", { type: "text", placeholder: "PIN (4 digits)", maxlength: "4", style: { marginBottom: "8px" } });
+    const roleIn = el("select", { style: { marginBottom: "8px" } }, [
+      el("option", { value: "barista" },      "Barista"),
       el("option", { value: "head_barista" }, "Head Barista"),
+      el("option", { value: "manager" },      "Manager"),
+      el("option", { value: "helper" },       "Helper"),
+      el("option", { value: "accountant" },   "Accountant"),
     ]);
     const branchCheckboxes = el("div", { style: { display: "flex", gap: "12px", marginBottom: "10px", alignItems: "center" } });
     const cbMaadi = el("input", { type: "checkbox", id: "cb_maadi_new", checked: "true" });
     const cbZawya = el("input", { type: "checkbox", id: "cb_zawya_new" });
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbMaadi, document.createTextNode(" Maadi")]));
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbZawya, document.createTextNode(" Zawya")]));
-    const addBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "+ Add Barista");
-    addBtn.addEventListener("click", () => {
+    const addBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "+ Add Staff Member");
+    addBtn.addEventListener("click", async () => {
       const name = nameIn.value.trim();
       const pin  = pinIn.value.trim();
-      if (!name) { toast("Enter a name first."); return; }
-      if (state.users.some(x => x.name.toLowerCase() === name.toLowerCase())) { toast("Name already exists."); return; }
-      if (pin && state.users.some(x => x.pin === pin)) { toast("PIN already taken — choose another."); return; }
+      if (!name) { toast("Enter a name first.", "error"); return; }
+      if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) { toast("Enter a 4-digit PIN.", "error"); return; }
+      if (allStaff.some(x => x.name.toLowerCase() === name.toLowerCase())) { toast("Name already exists.", "error"); return; }
       const branches = [];
       if (cbMaadi.checked) branches.push("maadi");
       if (cbZawya.checked) branches.push("zawya");
-      if (branches.length === 0) { toast("Select at least one branch."); return; }
-      const autoPin = () => { for (let i=1000;i<9999;i++){const p=String(i);if(!state.users.some(x=>x.pin===p))return p;}return "0001"; };
-      state.users.push({ id: uuid(), name, role: roleIn.value, pin: pin || autoPin(), branches, active: true });
-      saveState();
-      nameIn.value = ""; pinIn.value = "";
-      toast(`${name} added ✓`);
-      renderTeam();
+      addBtn.disabled = true; addBtn.textContent = "Adding…";
+      try {
+        await functions.httpsCallable("createStaffUser")({ name, role: roleIn.value, branches, pin });
+        nameIn.value = ""; pinIn.value = "";
+        toast(`${name} added ✓`);
+        renderTeam();
+      } catch (e) {
+        toast(e.message || "Failed to add staff", "error");
+        addBtn.disabled = false; addBtn.textContent = "+ Add Staff Member";
+      }
     });
     [nameIn, pinIn, roleIn, branchCheckboxes, addBtn].forEach(el2 => addCard.appendChild(el2));
     teamBody.appendChild(addCard);
