@@ -3303,6 +3303,15 @@ routes.penalties = function (u) {
   const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
   if (canEnter) {
     btnRow.appendChild(el("button", { class: "btn secondary", onClick: addPenalty }, "➕ Record penalty"));
+    // Missing-stamp checker: pick a past date, auto-apply 2-day deductions for no-shows
+    btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => {
+      const dateVal = prompt("Check missing stamps for date (YYYY-MM-DD):", localISODate(new Date(Date.now() - 86400000)));
+      if (!dateVal || !/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) return;
+      if (dateVal >= localISODate(new Date())) return toast("Choose a past date", "error");
+      const n = applyMissingStampPenalties(dateVal, u);
+      if (n === 0) toast("No missing stamps found for " + dateVal + " — all good or no morning shifts scheduled", "ok");
+      else { toast(`⚠ ${n} missing-stamp deduction${n > 1 ? "s" : ""} applied for ${dateVal}`, "warn"); render(); }
+    }}, "🔍 Check missing stamps"));
   } else {
     wrap.appendChild(el("div", { class: "banner-arch" }, "View-only access. Penalties are entered by the owner or head barista."));
   }
@@ -6088,6 +6097,16 @@ routes.signin_stamp_new = function (u) {
         for (let i = 0; i < photoBlobs.length; i++) {
           try { await IDB.put(photoIds[i], photoBlobs[i]); } catch (e) { console.warn(e); }
         }
+        // Pre-compute early_bonus before pushing so it's in the record
+        const _stampSubmitTime = new Date(s.at);
+        const _stampTodayStr   = localISODate(_stampSubmitTime);
+        const _stampBot        = state.branch_opening_times || {};
+        const _stampOpenStr    = ((_stampBot[branch?.toLowerCase()] || {})["morning"])
+                                 || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
+        const _stampOpeningMs  = new Date(_stampTodayStr + "T" + _stampOpenStr + ":00").getTime();
+        const _stampMinsLate   = Math.round((_stampSubmitTime.getTime() - _stampOpeningMs) / 60000);
+        const _earlyBonus      = _stampMinsLate <= -30;
+
         state.signin_stamps.push({
           id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
           branch,
@@ -6095,6 +6114,8 @@ routes.signin_stamp_new = function (u) {
           photo_ids: photoIds, photo_names: photoNames,
           drive_ids: stampPhotoField.getDriveIds(),
           note: note.trim(),
+          early_bonus: _earlyBonus,
+          mins_late: _stampMinsLate,
         });
 
         // ── Auto late-penalty from photo upload timestamp ─────
@@ -6154,21 +6175,10 @@ routes.signin_stamp_new = function (u) {
         })();
         // ─────────────────────────────────────────────────────
 
-        // ── KPI: auto-score punctuality from this stamp ───────
-        (function() {
-          try {
-            const submitTime = new Date(s.at);
-            const todayStr   = localISODate(submitTime);
-            const bot        = state.branch_opening_times || {};
-            const openStr    = ((bot[branch?.toLowerCase()] || {})["morning"])
-                               || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
-            const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
-            const diffMins    = Math.round((submitTime.getTime() - scheduledMs) / 60000);
-            const pScore      = diffMins <= 0 ? 100 : diffMins <= 5 ? 95 : diffMins <= 15 ? 80 : diffMins <= 30 ? 60 : diffMins <= 60 ? 40 : 20;
-            // Store in kpi_manual for this month as punctuality entry stub
-            // (actual derivation in kpiGetUserScores uses signin_stamps directly)
-          } catch(e) {}
-        })();
+        // ── Early arrival bonus toast ─────────────────────────
+        if (_earlyBonus) {
+          toast(`⭐ ${Math.abs(_stampMinsLate)} min early — punctuality bonus recorded!`, "ok");
+        }
         // ─────────────────────────────────────────────────────
 
         showPhotoConfirm({
@@ -6196,12 +6206,32 @@ routes.signin_stamp_list = function (u) {
   const list = el("div", { class: "list" });
   if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, "No sign-in stamps yet."));
   for (const s of mine) {
+    // Compute status badge from stored mins_late or recalculate
+    let minsLate = s.mins_late;
+    if (minsLate === undefined) {
+      try {
+        const branch  = (s.branch||"maadi").toLowerCase();
+        const bot     = state.branch_opening_times || {};
+        const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+        const dateStr = localISODate(new Date(s.at));
+        const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
+        minsLate = Math.round((new Date(s.at).getTime() - openMs) / 60000);
+      } catch(e) { minsLate = 0; }
+    }
+    const isEarly   = minsLate <= -30;
+    const isOnTime  = minsLate <= 15;
+    const isHalfDay = minsLate > 15 && minsLate <= 120;
+    const badge = isEarly   ? el("span", { class: "pill", style: { background: "var(--ok)", color: "#fff" } }, "⭐ Early")
+                : isOnTime  ? el("span", { class: "pill", style: { background: "var(--ok)", color: "#fff" } }, "✅ On time")
+                : isHalfDay ? el("span", { class: "pill", style: { background: "var(--warn)", color: "#fff" } }, "⚠ ½ day")
+                :             el("span", { class: "pill", style: { background: "var(--bad)",  color: "#fff" } }, "❌ 1 day");
+    const minStr = isEarly ? `${Math.abs(minsLate)} min early` : minsLate > 0 ? `${minsLate} min late` : "on time";
     list.appendChild(el("div", { class: "row" }, [
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, `${s.by_name} · ${s.branch}`),
-        el("div", { class: "sub" }, `Clocked in at ${fmtDate(s.at)}${s.note ? " · " + s.note : ""}`),
+        el("div", { class: "sub" }, `${fmtDate(s.at)} · ${minStr}${s.note ? " · " + s.note : ""}`),
       ]),
-      el("span", { class: "pill", style: { color: "var(--ok)" } }, "🕐"),
+      badge,
     ]));
   }
   wrap.appendChild(list);
@@ -7823,22 +7853,110 @@ function kpiLocalDateStr(ts) {
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
 function kpiPunctualityScore(userId, cutoff) {
-  const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
-  if (!stamps.length) return null;
-  const scores = stamps.map(s => {
-    try {
-      const submitTime  = new Date(s.at);
-      const todayStr    = kpiLocalDateStr(submitTime);
-      const branch      = (s.branch || "maadi").toLowerCase();
-      const bot         = state.branch_opening_times || {};
-      const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
-      const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
-      const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
-      return diff <= 0 ? 100 : diff <= 5 ? 95 : diff <= 15 ? 80 : diff <= 30 ? 60 : diff <= 60 ? 40 : 20;
-    } catch(e) { return 70; }
+  const bot    = state.branch_opening_times || {};
+  const today  = new Date();
+  const todayStr = localISODate(today);
+
+  // Build a map of stamp date+branch → stamp record for quick lookup
+  const stampMap = {};
+  (state.signin_stamps||[]).filter(s => s.by === userId).forEach(s => {
+    const key = localISODate(new Date(s.at)) + "|" + (s.branch||"maadi").toLowerCase();
+    if (!stampMap[key]) stampMap[key] = s; // keep earliest stamp per day/branch
   });
-  return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+
+  // Find all morning shifts scheduled for this user in the scoring window
+  const dayScores = [];
+  const cutoffDate = new Date(cutoff);
+  for (let d = new Date(cutoffDate); ; d.setDate(d.getDate() + 1)) {
+    const dateStr = localISODate(d);
+    if (dateStr >= todayStr) break; // don't score future/today (stamp may not be due yet)
+    const dayIndex = (d.getDay() + 6) % 7;
+    const dayKey   = ROSTER_DAYS[dayIndex];
+    const weekOf   = mondayOf(dateStr);
+    const entries  = (state.rosters||[]).filter(r =>
+      r.week_of === weekOf && r.day === dayKey &&
+      r.shift === "morning" && r.user_id === userId
+    );
+    for (const entry of entries) {
+      const branch  = (entry.branch||"maadi").toLowerCase();
+      const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+      const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
+      const st      = stampMap[dateStr + "|" + branch];
+      if (!st) {
+        dayScores.push(0); // no stamp = worst score
+      } else {
+        const diff = Math.round((new Date(st.at).getTime() - openMs) / 60000);
+        // early (≥30 min before): full score; on-time (<15 min late): full; half-day late: 50; full-day: 20
+        dayScores.push(diff <= -30 ? 100 : diff <= 15 ? 100 : diff <= 120 ? 50 : 20);
+      }
+    }
+  }
+
+  // If no roster data, fall back to scoring stamps directly (no missing-stamp penalty)
+  if (dayScores.length === 0) {
+    const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
+    if (!stamps.length) return null;
+    const scores = stamps.map(s => {
+      try {
+        const submitTime  = new Date(s.at);
+        const branch      = (s.branch||"maadi").toLowerCase();
+        const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+        const scheduledMs = new Date(localISODate(submitTime) + "T" + openStr + ":00").getTime();
+        const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
+        return diff <= -30 ? 100 : diff <= 15 ? 100 : diff <= 120 ? 50 : 20;
+      } catch(e) { return 70; }
+    });
+    return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+  }
+
+  return Math.round(dayScores.reduce((a,b)=>a+b,0)/dayScores.length);
 }
+// Applies 2-day deductions for morning-shift baristas who submitted no stamp on a given date.
+// Returns the number of new penalties created.
+function applyMissingStampPenalties(dateStr, appliedBy) {
+  const dayIndex = (new Date(dateStr + "T12:00:00").getDay() + 6) % 7;
+  const dayKey   = ROSTER_DAYS[dayIndex];
+  const weekOf   = mondayOf(dateStr);
+  const morning  = (state.rosters||[]).filter(r =>
+    r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+  );
+  if (!morning.length) return 0;
+  state.penalties = state.penalties || [];
+  state.salary_config = state.salary_config || {};
+  let created = 0;
+  for (const entry of morning) {
+    const uid    = entry.user_id;
+    const branch = (entry.branch||"").toLowerCase();
+    const user   = (state.users||[]).find(u => u.id === uid);
+    if (!user) continue;
+    // Check for existing stamp that day+branch
+    const hasStamp = (state.signin_stamps||[]).some(s =>
+      s.by === uid && localISODate(new Date(s.at)) === dateStr &&
+      (s.branch||"").toLowerCase() === branch
+    );
+    if (hasStamp) continue;
+    // Check no duplicate auto_no_stamp penalty for same user+date
+    const already = state.penalties.find(p =>
+      p.auto_no_stamp && p.user_id === uid && p.date === dateStr
+    );
+    if (already) continue;
+    const salary = Number(((state.salary_config)[uid]||{}).monthly_salary || 0);
+    const amount = penaltyAmount("two_days", salary);
+    state.penalties.push({
+      id: uuid(), at: now(), by: appliedBy.by, by_name: appliedBy.by_name,
+      user_id: uid, barista: user.name,
+      kind: "two_days", reason: "no_show",
+      date: dateStr, month: dateStr.slice(0, 7), branch,
+      amount,
+      note: `Auto: no sign-in stamp — 2 days deducted`,
+      auto_no_stamp: true,
+    });
+    created++;
+  }
+  if (created) saveState();
+  return created;
+}
+
 function kpiWasteScore(userId, cutoff) {
   const entries = (state.waste||[]).filter(w => w.by === userId && new Date(w.at).getTime() >= cutoff);
   if (!entries.length) return null;
