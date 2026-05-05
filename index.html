@@ -2651,25 +2651,99 @@ routes.supplier_list = function (u) {
   state.suppliers = state.suppliers || {};
   const items = (state.items || []).filter(it => it.active !== false).sort((a,b) => a.name.localeCompare(b.name));
 
+  // ── Mode: "single" (click to edit one item) or "bulk" (checkboxes → assign to many) ──
+  let mode = "single";
   let selectedItemId = items.length > 0 ? items[0].id : null;
+  let checkedIds = new Set();
   let searchQ = "";
+
+  // Mode toggle bar
+  const modeBar = el("div", { style: { display: "flex", gap: "8px", marginBottom: "14px", flexWrap: "wrap", alignItems: "center" } });
+  const btnSingle = el("button", { class: "chip ok" }, "✏️ Edit single item");
+  const btnBulk   = el("button", { class: "chip" },    "☑️ Bulk assign supplier");
+  modeBar.appendChild(btnSingle);
+  modeBar.appendChild(btnBulk);
+  modeBar.appendChild(el("span", { class: "muted small", style: { marginLeft: "4px" } },
+    "Bulk: tick items that share the same supplier, then fill in supplier details once."));
+  wrap.appendChild(modeBar);
+
+  function setMode(m) {
+    mode = m;
+    checkedIds = new Set();
+    btnSingle.className = mode === "single" ? "chip ok" : "chip";
+    btnBulk.className   = mode === "bulk"   ? "chip ok" : "chip";
+    renderItemList();
+    renderRight();
+  }
+  btnSingle.addEventListener("click", () => setMode("single"));
+  btnBulk.addEventListener("click",   () => setMode("bulk"));
 
   const layout = el("div", { style: { display: "flex", gap: "12px", alignItems: "flex-start" } });
 
-  // Left panel — item list
+  // ── Left panel — item list ──
   const leftPanel = el("div", { style: { width: "42%", flexShrink: "0" } });
-  const searchIn = el("input", { type: "search", placeholder: "Search items…", style: { marginBottom: "8px" } });
-  const itemList = el("div", { style: { maxHeight: "70vh", overflowY: "auto" } });
+  const searchIn  = el("input", { type: "search", placeholder: "Search items…", style: { marginBottom: "8px" } });
+  const itemList  = el("div", { style: { maxHeight: "70vh", overflowY: "auto" } });
 
   function renderItemList() {
     itemList.innerHTML = "";
     const filtered = items.filter(it => !searchQ || it.name.toLowerCase().includes(searchQ));
+
+    if (mode === "bulk" && filtered.length > 0) {
+      // Select-all / clear row
+      const allChecked = filtered.every(it => checkedIds.has(it.id));
+      const selAllRow = el("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "6px", fontSize: "12px" } });
+      const selAllBtn = el("button", { class: "chip", style: { fontSize: "11px", padding: "2px 8px" } },
+        allChecked ? "Deselect all" : "Select all");
+      selAllBtn.addEventListener("click", () => {
+        if (allChecked) filtered.forEach(it => checkedIds.delete(it.id));
+        else            filtered.forEach(it => checkedIds.add(it.id));
+        renderItemList(); renderRight();
+      });
+      selAllRow.appendChild(el("span", { class: "muted" }, `${checkedIds.size} selected`));
+      selAllRow.appendChild(selAllBtn);
+      itemList.appendChild(selAllRow);
+    }
+
     filtered.forEach(it => {
       const hasSuppliers = (state.suppliers[it.id] || []).length > 0;
-      const row = el("div", { style: { padding: "8px 10px", borderRadius: "6px", cursor: "pointer", marginBottom: "4px", background: it.id === selectedItemId ? "var(--ink)" : "var(--surface-2)", color: it.id === selectedItemId ? "var(--accent)" : "var(--ink)", fontSize: "13px", display: "flex", justifyContent: "space-between", alignItems: "center" } });
-      row.appendChild(el("span", {}, it.name));
-      if (hasSuppliers) row.appendChild(el("span", { style: { fontSize: "10px", opacity: "0.7" } }, `${state.suppliers[it.id].length}✓`));
-      row.addEventListener("click", () => { selectedItemId = it.id; renderItemList(); renderRight(); });
+      const isChecked    = checkedIds.has(it.id);
+      const isSelected   = mode === "single" && it.id === selectedItemId;
+
+      const row = el("div", { style: {
+        padding: "8px 10px", borderRadius: "6px", cursor: "pointer", marginBottom: "4px",
+        background: isSelected ? "var(--ink)" : isChecked ? "#e8f4f8" : "var(--surface-2)",
+        color: isSelected ? "var(--accent)" : "var(--ink)",
+        border: isChecked ? "1.5px solid var(--ok)" : "1.5px solid transparent",
+        fontSize: "13px", display: "flex", alignItems: "center", gap: "8px",
+      }});
+
+      if (mode === "bulk") {
+        const cb = el("input", { type: "checkbox" });
+        cb.checked = isChecked;
+        cb.addEventListener("change", (e) => {
+          e.stopPropagation();
+          if (cb.checked) checkedIds.add(it.id); else checkedIds.delete(it.id);
+          renderItemList(); renderRight();
+        });
+        row.appendChild(cb);
+      }
+
+      const nameSpan = el("span", { style: { flex: "1" } }, it.name);
+      row.appendChild(nameSpan);
+
+      if (hasSuppliers) {
+        row.appendChild(el("span", { style: { fontSize: "10px", opacity: "0.65", flexShrink: "0" } },
+          `${state.suppliers[it.id].length}✓`));
+      }
+
+      row.addEventListener("click", () => {
+        if (mode === "single") { selectedItemId = it.id; renderItemList(); renderRight(); }
+        else {
+          if (checkedIds.has(it.id)) checkedIds.delete(it.id); else checkedIds.add(it.id);
+          renderItemList(); renderRight();
+        }
+      });
       itemList.appendChild(row);
     });
   }
@@ -2679,11 +2753,12 @@ routes.supplier_list = function (u) {
   leftPanel.appendChild(itemList);
   layout.appendChild(leftPanel);
 
-  // Right panel — supplier editor
+  // ── Right panel — supplier editor ──
   const rightPanel = el("div", { style: { flex: "1" } });
   layout.appendChild(rightPanel);
 
-  function renderRight() {
+  // ── Single-item editor ──
+  function renderSingleRight() {
     rightPanel.innerHTML = "";
     if (!selectedItemId) return;
     const item = items.find(it => it.id === selectedItemId);
@@ -2695,10 +2770,9 @@ routes.supplier_list = function (u) {
 
     suppliers.forEach((s, idx) => {
       const sCard = el("div", { class: "card", style: { marginBottom: "10px", padding: "10px 12px" } });
-
-      const nameIn = el("input", { type: "text", placeholder: "Supplier name", value: s.name || "", style: { marginBottom: "6px" } });
-      const contactIn = el("input", { type: "text", placeholder: "Phone / email", value: s.contact || "", style: { marginBottom: "6px" } });
-      const notesIn = el("input", { type: "text", placeholder: "Notes (min order, delivery days…)", value: s.notes || "" });
+      const nameIn    = el("input", { type: "text", placeholder: "Supplier name",               value: s.name    || "", style: { marginBottom: "6px" } });
+      const contactIn = el("input", { type: "text", placeholder: "Phone / email",               value: s.contact || "", style: { marginBottom: "6px" } });
+      const notesIn   = el("input", { type: "text", placeholder: "Notes (min order, delivery…)", value: s.notes   || "" });
 
       [nameIn, contactIn, notesIn].forEach(inp => {
         inp.addEventListener("input", () => {
@@ -2712,15 +2786,10 @@ routes.supplier_list = function (u) {
       const removeBtn = el("button", { class: "btn secondary", style: { marginTop: "8px", padding: "4px 10px", fontSize: "12px", color: "var(--bad)" } }, "Remove");
       removeBtn.addEventListener("click", () => {
         state.suppliers[selectedItemId].splice(idx, 1);
-        saveState();
-        renderRight();
-        renderItemList();
+        saveState(); renderSingleRight(); renderItemList();
       });
 
-      sCard.appendChild(nameIn);
-      sCard.appendChild(contactIn);
-      sCard.appendChild(notesIn);
-      sCard.appendChild(removeBtn);
+      sCard.appendChild(nameIn); sCard.appendChild(contactIn); sCard.appendChild(notesIn); sCard.appendChild(removeBtn);
       rightPanel.appendChild(sCard);
     });
 
@@ -2728,11 +2797,90 @@ routes.supplier_list = function (u) {
     addBtn.addEventListener("click", () => {
       if (!state.suppliers[selectedItemId]) state.suppliers[selectedItemId] = [];
       state.suppliers[selectedItemId].push({ id: uuid(), name: "", contact: "", notes: "" });
-      saveState();
-      renderRight();
-      renderItemList();
+      saveState(); renderSingleRight(); renderItemList();
     });
     rightPanel.appendChild(addBtn);
+  }
+
+  // ── Bulk-assign panel ──
+  function renderBulkRight() {
+    rightPanel.innerHTML = "";
+
+    if (checkedIds.size === 0) {
+      rightPanel.appendChild(el("div", { class: "card", style: { textAlign: "center", padding: "32px 16px", color: "var(--ink-dim)" } }, [
+        el("div", { style: { fontSize: "28px", marginBottom: "8px" } }, "☑️"),
+        el("div", { style: { fontWeight: "600" } }, "Tick items on the left"),
+        el("div", { class: "muted small", style: { marginTop: "4px" } }, "Select all items that share the same supplier, then fill in the details once."),
+      ]));
+      return;
+    }
+
+    const selectedItems = items.filter(it => checkedIds.has(it.id));
+
+    // Summary of selected items
+    const summaryCard = el("div", { class: "card", style: { marginBottom: "12px", background: "var(--surface-2)" } });
+    summaryCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "8px" } },
+      `📦 Assigning supplier to ${selectedItems.length} item${selectedItems.length > 1 ? "s" : ""}:`));
+    const tagWrap = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
+    selectedItems.forEach(it => tagWrap.appendChild(el("span", { class: "chip" }, it.name)));
+    summaryCard.appendChild(tagWrap);
+    rightPanel.appendChild(summaryCard);
+
+    // Supplier form
+    const formCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    formCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "10px" } }, "Supplier details"));
+
+    const nameIn    = el("input", { type: "text", placeholder: "Supplier name *",              style: { marginBottom: "8px" } });
+    const contactIn = el("input", { type: "text", placeholder: "Phone / email",                style: { marginBottom: "8px" } });
+    const notesIn   = el("input", { type: "text", placeholder: "Notes (min order, delivery…)" });
+
+    formCard.appendChild(nameIn);
+    formCard.appendChild(contactIn);
+    formCard.appendChild(notesIn);
+    rightPanel.appendChild(formCard);
+
+    // Option: skip items that already have this supplier
+    const skipLabel = el("label", { style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", marginBottom: "12px", cursor: "pointer" } });
+    const skipCb = el("input", { type: "checkbox" });
+    skipCb.checked = true;
+    skipLabel.appendChild(skipCb);
+    skipLabel.appendChild(el("span", {}, "Skip items that already have a supplier with this name"));
+    rightPanel.appendChild(skipLabel);
+
+    const saveBtn = el("button", { class: "btn", style: { width: "100%" } },
+      `Assign to ${selectedItems.length} item${selectedItems.length > 1 ? "s" : ""}`);
+
+    saveBtn.addEventListener("click", () => {
+      const name    = nameIn.value.trim();
+      const contact = contactIn.value.trim();
+      const notes   = notesIn.value.trim();
+      if (!name) { toast("Enter a supplier name first."); return; }
+
+      let assigned = 0, skipped = 0;
+      selectedItems.forEach(it => {
+        if (!state.suppliers[it.id]) state.suppliers[it.id] = [];
+        const alreadyHas = skipCb.checked &&
+          state.suppliers[it.id].some(s => s.name.toLowerCase() === name.toLowerCase());
+        if (alreadyHas) { skipped++; return; }
+        state.suppliers[it.id].push({ id: uuid(), name, contact, notes });
+        assigned++;
+      });
+
+      saveState();
+      renderItemList();
+      toast(`✓ "${name}" assigned to ${assigned} item${assigned !== 1 ? "s" : ""}${skipped ? ` (${skipped} skipped — already had this supplier)` : ""}`);
+
+      // Clear form + selection after save
+      checkedIds = new Set();
+      renderItemList();
+      renderRight();
+    });
+    rightPanel.appendChild(saveBtn);
+  }
+
+  function renderRight() {
+    if (mode === "single") renderSingleRight();
+    else renderBulkRight();
   }
 
   renderItemList();
