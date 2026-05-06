@@ -1332,6 +1332,45 @@ function scanCashDepositReminders() {
   );
 }
 
+function scanCashDepositPenalties() {
+  const today = new Date();
+  if (today.getDay() !== 5) return; // Friday only — day after Thursday reminder
+  const todayStr    = localISODate(today);
+  const weekOf      = mondayOf(todayStr);
+  const currentMonth = todayStr.slice(0, 7);
+  const hasDeposit  = (state.maadi_deposits || []).some(dep => dep.week_of === weekOf);
+  if (hasDeposit) return;
+  const alreadyPenalised = (state.penalties || []).some(p =>
+    p.auto_cash_deposit && p.week_of === weekOf
+  );
+  if (alreadyPenalised) return;
+  const assignment  = getLeadershipAssignment(currentMonth);
+  const cashMgrId   = assignment ? (assignment.cash_status || null) : null;
+  if (!cashMgrId) return;
+  const cashMgr = (state.users || []).find(u => u.id === cashMgrId);
+  const salary  = Number(((state.salary_config || {})[cashMgrId] || {}).monthly_salary || 0);
+  const amount  = penaltyAmount("quarter_day", salary);
+  state.penalties = state.penalties || [];
+  state.penalties.push({
+    id: uuid(), at: new Date().toISOString(),
+    by: "system", by_name: "System",
+    user_id: cashMgrId, barista: cashMgr ? cashMgr.name : cashMgrId,
+    kind: "quarter_day", kind_label: "Quarter day",
+    reason: "leadership_fail", reason_code: "cash_deposit_missed",
+    date: todayStr, month: currentMonth,
+    amount,
+    note: "Auto: Maadi deposit not logged for week of " + weekOf,
+    auto_cash_deposit: true,
+    week_of: weekOf,
+    salary_at_time: salary,
+  });
+  saveState();
+  notifyHaidi(
+    `Cash deposit penalty — ${cashMgr ? cashMgr.name : cashMgrId}`,
+    `No Maadi deposit logged for week of ${weekOf}. ¼ day deducted from salary.`
+  );
+}
+
 function pettyCashBalance(branch) {
   const rows = state.petty_cash.filter(p => p.branch === branch)
     .sort((a,b) => a.at.localeCompare(b.at));
@@ -1646,6 +1685,7 @@ routes.home = function (u) {
   try { scanAndNotifyLowStock(); } catch (e) { console.warn(e); }
   try { scanReorderFollowUps(); } catch (e) { console.warn(e); }
   try { scanCashDepositReminders(); } catch (e) { console.warn(e); }
+  try { scanCashDepositPenalties(); } catch (e) { console.warn(e); }
   const lowBoth = [
     ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
     ...lowStockItems("zawya").map(r => ({...r, _b: "zawya"})),
@@ -4024,6 +4064,7 @@ routes.salaries = function (u) {
 // Four fixed durations — amount auto-calculated from monthly salary.
 // "other" lets the head barista/owner type a free-text amount.
 const PENALTY_KINDS = [
+  { label: "Quarter day", value: "quarter_day", days: 0.25 },
   { label: "Half day",  value: "half_day",   days: 0.5 },
   { label: "Full day",  value: "full_day",   days: 1   },
   { label: "2 days",    value: "two_days",   days: 2   },
@@ -9135,11 +9176,11 @@ routes.leadership_roles = function(u) {
 
   const ROLES_META = [
     { key:"weekly_schedule",      label:"📅 Schedule Manager",
-      desc:"Accountable for weekly schedule and sign-in stamp compliance. Gets alerted when stamps are late or missing." },
+      desc:"Accountable for weekly schedule and sign-in stamp compliance. Gets alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from the Leadership KPI; a late stamp (>15 min) deducts 10 pts. The window to act is same-day — if the barista's stamp is submitted before the owner runs the missing-stamp check, no deduction applies." },
     { key:"inventory_management", label:"📦 Inventory Manager",
       desc:"Must submit end-of-month inventory snapshot. Gets low-stock and reorder alerts. Half-day penalty if snapshot missing at month-end." },
     { key:"cash_status",          label:"💵 Cash Manager",
-      desc:"Responsible for logging weekly Maadi ATM deposit. Reminded every Thursday if deposit is missing." },
+      desc:"Responsible for managing the petty cash received from the owner and logging the weekly Maadi ATM cash deposit in the Operations App every week. A reminder fires automatically every Thursday by email and app notification. If the deposit is not logged by end of day Friday, a ¼ day salary deduction is applied for that week. Repeated missed entries are reflected in the Leadership KPI score." },
     { key:"barista_hygiene",      label:"🧹 Hygiene Manager",
       desc:"Accountable for team uniform compliance. Score auto-calculates from 'no uniform' penalties issued during the month (−25 pts each)." },
   ];
@@ -9571,14 +9612,14 @@ routes.my_scorecard = function(u) {
     const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
     const ROLE_INFO = {
       weekly_schedule:      { en:"📅 Schedule Manager",  ar:"📅 مدير الجداول",
-        descEn:"You are accountable for the weekly schedule and sign-in stamp compliance this month.",
-        descAr:"أنت مسؤول عن الجدول الأسبوعي وبصمات الحضور هذا الشهر." },
+        descEn:"You are accountable for the weekly schedule and sign-in stamp compliance. You are alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from your Leadership KPI; a late stamp (>15 min) deducts 10 pts. Act on alerts the same day — a stamp submitted before the owner's missing-stamp check avoids the deduction.",
+        descAr:"أنت مسؤول عن الجدول الأسبوعي وبصمات الحضور هذا الشهر. ستتلقى تنبيهاً عند غياب أو تأخر البصمة. كل بصمة مفقودة غير معالجة تحسم 15 نقطة من نقاط قيادتك، والتأخر أكثر من 15 دقيقة يحسم 10 نقاط. تصرف في نفس اليوم — البصمة المسجّلة قبل فحص المدير لا تُحسب عليك." },
       inventory_management: { en:"📦 Inventory Manager", ar:"📦 مدير المخزون",
         descEn:"You must submit the end-of-month inventory snapshot. You receive all low-stock alerts.",
         descAr:"عليك تسليم جرد المخزون في آخر الشهر. ستتلقى تنبيهات نقص البضاعة." },
       cash_status:          { en:"💵 Cash Manager",      ar:"💵 مدير الودائع",
-        descEn:"You are accountable for logging the weekly Maadi cash deposit. You are reminded every Thursday.",
-        descAr:"أنت مسؤول عن تسجيل الإيداع الأسبوعي في ماعدي. ستتلقى تذكيراً كل خميس." },
+        descEn:"You are accountable for logging the weekly Maadi cash deposit in the Operations App. You receive a reminder every Thursday by email and in-app. If the deposit is not logged by end of Friday, a ¼ day salary deduction is applied for that week. Repeated missed entries also lower your Leadership KPI score.",
+        descAr:"أنت مسؤول عن تسجيل الإيداع الأسبوعي في ماعدي في تطبيق العمليات. ستتلقى تذكيراً كل خميس عبر البريد الإلكتروني والتطبيق. إذا لم يُسجَّل الإيداع بنهاية الجمعة، يُطبَّق خصم ربع يوم من راتبك عن تلك الأسبوع. التكرار يؤثر سلباً على نقاط القيادة." },
       barista_hygiene:      { en:"🧹 Hygiene Manager",   ar:"🧹 مدير النظافة",
         descEn:"You are accountable for team uniform compliance. Each 'no uniform' penalty deducts 25 pts from your leadership score.",
         descAr:"أنت مسؤول عن الزي الموحد للفريق. كل مخالفة تحسم 25 نقطة من نقاط قيادتك." },
