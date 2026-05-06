@@ -381,6 +381,7 @@ function startReviewsListener() {
         user_id: matchUser?.id || null,
         rating: d.rating || 0,
         source: "coffeebeats.art",
+        standout: d.standout || "",
         note: [d.feedback, d.standout].filter(Boolean).join(' | '),
         branch: d.branch || "",
         month: new Date(d.at || Date.now()).toISOString().slice(0, 7)
@@ -1339,7 +1340,7 @@ const ROLE_ACCESS = {
                  "signin_stamp_new","signin_stamp_list",
                  "leave_new","leave_list",
                  "scorecard","my_scorecard","my_jd",
-                 "reorder_action_new","reorder_action_list","supplier_list"],
+                 "reorder_action_new","reorder_action_list","supplier_list","items_list"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
   barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new"],
   // Zawya-only roles — no app access, kept in list for barista drink allowance tracking
@@ -1597,6 +1598,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
+    tiles.appendChild(tile("📦", "Inventory Items", "Add, edit or remove tracked items", () => go("items_list")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
@@ -2194,9 +2196,43 @@ routes.snapshot_new = function (u) {
           toast(`Reorder threshold for ${it.name} set.`);
         }
       }, `⏰ ${threshold}d`);
+      const titleRow = el("div", { style: { display: "flex", alignItems: "center", gap: "6px" } });
+      titleRow.appendChild(el("span", { class: "title" }, it.name));
+      if (u.role === "owner" || u.role === "accountant") {
+        const editItemBtn = el("button", { class: "btn ghost", style: { padding: "2px 7px", fontSize: "11px" } }, "✏️");
+        editItemBtn.title = "Edit item";
+        editItemBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const INV_CATEGORIES = [
+            { value: "coffee-beans", label: "Coffee Beans" }, { value: "milk", label: "Milk" },
+            { value: "tea", label: "Tea" }, { value: "powder", label: "Powder" },
+            { value: "spices", label: "Spices" }, { value: "sugar", label: "Sugar" },
+            { value: "puree", label: "Puree" }, { value: "syrup", label: "Syrup" },
+            { value: "sauce", label: "Sauce" }, { value: "dairy-extras", label: "Dairy Extras" },
+            { value: "halo-snacks", label: "Halo Snacks" }, { value: "beverages", label: "Beverages" },
+            { value: "packaging", label: "Packaging" },
+          ];
+          openPrompt({
+            title: `Edit item: ${it.name}`,
+            fields: [
+              { key: "name",     label: "Name",     type: "text",   value: it.name },
+              { key: "unit",     label: "Unit",     type: "select", value: it.unit,
+                options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+              { key: "category", label: "Category", type: "select", value: it.category, options: INV_CATEGORIES },
+            ],
+            onSubmit: (v) => {
+              if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+              it.name = v.name.trim(); it.unit = v.unit; it.category = v.category;
+              saveState(); draw();
+              toast(`Updated ${it.name}`);
+            }
+          });
+        });
+        titleRow.appendChild(editItemBtn);
+      }
       list.appendChild(el("div", { class: "row" }, [
         el("div", { class: "grow" }, [
-          el("div", { class: "title" }, it.name),
+          titleRow,
           el("div", { class: "sub" }, `${it.category} · theoretical ${fmtQty(pre, it.unit)}`),
           el("div", { class: "sub", style: subStyle }, `${coverTxt} · daily use ~${fmtQty(usage, it.unit)}`),
         ]),
@@ -2886,6 +2922,139 @@ routes.supplier_list = function (u) {
   renderItemList();
   renderRight();
   wrap.appendChild(layout);
+  return wrap;
+};
+
+// ==============================================================
+// INVENTORY ITEMS — master item list management
+// ==============================================================
+routes.items_list = function (u) {
+  const canEdit = u.role === "owner" || u.role === "accountant";
+
+  const INV_CATEGORIES = [
+    { value: "coffee-beans",  label: "Coffee Beans" },
+    { value: "milk",          label: "Milk" },
+    { value: "tea",           label: "Tea" },
+    { value: "powder",        label: "Powder" },
+    { value: "spices",        label: "Spices" },
+    { value: "sugar",         label: "Sugar" },
+    { value: "puree",         label: "Puree" },
+    { value: "syrup",         label: "Syrup" },
+    { value: "sauce",         label: "Sauce" },
+    { value: "dairy-extras",  label: "Dairy Extras" },
+    { value: "halo-snacks",   label: "Halo Snacks" },
+    { value: "beverages",     label: "Beverages" },
+    { value: "packaging",     label: "Packaging" },
+  ];
+  const catLabel = v => (INV_CATEGORIES.find(c => c.value === v) || {}).label || v;
+
+  const wrap = el("div", {});
+  wrap.appendChild(header("Inventory Items", "Add, edit or remove items tracked in stock."));
+
+  if (canEdit) {
+    const addBtn = el("button", { class: "btn secondary", style: { marginBottom: "12px" } }, "➕ Add item");
+    addBtn.addEventListener("click", () => {
+      openPrompt({
+        title: "Add inventory item",
+        fields: [
+          { key: "name",     label: "Name",     type: "text",   value: "" },
+          { key: "unit",     label: "Unit",      type: "select", value: "g",
+            options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+          { key: "category", label: "Category", type: "select", value: "coffee-beans", options: INV_CATEGORIES },
+        ],
+        onSubmit: (v) => {
+          if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+          const nums = (state.items || []).map(it => {
+            const m = (it.id || "").match(/^inv_(\d+)$/);
+            return m ? parseInt(m[1], 10) : 0;
+          });
+          const nextNum = (nums.length ? Math.max(...nums) : 0) + 1;
+          const id = "inv_" + String(nextNum).padStart(4, "0");
+          state.items = state.items || [];
+          state.items.push({ id, name: v.name.trim(), unit: v.unit, category: v.category, active: true });
+          saveState();
+          toast(`Added ${v.name.trim()}`);
+          render();
+        }
+      });
+    });
+    wrap.appendChild(addBtn);
+  }
+
+  const search = el("input", { type: "search", placeholder: "Search items…", style: { marginBottom: "12px" } });
+  wrap.appendChild(search);
+
+  const list = el("div", { class: "list" });
+  wrap.appendChild(list);
+
+  function draw() {
+    list.innerHTML = "";
+    const q = search.value.trim().toLowerCase();
+    const sorted = [...(state.items || [])].sort((a, b) => a.name.localeCompare(b.name));
+    const filtered = sorted.filter(it => !q || it.name.toLowerCase().includes(q) || (it.category || "").includes(q));
+    if (!filtered.length) {
+      list.appendChild(el("div", { class: "muted", style: { padding: "24px", textAlign: "center" } }, "No items found."));
+      return;
+    }
+    for (const it of filtered) {
+      const inactive = it.active === false;
+      const rowParts = [
+        el("div", { class: "grow" }, [
+          el("div", { class: "title" }, it.name),
+          el("div", { class: "sub" }, `${catLabel(it.category)} · ${it.unit}`),
+        ]),
+        el("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, [
+          inactive
+            ? el("span", { class: "pill", style: { color: "var(--bad)" } }, "inactive")
+            : el("span", { class: "pill", style: { color: "var(--ok)" } }, "active"),
+        ]),
+      ];
+      if (canEdit) {
+        const editBtn = el("button", { class: "btn ghost", style: { padding: "4px 10px", fontSize: "12px" } }, "✏️ Edit");
+        editBtn.addEventListener("click", (e) => { e.stopPropagation(); editItem(it); });
+        rowParts[1].appendChild(editBtn);
+      }
+      const row = el("div", { class: "row", style: { opacity: inactive ? "0.55" : "1" } }, rowParts);
+      list.appendChild(row);
+    }
+  }
+
+  function editItem(it) {
+    openPrompt({
+      title: `Edit ${it.name}`,
+      fields: [
+        { key: "name",     label: "Name",     type: "text",   value: it.name },
+        { key: "unit",     label: "Unit",      type: "select", value: it.unit,
+          options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+        { key: "category", label: "Category", type: "select", value: it.category, options: INV_CATEGORIES },
+        { key: "active",   label: "Status",    type: "select", value: it.active === false ? "inactive" : "active",
+          options: [{ value: "active", label: "Active" }, { value: "inactive", label: "Inactive (hidden from pickers)" }] },
+        { key: "del", label: "Type DELETE to permanently remove this item (owner only)", type: "text", value: "" },
+      ],
+      onSubmit: (v) => {
+        if (String(v.del || "").trim().toUpperCase() === "DELETE") {
+          if (u.role !== "owner") return toast("Only the owner can permanently delete items", "error");
+          state.items = state.items.filter(x => x.id !== it.id);
+          saveState();
+          toast(`Removed ${it.name}`);
+          render();
+          return;
+        }
+        if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+        it.name     = v.name.trim();
+        it.unit     = v.unit;
+        it.category = v.category;
+        it.active   = v.active !== "inactive";
+        saveState();
+        render();
+      }
+    });
+  }
+
+  search.addEventListener("input", draw);
+  draw();
+
+  wrap.appendChild(btnBack());
   return wrap;
 };
 
@@ -5619,7 +5788,7 @@ const MANAGEABLE_ROUTES = [
   "cleaning_log_new","cleaning_log_list",
   "signin_stamp_new","signin_stamp_list",
   "salaries","penalties","maadi_deposits",
-  "overheads","bank","dashboard","menu",
+  "overheads","bank","dashboard","menu","items_list",
   "sales_import","users","settings",
   "leave_new","leave_list",
 ];
@@ -8588,6 +8757,25 @@ function kpiCleanlinessScore(userId, cutoff) {
   const scores = logs.map(l => l.checklist_score != null ? l.checklist_score : 65); // legacy logs without checklist get 65
   return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
 }
+// Auto-calculates Coffee Craft score from customer reviews where the customer
+// selected "coffee" as the standout. Uses star rating × 20 to produce 0–100.
+// Falls back to manual entry if no matching reviews exist.
+function kpiCraftScore(userId, cutoff) {
+  const user     = (state.users||[]).find(u => u.id === userId);
+  const userName = (user?.name || "").toLowerCase().trim();
+  const feedbacks = (state.customer_feedback||[]).filter(f => {
+    const byId   = f.user_id === userId || f.barista_id === userId;
+    const bName  = (f.barista_name || "").toLowerCase().trim();
+    const byName = userName && bName && (bName === userName || bName.startsWith(userName) || userName.startsWith(bName));
+    const inWindow = (f.at ? new Date(f.at).getTime() : 0) >= cutoff;
+    const standout = (f.standout || "").toLowerCase();
+    const coffeeStandout = standout.includes("coffee") || standout.includes("craft") || standout.includes("espresso") || standout.includes("latte") || standout.includes("barista skill");
+    return (byId || byName) && inWindow && coffeeStandout;
+  });
+  if (!feedbacks.length) return null;
+  const avg = feedbacks.reduce((s,f) => s + (f.rating||0), 0) / feedbacks.length;
+  return Math.round(avg * 20);
+}
 function kpiCustomerScore(userId) {
   const user     = (state.users||[]).find(u => u.id === userId);
   const userName = (user?.name || "").toLowerCase().trim();
@@ -8673,9 +8861,10 @@ function kpiGetUserScores(userId) {
 
   // ── AUTO from source tiles ──────────────────────────────────────────────
   const punctuality  = kpiPunctualityScore(userId, cutoff);
-  const waste        = kpiWasteScore(userId, cutoff);
-  const cleanliness  = kpiCleanlinessScore(userId, cutoff);
+  const waste        = kpiWasteScore(userId, cutoff);           // ← waste_new entries
+  const cleanliness  = kpiCleanlinessScore(userId, cutoff);    // ← cleaning_log entries
   const customer     = kpiCustomerScore(userId);
+  const craftAuto    = kpiCraftScore(userId, cutoff);           // ← customer reviews where standout = coffee
   const teamworkAuto = kpiTeamworkScore(userId, cutoff);
 
   // ── MANUAL: entered monthly by owner / head barista in scorecard ─────────
@@ -8685,7 +8874,7 @@ function kpiGetUserScores(userId) {
     punctuality,
     waste,
     cleanliness,
-    craft:     manual.craft     ?? null,
+    craft:     craftAuto ?? (manual.craft ?? null),  // auto first, manual fallback
     upselling: manual.upselling ?? null,
     customer:  customer ?? (manual.customer ?? null),
     // Teamwork: auto-calculated from reorder compliance; manual override by owner only
