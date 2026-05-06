@@ -864,8 +864,10 @@ function migrateState(s) {
   s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork, training
   s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
   s.kpi_settings  = s.kpi_settings  || {
-    weights: { punctuality:15, waste:15, cleanliness:15, craft:20, upselling:5, customer:15, teamwork:15, training:0 }
+    weights: { punctuality:15, waste:15, cleanliness:15, craft:20, upselling:5, customer:15, teamwork:5, leadership:10, training:0 }
   };
+  s.leadership_assignments   = s.leadership_assignments   || [];
+  s.leadership_notifications = s.leadership_notifications || [];
 
   s.shift_closes        = s.shift_closes  || [];
   s.cleaning_logs       = s.cleaning_logs || [];
@@ -925,7 +927,7 @@ const STATE_CHUNKS = {
   hr:          ["salaries", "salary_loans", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
   overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:       ["photo_log", "assets"],
-  kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions"],
+  kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
   meta:        ["_seeded_ids", "_migration_khaled_role_fixed", "version", "created_at", "branch_opening_times"],
 };
 
@@ -1243,6 +1245,10 @@ function scanAndNotifyLowStock() {
         `Low stock — ${r.item.name} (${b})`,
         `~${r.days_of_cover.toFixed(1)}d cover left (threshold ${r.threshold_days}d). ${fmtQty(r.stock, r.item.unit)} on hand.`
       );
+      notifyLeadershipRole("inventory_management",
+        `Low stock — ${r.item.name} (${b})`,
+        `~${r.days_of_cover.toFixed(1)}d cover left. Inventory manager action required.`
+      );
     }
   }
   saveState();
@@ -1298,9 +1304,31 @@ function scanReorderFollowUps() {
         `${lvl.urgency} — ${alert.item_name} (${alert.branch})`,
         `Low-stock alert from ${alert.date} still unresolved. Log your action in the app.`
       );
+      notifyLeadershipRole("inventory_management",
+        `${lvl.urgency} — ${alert.item_name} (${alert.branch})`,
+        `Reorder alert from ${alert.date} still unresolved.`
+      );
     }
   }
   if (dirty) saveState();
+}
+
+function scanCashDepositReminders() {
+  const today = new Date();
+  if (today.getDay() !== 4) return; // Thursday only
+  const todayStr = localISODate(today);
+  const weekOf   = mondayOf(todayStr);
+  const alreadyFired = (state.leadership_notifications || []).some(n =>
+    n.role_key === "cash_status" && n.title === "Deposit reminder" &&
+    typeof n.at === "string" && mondayOf(n.at.slice(0,10)) === weekOf
+  );
+  if (alreadyFired) return;
+  const hasDeposit = (state.maadi_deposits || []).some(dep => dep.week_of === weekOf);
+  if (hasDeposit) return;
+  notifyLeadershipRole("cash_status",
+    "Deposit reminder",
+    `No Maadi cash deposit logged for week of ${weekOf}. Please deposit before end of day.`
+  );
 }
 
 function pettyCashBalance(branch) {
@@ -1603,6 +1631,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
+    tiles.appendChild(tile("👑", "Leadership Roles", "Monthly accountability assignments", () => go("leadership_roles")));
     tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
   }
   wrap.appendChild(tiles);
@@ -1614,6 +1643,7 @@ routes.home = function (u) {
   // is 7 days of cover unless overridden per item.
   try { scanAndNotifyLowStock(); } catch (e) { console.warn(e); }
   try { scanReorderFollowUps(); } catch (e) { console.warn(e); }
+  try { scanCashDepositReminders(); } catch (e) { console.warn(e); }
   const lowBoth = [
     ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
     ...lowStockItems("zawya").map(r => ({...r, _b: "zawya"})),
@@ -5667,6 +5697,14 @@ routes.users = function (u) {
   if (migrated > 0) { saveState(); }
 
   const list = el("div", { class: "list", style: { marginTop: "12px" } });
+  const _currentMonth = new Date().toISOString().slice(0,7);
+  const _leaderAssign = getLeadershipAssignment(_currentMonth) || {};
+  const LEADERSHIP_ROLE_BADGES = {
+    weekly_schedule:      "📅 Schedule",
+    inventory_management: "📦 Inventory",
+    cash_status:          "💵 Cash",
+    barista_hygiene:      "🧹 Hygiene",
+  };
   for (const usr of state.users) {
     const branchLabel = usr.role === "barista"
       ? "rotates (Maadi + Zawya)"
@@ -5674,13 +5712,24 @@ routes.users = function (u) {
     const extra = (usr.extra_access || []).length;
     const deny  = (usr.deny_access  || []).length;
     const rightsNote = (extra || deny) ? ` · +${extra}/-${deny} custom rights` : "";
-    list.appendChild(el("div", { class: "row", onClick: () => editUser(usr) }, [
+    let leaderBadgeLabel = null;
+    for (const [rk, label] of Object.entries(LEADERSHIP_ROLE_BADGES)) {
+      if (_leaderAssign[rk] === usr.id) { leaderBadgeLabel = label; break; }
+    }
+    const rowChildren = [
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, usr.name),
         el("div", { class: "sub" }, `${usr.role} · ${branchLabel} · PIN ${usr.pin}${rightsNote}`),
       ]),
       el("span", { class: "pill " + (usr.active ? "ok" : "bad") }, usr.active ? "active" : "disabled"),
-    ]));
+    ];
+    if (leaderBadgeLabel) {
+      rowChildren.push(el("span", {
+        class: "pill",
+        style: { background: "var(--accent-bg,#fff8e1)", color: "var(--ink)", border: "1px solid var(--accent,#e8a020)", fontSize: "11px" },
+      }, leaderBadgeLabel));
+    }
+    list.appendChild(el("div", { class: "row", onClick: () => editUser(usr) }, rowChildren));
   }
   wrap.appendChild(list); wrap.appendChild(btnBack());
 
@@ -6717,6 +6766,11 @@ routes.signin_stamp_new = function (u) {
             p.auto_late && p.user_id === u.id && p.date === todayStr
           );
           if (already) return;
+
+          notifyLeadershipRole("weekly_schedule",
+            `Late arrival — ${u.name}`,
+            `${minsLate} min late at ${branch} on ${todayStr}.`
+          );
 
           const kind    = minsLate > 120 ? "full_day" : "half_day";
           const salary  = Number(((state.salary_config || {})[u.id] || {}).monthly_salary || 0);
@@ -8392,9 +8446,9 @@ routes.app_guide = function (u) {
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 const KPI_W = () => state.kpi_settings.weights;
 function save() { saveState(); }  // KPI module alias
-const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", training:"Training" };
-const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", training:"التدريب والتطور" };
-const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", training:"🌱" };
+const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", leadership:"Leadership", training:"Training" };
+const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", leadership:"القيادة والمسؤولية", training:"التدريب والتطور" };
+const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", leadership:"👑", training:"🌱" };
 const CLEAN_AR = [
   "تنظيف رأس الإسبريسو وشطف الماكينة",
   "مسح عصا البخار وتنقيتها بعد كل استخدام ✓",
@@ -8545,6 +8599,10 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
       note: `Auto: no sign-in stamp — 2 days deducted`,
       auto_no_stamp: true,
     });
+    notifyLeadershipRole("weekly_schedule",
+      `Missing stamp — ${user.name}`,
+      `No sign-in recorded for ${dateStr} at ${branch}. 2-day deduction applied.`
+    );
     created++;
   }
   if (created) saveState();
@@ -8667,6 +8725,158 @@ function kpiTeamworkScore(userId, cutoff) {
   return Math.max(0, 100 - penalty);
 }
 
+// ─── Leadership helpers ───────────────────────────────────────────────────────
+
+function getLeadershipAssignment(month) {
+  const assignments = state.leadership_assignments || [];
+  const exact = assignments.find(a => a.month === month);
+  if (exact) return exact;
+  const sorted = assignments.filter(a => a.month < month).sort((a,b) => b.month.localeCompare(a.month));
+  if (sorted.length) return { ...sorted[0], month, _carried_forward: true };
+  return null;
+}
+
+function notifyLeadershipRole(roleKey, title, body) {
+  notifyHaidi(title, body);
+  const month = new Date().toISOString().slice(0,7);
+  const assignment = getLeadershipAssignment(month);
+  const roleUserId = assignment ? (assignment[roleKey] || null) : null;
+  const cu = typeof currentUser === "function" ? currentUser() : null;
+  if (roleUserId && cu && cu.id === roleUserId) {
+    toast(`${title} — ${body}`, "warn");
+  }
+  state.leadership_notifications = state.leadership_notifications || [];
+  state.leadership_notifications.push({
+    id: uuid(), at: new Date().toISOString(),
+    role_key: roleKey, role_user_id: roleUserId,
+    title, body,
+  });
+  saveState();
+}
+
+function kpiLeadershipScore(userId, month) {
+  const assignment = getLeadershipAssignment(month);
+  const ROLES = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+  const myRole = assignment ? (ROLES.find(r => assignment[r] === userId) || null) : null;
+  if (!myRole) return 100;
+
+  if (myRole === "weekly_schedule") {
+    const [yr, mo] = month.split("-").map(Number);
+    const monthStart = new Date(yr, mo - 1, 1);
+    const monthEnd   = new Date(yr, mo, 0);
+    const today      = new Date();
+    const effectiveEnd = today < monthEnd ? today : monthEnd;
+    const bot = state.branch_opening_times || {};
+    let deductions = 0;
+    for (let d = new Date(monthStart); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
+      const dateStr  = localISODate(d);
+      const dayIndex = (d.getDay() + 6) % 7;
+      const dayKey   = ROSTER_DAYS[dayIndex];
+      const weekOf   = mondayOf(dateStr);
+      const morningEntries = (state.rosters || []).filter(r =>
+        r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+      );
+      for (const entry of morningEntries) {
+        const branch  = (entry.branch || "maadi").toLowerCase();
+        const openStr = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+        const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
+        const stamp = (state.signin_stamps || []).find(s =>
+          s.by === entry.user_id &&
+          localISODate(new Date(s.at)) === dateStr &&
+          (s.branch || "").toLowerCase() === branch
+        );
+        if (!stamp) {
+          const hasNoStampPenalty = (state.penalties || []).some(p =>
+            p.auto_no_stamp && p.user_id === entry.user_id && p.date === dateStr
+          );
+          if (hasNoStampPenalty) deductions += 15;
+        } else {
+          const minsLate = Math.round((new Date(stamp.at).getTime() - openMs) / 60000);
+          if (minsLate > 15) deductions += 10;
+        }
+      }
+    }
+    return Math.max(0, 100 - deductions);
+  }
+
+  if (myRole === "inventory_management") {
+    const [yr, mo] = month.split("-").map(Number);
+    const lastDay  = localISODate(new Date(yr, mo, 0));
+    const today    = localISODate(new Date());
+    if (today < lastDay) {
+      const hasAny = (state.snapshots || []).some(s => (s.as_of || "").startsWith(month));
+      return hasAny ? 80 : null;
+    }
+    const hasEOD = (state.snapshots || []).some(s => s.as_of === lastDay);
+    return hasEOD ? 100 : 0;
+  }
+
+  if (myRole === "cash_status") {
+    const [yr, mo] = month.split("-").map(Number);
+    const monthStart = new Date(yr, mo - 1, 1);
+    const monthEnd   = new Date(yr, mo, 0);
+    const today      = new Date();
+    const effectiveEnd = today < monthEnd ? today : monthEnd;
+    const weeksInMonth = new Set();
+    for (let d = new Date(monthStart); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
+      weeksInMonth.add(mondayOf(localISODate(d)));
+    }
+    const totalWeeks = weeksInMonth.size;
+    if (totalWeeks === 0) return null;
+    const weeksWithDeposit = [...weeksInMonth].filter(weekOf =>
+      (state.maadi_deposits || []).some(dep => dep.week_of === weekOf)
+    ).length;
+    return Math.round((weeksWithDeposit / totalWeeks) * 100);
+  }
+
+  if (myRole === "barista_hygiene") {
+    const count = (state.penalties || []).filter(p =>
+      p.reason_code === "no_uniform" && p.month === month
+    ).length;
+    if (count === 0) {
+      const hasPenaltiesThisMonth = (state.penalties || []).some(p => p.month === month);
+      if (!hasPenaltiesThisMonth) return null;
+    }
+    return Math.max(0, 100 - count * 25);
+  }
+
+  return null;
+}
+
+function runEndOfMonthLeadershipCheck(month, cu) {
+  const assignment = getLeadershipAssignment(month);
+  if (!assignment) { toast("No leadership assignment for " + month, "error"); return; }
+  const [yr, mo] = month.split("-").map(Number);
+  const lastDay   = localISODate(new Date(yr, mo, 0));
+  const invMgrId  = assignment.inventory_management;
+  if (!invMgrId) { toast("No inventory manager assigned for " + month, "warn"); return; }
+  const hasSnapshot = (state.snapshots || []).some(s => s.as_of === lastDay);
+  if (hasSnapshot) { toast("✅ Inventory snapshot found for " + lastDay + " — no penalty.", "ok"); return; }
+  const already = (state.penalties || []).some(p =>
+    p.auto_leadership && p.user_id === invMgrId && p.month === month
+  );
+  if (already) { toast("Penalty already applied for inventory failure in " + month, "warn"); return; }
+  const invMgr = (state.users || []).find(u => u.id === invMgrId);
+  const salary  = Number(((state.salary_config || {})[invMgrId] || {}).monthly_salary || 0);
+  const amount  = penaltyAmount("half_day", salary);
+  state.penalties = state.penalties || [];
+  state.penalties.push({
+    id: uuid(), at: new Date().toISOString(),
+    by: cu.id, by_name: cu.name,
+    user_id: invMgrId, barista: invMgr ? invMgr.name : invMgrId,
+    kind: "half_day", kind_label: "Half day",
+    reason: "leadership_fail", reason_code: "leadership_fail",
+    date: lastDay, month,
+    amount,
+    note: "Auto: Inventory not updated for end of month " + month,
+    auto_leadership: true,
+    salary_at_time: salary,
+  });
+  saveState();
+  toast(`⚠ Half-day penalty applied to ${invMgr ? invMgr.name : invMgrId} — no inventory snapshot for ${month}`, "warn");
+  notifyHaidi(`Leadership penalty — ${invMgr ? invMgr.name : invMgrId}`, `No inventory snapshot for ${lastDay}. Half-day deducted.`);
+}
+
 function kpiGetUserScores(userId) {
   const cutoff = Date.now() - 30*24*60*60*1000;
   const month  = new Date().toISOString().slice(0,7);
@@ -8689,8 +8899,9 @@ function kpiGetUserScores(userId) {
     upselling: manual.upselling ?? null,
     customer:  customer ?? (manual.customer ?? null),
     // Teamwork: auto-calculated from reorder compliance; manual override by owner only
-    teamwork:  teamworkAuto ?? (manual.teamwork ?? null),
-    training:  manual.training  ?? null,
+    teamwork:   teamworkAuto ?? (manual.teamwork ?? null),
+    leadership: kpiLeadershipScore(userId, month) ?? null,
+    training:   manual.training  ?? null,
   };
 
   const cats = Object.keys(KPI_W());
@@ -8703,10 +8914,129 @@ function kpiGetAllScores() {
   for (const u of state.users) {
     if (!["barista","head_barista"].includes(u.role)) continue;
     const s = kpiGetUserScores(u.id);
-    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,training:null };
+    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,leadership:null,training:null };
   }
   return result;
 }
+
+// ─── Leadership role assignment (owner only) ─────────────────────────────────
+routes.leadership_roles = function(u) {
+  if (u.role !== "owner") {
+    const w = el("div",{});
+    w.appendChild(el("div",{class:"card",style:{padding:"20px"}},
+      el("div",{class:"muted"},"Access restricted — owner only.")));
+    w.appendChild(btnBack());
+    return w;
+  }
+
+  const wrap = el("div",{});
+  wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},"👑 Leadership Roles"));
+  wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"12px"}},
+    "Assign monthly accountability roles to baristas. Roles affect the Leadership KPI score."));
+
+  const today = new Date();
+  let selectedMonth = today.toISOString().slice(0,7);
+
+  const monthInput = el("input",{type:"month",value:selectedMonth,
+    style:{marginBottom:"14px",fontSize:"15px",padding:"6px 10px",borderRadius:"8px",border:"1px solid var(--border)"}});
+  wrap.appendChild(monthInput);
+
+  const content = el("div",{});
+  wrap.appendChild(content);
+
+  const ROLES_META = [
+    { key:"weekly_schedule",      label:"📅 Schedule Manager",
+      desc:"Accountable for weekly schedule and sign-in stamp compliance. Gets alerted when stamps are late or missing." },
+    { key:"inventory_management", label:"📦 Inventory Manager",
+      desc:"Must submit end-of-month inventory snapshot. Gets low-stock and reorder alerts. Half-day penalty if snapshot missing at month-end." },
+    { key:"cash_status",          label:"💵 Cash Manager",
+      desc:"Responsible for logging weekly Maadi ATM deposit. Reminded every Thursday if deposit is missing." },
+    { key:"barista_hygiene",      label:"🧹 Hygiene Manager",
+      desc:"Accountable for team uniform compliance. Score auto-calculates from 'no uniform' penalties issued during the month (−25 pts each)." },
+  ];
+
+  function draw() {
+    content.innerHTML = "";
+    const month = selectedMonth;
+    const assignment = getLeadershipAssignment(month) || {};
+    const baristas = (state.users || []).filter(x =>
+      ["barista","head_barista"].includes(x.role) && x.active !== false
+    );
+
+    const card = el("div",{class:"card"});
+    const carried = assignment._carried_forward;
+    card.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"2px"}},
+      "Assignments for " + month));
+    if (carried) {
+      card.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+        "No explicit record for this month — showing carried forward from previous month. Save to lock in."));
+    } else {
+      card.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+        "Changes save immediately and sync to all devices."));
+    }
+
+    const currentAssignment = { month, ...assignment };
+    delete currentAssignment._carried_forward;
+
+    for (const role of ROLES_META) {
+      const row = el("div",{style:{marginBottom:"16px",paddingBottom:"16px",borderBottom:"1px solid var(--border)"}});
+      row.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px",marginBottom:"2px"}},role.label));
+      row.appendChild(el("div",{class:"muted small",style:{marginBottom:"6px"}},role.desc));
+      const sel = el("select",{style:{width:"100%",padding:"6px 8px",borderRadius:"8px",border:"1px solid var(--border)",fontSize:"14px"}});
+      sel.appendChild(el("option",{value:""},"— Unassigned —"));
+      for (const b of baristas) {
+        const opt = el("option",{value:b.id}, b.name + (b.role==="head_barista"?" ⭐":""));
+        if (currentAssignment[role.key] === b.id) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change",() => { currentAssignment[role.key] = sel.value || null; });
+      row.appendChild(sel);
+      card.appendChild(row);
+    }
+
+    const btnRow = el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap",marginTop:"4px"}});
+
+    const saveBtn = el("button",{class:"btn",onClick:() => {
+      state.leadership_assignments = state.leadership_assignments || [];
+      const idx = state.leadership_assignments.findIndex(a => a.month === month);
+      const record = { ...currentAssignment };
+      delete record._carried_forward;
+      if (idx >= 0) state.leadership_assignments[idx] = record;
+      else state.leadership_assignments.push(record);
+      saveState();
+      toast("✅ Leadership roles saved for " + month);
+      draw();
+    }},"Save Assignments");
+    btnRow.appendChild(saveBtn);
+
+    if (month <= today.toISOString().slice(0,7)) {
+      const eomBtn = el("button",{class:"btn secondary",onClick:() => {
+        runEndOfMonthLeadershipCheck(month, u);
+      }},"⚙ End-of-Month Check");
+      btnRow.appendChild(eomBtn);
+    }
+    card.appendChild(btnRow);
+    content.appendChild(card);
+
+    // Summary card
+    const summCard = el("div",{class:"card",style:{marginTop:"12px"}});
+    summCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",marginBottom:"10px"}},"Current Assignment Summary"));
+    for (const role of ROLES_META) {
+      const uid  = currentAssignment[role.key];
+      const name = uid ? ((state.users||[]).find(x=>x.id===uid)||{}).name || uid : "Unassigned";
+      const row  = el("div",{class:"kv",style:{marginBottom:"6px"}});
+      row.appendChild(el("div",{class:"k",style:{fontSize:"12px"}},role.label));
+      row.appendChild(el("div",{class:"v",style:{fontWeight:uid?"600":"400",color:uid?"var(--ink)":"var(--ink-dim)"}},name));
+      summCard.appendChild(row);
+    }
+    content.appendChild(summCard);
+  }
+
+  monthInput.addEventListener("input",() => { selectedMonth = monthInput.value; draw(); });
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
 
 // ─── OWNER/HEAD BARISTA: Full team scorecard dashboard (English) ──────────────
 routes.scorecard = function(u) {
@@ -9045,6 +9375,44 @@ routes.my_scorecard = function(u) {
   scoreCard.appendChild(ringWrap);
   wrap.appendChild(scoreCard);
 
+  // Leadership role card
+  (function() {
+    const lMonth = new Date().toISOString().slice(0,7);
+    const lAssign = getLeadershipAssignment(lMonth);
+    const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+    const ROLE_INFO = {
+      weekly_schedule:      { en:"📅 Schedule Manager",  ar:"📅 مدير الجداول",
+        descEn:"You are accountable for the weekly schedule and sign-in stamp compliance this month.",
+        descAr:"أنت مسؤول عن الجدول الأسبوعي وبصمات الحضور هذا الشهر." },
+      inventory_management: { en:"📦 Inventory Manager", ar:"📦 مدير المخزون",
+        descEn:"You must submit the end-of-month inventory snapshot. You receive all low-stock alerts.",
+        descAr:"عليك تسليم جرد المخزون في آخر الشهر. ستتلقى تنبيهات نقص البضاعة." },
+      cash_status:          { en:"💵 Cash Manager",      ar:"💵 مدير الودائع",
+        descEn:"You are accountable for logging the weekly Maadi cash deposit. You are reminded every Thursday.",
+        descAr:"أنت مسؤول عن تسجيل الإيداع الأسبوعي في ماعدي. ستتلقى تذكيراً كل خميس." },
+      barista_hygiene:      { en:"🧹 Hygiene Manager",   ar:"🧹 مدير النظافة",
+        descEn:"You are accountable for team uniform compliance. Each 'no uniform' penalty deducts 25 pts from your leadership score.",
+        descAr:"أنت مسؤول عن الزي الموحد للفريق. كل مخالفة تحسم 25 نقطة من نقاط قيادتك." },
+    };
+    const myRole = lAssign ? (ROLE_KEYS.find(r => lAssign[r] === u.id) || null) : null;
+    const roleCard = el("div",{class:"card",style:{marginBottom:"12px",borderColor:"var(--accent,#e8a020)"}});
+    roleCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",marginBottom:"6px",opacity:".7",letterSpacing:"1px",textTransform:"uppercase"}},
+      isAR?"دورك القيادي هذا الشهر":"Your Leadership Role This Month"));
+    if (myRole) {
+      const info = ROLE_INFO[myRole];
+      roleCard.appendChild(el("div",{style:{fontWeight:"800",fontSize:"18px",marginBottom:"6px"}},
+        isAR ? info.ar : info.en));
+      roleCard.appendChild(el("div",{class:"muted",style:{fontSize:"13px"}},
+        isAR ? info.descAr : info.descEn));
+    } else {
+      roleCard.appendChild(el("div",{style:{fontWeight:"600",fontSize:"14px",marginBottom:"4px"}},
+        isAR?"لا يوجد دور قيادي مُخصص لك هذا الشهر":"No leadership role assigned this month"));
+      roleCard.appendChild(el("div",{class:"muted small"},
+        isAR?"النتيجة الافتراضية: 100 نقطة (لا مسؤولية محددة)":"Default score: 100 pts — no specific accountability obligation."));
+    }
+    wrap.appendChild(roleCard);
+  })();
+
   // Category breakdown
   const catCard = el("div",{class:"card",style:{marginBottom:"12px"}});
   catCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},isAR?"تفصيل النقاط":"Score Breakdown"));
@@ -9056,6 +9424,7 @@ routes.my_scorecard = function(u) {
     upselling:   isAR?"شهري: تقرير المبيعات":"Monthly: Sales Report",
     customer:    isAR?"تلقائي: تقييمات العملاء":"Auto: Customer Reviews",
     teamwork:    isAR?"تلقائي: الالتزام بطلبات التوريد":"Auto: Reorder Compliance",
+    leadership:  isAR?"تلقائي: دور القيادة الشهري":"Auto: Monthly Leadership Role",
     training:    isAR?"شهري: وحدات التدريب":"Monthly: Training Modules",
   };
   catCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
