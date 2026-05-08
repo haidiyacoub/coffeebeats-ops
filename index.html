@@ -1407,9 +1407,10 @@ const ROLE_ACCESS = {
                  "signin_stamp_new","signin_stamp_list",
                  "leave_new","leave_list",
                  "scorecard","my_scorecard","my_jd",
-                 "reorder_action_new","reorder_action_list","supplier_list","items_list"],
+                 "reorder_action_new","reorder_action_list","supplier_list","items_list",
+                 "my_hr","staff_hr"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new"],
+  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr"],
   // Zawya-only roles — no app access, kept in list for barista drink allowance tracking
   manager: [],
   helper:  [],
@@ -1599,6 +1600,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("📋", "My Leaves", "View leave history", () => go("leave_list")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
     tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
     tiles.appendChild(tile("📦", "Reorder Actions", "Log supplier actions", () => go("reorder_action_new")));
   }
@@ -1629,6 +1631,8 @@ routes.home = function (u) {
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance dashboard", () => go("scorecard")));
     tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
+    tiles.appendChild(tile("👥", "Staff HR", "Payroll · penalties · leaves overview", () => go("staff_hr")));
     tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
     tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
@@ -1663,6 +1667,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
+    tiles.appendChild(tile("👥", "Staff HR", "Monthly payroll · deductions · leaves", () => go("staff_hr")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
     tiles.appendChild(tile("📦", "Inventory Items", "Add, edit or remove tracked items", () => go("items_list")));
@@ -9716,6 +9721,363 @@ routes.my_scorecard = function(u) {
     wrap.appendChild(logCard);
   }
   wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ─── PERSONAL HR DASHBOARD (barista/head_barista self-view) ───────────────────
+routes.my_hr = function(u, params) {
+  const targetId   = (params && params.user_id && u.role === "owner") ? params.user_id : u.id;
+  const targetUser = state.users.find(x => x.id === targetId) || u;
+  const isAR  = targetUser.role === "barista" || targetUser.role === "head_barista";
+  const isHead = targetUser.role === "head_barista";
+  const dir   = isAR ? "rtl" : "ltr";
+  const wrap  = el("div", { style: { direction: dir } });
+
+  state.salary_config  = state.salary_config  || {};
+  state.penalties      = state.penalties      || [];
+  state.overtime_logs  = state.overtime_logs  || [];
+  state.salary_loans   = state.salary_loans   || [];
+  state.leaves         = state.leaves         || [];
+
+  // Header
+  const hdr = el("div", { class: "card", style: { textAlign: "center", marginBottom: "12px", background: "var(--ink)", color: "var(--accent-2)" } });
+  hdr.appendChild(el("div", { style: { fontSize: "12px", letterSpacing: "2px", opacity: ".7", textTransform: "uppercase", marginBottom: "4px" } }, "Coffee Beats · ملخص الراتب والإجازات"));
+  hdr.appendChild(el("div", { style: { fontSize: "20px", fontWeight: "800" } }, targetUser.name));
+  hdr.appendChild(el("div", { style: { fontSize: "13px", opacity: ".8", marginTop: "4px" } }, isHead ? "⭐ رئيس بريستا" : "بريستا"));
+  wrap.appendChild(hdr);
+
+  // Month selector
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  let selMonth = nowMonth;
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+  const prevBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = d.toISOString().slice(0, 7);
+    monthLbl.textContent = selMonth;
+    drawBody();
+  }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
+
+  function drawBody() {
+    body.innerHTML = "";
+    const uid     = targetUser.id;
+    const salary  = Number((state.salary_config[uid] || {}).monthly_salary || 0);
+    const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
+    const penList  = state.penalties.filter(x => x.user_id === uid && monthFn(x));
+    const otList   = state.overtime_logs.filter(x => x.user_id === uid && monthFn(x));
+    const loanList = state.salary_loans.filter(x => x.user_id === uid && monthFn(x));
+    const penSum   = penList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const otSum    = otList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const otHrs    = otList.reduce((s, r) => s + (Number(r.hours) || 0), 0);
+    const loanSum  = loanList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const netDue   = Math.max(0, salary + otSum - penSum - loanSum);
+    const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
+
+    // Section A — Pay Summary
+    const payCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    payCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "10px" } }, isAR ? "💳 ملخص الراتب" : "💳 Pay Summary"));
+    const rows = [
+      [isAR ? "الراتب الأساسي" : "Base Salary", money(salary), ""],
+      [isAR ? `أوفرتايم (${otHrs}h)` : `Overtime (${otHrs}h)`, "+" + money(otSum), "var(--ok)"],
+      [isAR ? "الخصومات" : "Penalties", "−" + money(penSum), penSum > 0 ? "var(--bad)" : ""],
+      [isAR ? "سلف" : "Loans", "−" + money(loanSum), loanSum > 0 ? "var(--warn)" : ""],
+    ];
+    rows.forEach(([k, v, c]) => {
+      const row = el("div", { class: "kv" });
+      row.appendChild(el("div", { class: "k" }, k));
+      row.appendChild(el("div", { class: "v", style: c ? { color: c } : {} }, v));
+      payCard.appendChild(row);
+    });
+    const netRow = el("div", { class: "kv", style: { borderTop: "2px solid var(--border)", marginTop: "8px", paddingTop: "8px" } });
+    netRow.appendChild(el("div", { style: { fontWeight: "800", fontSize: "15px" } }, isAR ? "صافي المستحق" : "Net Due"));
+    netRow.appendChild(el("div", { style: { fontWeight: "800", fontSize: "18px", color: netColor } }, money(netDue)));
+    payCard.appendChild(netRow);
+    body.appendChild(payCard);
+
+    // Section B — KPI Reward
+    const scores = kpiGetUserScores(uid);
+    const total  = scores ? kpiCalcTotal(scores) : 0;
+    const rwdCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    rwdCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "🏆 مكافأة الأداء" : "🏆 KPI Reward"));
+    const tier = total >= 90 ? 90 : total >= 80 ? 80 : total >= 70 ? 70 : 0;
+    const badges = { 90: "🥇 ذهبي", 80: "🥈 فضي", 70: "🥉 برونزي", 0: "📈 في تطور" };
+    const rwdDescs = {
+      90: isAR ? "يوم إجازة مكافأة + كوبون هدية + أولوية في الجدول" : "Bonus day off · Gift voucher · Priority schedule",
+      80: isAR ? "كوبون وجبة + تدريب من اختيارك + تهنئة على مستوى الفريق" : "Meal voucher · Training of choice · Team shoutout",
+      70: isAR ? "رسالة تقدير + أولوية في الجداول" : "Recognition letter · Schedule preference",
+      0:  isAR ? "حدد هدفاً مع رئيس البريستا هذا الشهر" : "Set a growth goal with Head Barista",
+    };
+    rwdCard.appendChild(el("div", { style: { fontSize: "22px", fontWeight: "800", color: kpiScoreColor(total), marginBottom: "4px" } }, badges[tier] + "  " + total.toFixed(0) + "/100"));
+    rwdCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px", marginBottom: "8px" } }, rwdDescs[tier]));
+    rwdCard.appendChild(el("button", { class: "btn secondary", style: { fontSize: "12px", padding: "7px 12px" }, onClick: () => go("my_scorecard") }, isAR ? "← تفاصيل الأداء الكاملة" : "Full performance breakdown →"));
+    body.appendChild(rwdCard);
+
+    // Section C — Penalties
+    const penCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    penCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "⚖ الخصومات" : "⚖ Penalties"));
+    if (penList.length === 0) {
+      penCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px" } }, isAR ? "✅ لا توجد خصومات هذا الشهر" : "✅ No penalties this month"));
+    } else {
+      const t = el("table", {});
+      t.appendChild(el("thead", {}, [el("tr", {}, [
+        el("th", {}, isAR ? "التاريخ" : "Date"),
+        el("th", {}, isAR ? "السبب" : "Reason"),
+        el("th", {}, isAR ? "النوع" : "Type"),
+        el("th", { style: { textAlign: "right" } }, isAR ? "المبلغ" : "Amount"),
+      ])]));
+      const tb = el("tbody", {});
+      penList.forEach(r => tb.appendChild(el("tr", {}, [
+        el("td", {}, r.date || ""),
+        el("td", {}, r.reason || r.note || "—"),
+        el("td", {}, r.type || "—"),
+        el("td", { class: "num", style: { color: "var(--bad)" } }, "−" + money(r.amount)),
+      ])));
+      t.appendChild(tb);
+      penCard.appendChild(t);
+    }
+    body.appendChild(penCard);
+
+    // Section D — Overtime
+    const otCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    otCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "⏱ الأوفرتايم" : "⏱ Overtime"));
+    if (otList.length === 0) {
+      otCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px" } }, isAR ? "لا يوجد أوفرتايم هذا الشهر" : "No overtime this month"));
+    } else {
+      const t = el("table", {});
+      t.appendChild(el("thead", {}, [el("tr", {}, [
+        el("th", {}, isAR ? "التاريخ" : "Date"),
+        el("th", {}, isAR ? "الساعات" : "Hours"),
+        el("th", { style: { textAlign: "right" } }, isAR ? "المبلغ" : "Amount"),
+        el("th", {}, isAR ? "الحالة" : "Status"),
+      ])]));
+      const tb = el("tbody", {});
+      otList.forEach(r => tb.appendChild(el("tr", {}, [
+        el("td", {}, r.date || ""),
+        el("td", { class: "num" }, String(r.hours || 0) + "h"),
+        el("td", { class: "num", style: { color: "var(--ok)" } }, "+" + money(r.amount || 0)),
+        el("td", {}, r.approved ? "✅" : "⏳"),
+      ])));
+      t.appendChild(tb);
+      otCard.appendChild(t);
+    }
+    body.appendChild(otCard);
+
+    // Section E — Loans
+    const loanCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    loanCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "💸 السلف والخصومات" : "💸 Loans / Deductions"));
+    if (loanList.length === 0) {
+      loanCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px" } }, isAR ? "لا توجد سلف هذا الشهر" : "No loans this month"));
+    } else {
+      const t = el("table", {});
+      t.appendChild(el("thead", {}, [el("tr", {}, [
+        el("th", {}, isAR ? "التاريخ" : "Date"),
+        el("th", {}, isAR ? "ملاحظة" : "Note"),
+        el("th", { style: { textAlign: "right" } }, isAR ? "المبلغ" : "Amount"),
+      ])]));
+      const tb = el("tbody", {});
+      loanList.forEach(r => tb.appendChild(el("tr", {}, [
+        el("td", {}, r.date || ""),
+        el("td", {}, r.note || "—"),
+        el("td", { class: "num", style: { color: "var(--warn)" } }, "−" + money(r.amount || 0)),
+      ])));
+      t.appendChild(tb);
+      loanCard.appendChild(t);
+    }
+    body.appendChild(loanCard);
+
+    // Section F — Leaves
+    const thisYear = selMonth.slice(0, 4);
+    const allLeaves = state.leaves.filter(x => x.user_id === uid);
+    const annualUsed = allLeaves
+      .filter(x => x.status === "approved" && x.type === "annual" && (x.from_date || "").startsWith(thisYear))
+      .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+    const sickUsed = allLeaves
+      .filter(x => x.status === "approved" && x.type === "sick" && (x.from_date || "").startsWith(thisYear))
+      .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+    const pending  = allLeaves.filter(x => x.status === "pending").sort((a, b) => b.requested_at.localeCompare(a.requested_at));
+    const recent   = allLeaves.filter(x => x.status !== "pending").sort((a, b) => b.requested_at.localeCompare(a.requested_at)).slice(0, 5);
+
+    const lvCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    lvCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "10px" } }, isAR ? "🌴 الإجازات" : "🌴 Leaves"));
+    const lvStats = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "10px" } });
+    [
+      [isAR ? `إجازة سنوية مستخدمة (${thisYear})` : `Annual used (${thisYear})`, annualUsed + (isAR ? " يوم" : " days")],
+      [isAR ? `إجازة مرضية (${thisYear})` : `Sick used (${thisYear})`, sickUsed + (isAR ? " يوم" : " days")],
+    ].forEach(([k, v]) => {
+      const c = el("div", { class: "card", style: { padding: "10px", textAlign: "center" } });
+      c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
+      c.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px" } }, String(v)));
+      lvStats.appendChild(c);
+    });
+    lvCard.appendChild(lvStats);
+    if (pending.length) {
+      lvCard.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", marginBottom: "6px" } }, isAR ? "⏳ طلبات معلقة" : "⏳ Pending requests"));
+      pending.forEach(x => {
+        const typeLabel = x.type === "annual" ? (isAR ? "سنوية" : "Annual") : (isAR ? "مرضية" : "Sick");
+        lvCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, `${typeLabel} · ${x.from_date} → ${x.to_date}`));
+      });
+    }
+    if (recent.length) {
+      lvCard.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", margin: "8px 0 4px" } }, isAR ? "السجل الأخير" : "Recent"));
+      recent.forEach(x => {
+        const statusIcon = x.status === "approved" ? "✅" : "❌";
+        const typeLabel  = x.type === "annual" ? (isAR ? "سنوية" : "Annual") : (isAR ? "مرضية" : "Sick");
+        lvCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, `${statusIcon} ${typeLabel} · ${x.from_date} → ${x.to_date}`));
+      });
+    }
+    lvCard.appendChild(el("button", { class: "btn secondary", style: { marginTop: "8px", fontSize: "12px", padding: "7px 12px" }, onClick: () => go("leave_new") }, isAR ? "🌴 طلب إجازة" : "🌴 Request leave"));
+    body.appendChild(lvCard);
+  }
+
+  drawBody();
+  return wrap;
+};
+
+// ─── STAFF HR OVERVIEW (owner / head_barista / accountant) ────────────────────
+routes.staff_hr = function(u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Staff HR Overview", "Monthly payroll, penalties, loans, KPI and leave summary for all active staff."));
+
+  if (!["owner", "accountant", "head_barista"].includes(u.role)) {
+    wrap.appendChild(el("div", { class: "card" }, "Access restricted."));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  state.salary_config  = state.salary_config  || {};
+  state.penalties      = state.penalties      || [];
+  state.overtime_logs  = state.overtime_logs  || [];
+  state.salary_loans   = state.salary_loans   || [];
+  state.leaves         = state.leaves         || [];
+
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  let selMonth = nowMonth;
+
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+  const prevBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = d.toISOString().slice(0, 7);
+    monthLbl.textContent = selMonth;
+    drawBody();
+  }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
+
+  function drawBody() {
+    body.innerHTML = "";
+    const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
+    const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+
+    // Summary stat cards
+    let totalPayroll = 0, totalPen = 0, totalOT = 0;
+    const staffData = staff.map(p => {
+      const salary  = Number((state.salary_config[p.id] || {}).monthly_salary || 0);
+      const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const netDue  = Math.max(0, salary + otSum - penSum - loanSum);
+      const scores  = kpiGetUserScores(p.id);
+      const kpiTotal = scores ? kpiCalcTotal(scores) : 0;
+      const thisYear = selMonth.slice(0, 4);
+      const lvDays  = (state.leaves || [])
+        .filter(x => x.user_id === p.id && x.status === "approved" && x.type === "annual" && (x.from_date || "").startsWith(thisYear))
+        .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+      totalPayroll += netDue;
+      totalPen     += penSum;
+      totalOT      += otSum;
+      return { p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays };
+    });
+
+    const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
+    [
+      ["👥 Active Staff", String(staff.length)],
+      ["💰 Total Payroll", money(totalPayroll)],
+      ["⚖ Total Penalties", money(totalPen)],
+      ["⏱ Total Overtime", money(totalOT)],
+    ].forEach(([k, v]) => {
+      const c = el("div", { class: "card", style: { padding: "12px", textAlign: "center" } });
+      c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
+      c.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px" } }, v));
+      statsRow.appendChild(c);
+    });
+    body.appendChild(statsRow);
+
+    // Staff table
+    const tableCard = el("div", { class: "card" });
+    const t = el("table", {});
+    t.appendChild(el("thead", {}, [el("tr", {}, [
+      el("th", {}, "Name"),
+      el("th", {}, "Role"),
+      el("th", { style: { textAlign: "right" } }, "Base"),
+      el("th", { style: { textAlign: "right" } }, "OT"),
+      el("th", { style: { textAlign: "right" } }, "Penalties"),
+      el("th", { style: { textAlign: "right" } }, "Loans"),
+      el("th", { style: { textAlign: "right" } }, "Net Due"),
+      el("th", { style: { textAlign: "center" } }, "KPI"),
+      el("th", { style: { textAlign: "center" } }, "Leave Days"),
+    ])]));
+    const tb = el("tbody", {});
+    let grandBase = 0, grandOT = 0, grandPen = 0, grandLoan = 0, grandNet = 0;
+    staffData.forEach(({ p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays }) => {
+      grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
+      const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
+      const tr = el("tr", { style: { cursor: "pointer" }, onClick: () => go("my_hr", { user_id: p.id }) }, [
+        el("td", { style: { fontWeight: "600" } }, p.name),
+        el("td", { class: "muted small" }, p.role === "head_barista" ? "Head" : "Barista"),
+        el("td", { class: "num" }, money(salary)),
+        el("td", { class: "num", style: { color: "var(--ok)" } }, otSum ? "+" + money(otSum) : "—"),
+        el("td", { class: "num", style: { color: penSum ? "var(--bad)" : "" } }, penSum ? "−" + money(penSum) : "—"),
+        el("td", { class: "num", style: { color: loanSum ? "var(--warn)" : "" } }, loanSum ? "−" + money(loanSum) : "—"),
+        el("td", { class: "num", style: { fontWeight: "700", color: netColor } }, money(netDue)),
+        el("td", { style: { textAlign: "center", fontSize: "12px", fontWeight: "700", color: kpiScoreColor(kpiTotal) } }, kpiTotal ? kpiGradeEn(kpiTotal).split(" ")[0] + " " + kpiTotal.toFixed(0) : "—"),
+        el("td", { style: { textAlign: "center" } }, lvDays ? String(lvDays) + "d" : "—"),
+      ]);
+      tb.appendChild(tr);
+    });
+    // Grand total row
+    const totalTr = el("tr", { style: { borderTop: "2px solid var(--border)", fontWeight: "800" } }, [
+      el("td", { colspan: "2", style: { fontWeight: "800" } }, "Total"),
+      el("td", { class: "num" }, money(grandBase)),
+      el("td", { class: "num" }, money(grandOT)),
+      el("td", { class: "num" }, money(grandPen)),
+      el("td", { class: "num" }, money(grandLoan)),
+      el("td", { class: "num", style: { color: "var(--ok)" } }, money(grandNet)),
+      el("td", {}), el("td", {}),
+    ]);
+    tb.appendChild(totalTr);
+    t.appendChild(tb);
+    tableCard.appendChild(t);
+    body.appendChild(tableCard);
+  }
+
+  drawBody();
   return wrap;
 };
 
