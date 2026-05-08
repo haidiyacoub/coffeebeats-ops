@@ -603,12 +603,9 @@
         <div class="form-group">
           <label>Your Name</label>
           <select id="log-barista">
-            <option value="">— Select your name —</option>
-            <option value="sara">Sara K. · Head Barista</option>
-            <option value="mo">Mo A. · Barista</option>
-            <option value="lina">Lina M. · Barista</option>
-            <option value="karim">Karim T. · Barista</option>
+            <option value="">— Loading team… —</option>
           </select>
+
         </div>
 
         <div class="form-group">
@@ -1665,6 +1662,19 @@ async function init() {
   await loadTeamFromFirestore();
   if (DB.team.length === 0) return;
   activeBarista = DB.team[0].id;
+
+  // Populate the Daily Self-Report barista dropdown dynamically from staff_public
+  const logSel = document.getElementById('log-barista');
+  if (logSel) {
+    logSel.innerHTML = '<option value="">— Select your name —</option>';
+    DB.team.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = `${m.name} · ${m.role === 'head' ? 'Head Barista' : 'Barista'}`;
+      logSel.appendChild(opt);
+    });
+  }
+
   renderLeaderboard();
   renderHeatmap();
   renderBaristaSelector();
