@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Coffee Beats · Ops Scorecard — ops.coffeebeats.art</title>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&family=Georgia:ital@1&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
   :root {
     --peach: #EFBBA3;
@@ -1147,14 +1149,20 @@
      JAVASCRIPT
 ════════════════════════════ -->
 <script>
+// ── FIREBASE ─────────────────────────────────────────────────────────────────
+firebase.initializeApp({
+  apiKey: "AIzaSyA9fMlRqhrCMsXHdj1JYd2EM3yOmai2VAA",
+  authDomain: "coffeebeats-79200.firebaseapp.com",
+  projectId: "coffeebeats-79200",
+  storageBucket: "coffeebeats-79200.firebasestorage.app",
+  messagingSenderId: "1046768234777",
+  appId: "1:1046768234777:web:ca6193791030e2fbde5588",
+});
+const db = firebase.firestore();
+
 // ── DATA STORE ──────────────────────────────────────────────────────────────
 const DB = {
-  team: [
-    { id:'sara', name:'Sara K.', role:'head', initials:'SK' },
-    { id:'mo', name:'Mo A.', role:'barista', initials:'MA' },
-    { id:'lina', name:'Lina M.', role:'barista', initials:'LM' },
-    { id:'karim', name:'Karim T.', role:'barista', initials:'KT' },
-  ],
+  team: [],   // populated by loadTeamFromFirestore()
   weights: {
     punctuality: 15,
     waste: 15,
@@ -1165,19 +1173,8 @@ const DB = {
     teamwork: 5,
     training: 5,
   },
-  // Sample KPI scores per barista (0-100 per category)
-  scores: {
-    sara:  { punctuality:92, waste:88, cleanliness:95, craft:90, upselling:78, customer:94, teamwork:96, training:80 },
-    mo:    { punctuality:78, waste:72, cleanliness:82, craft:85, upselling:80, customer:82, teamwork:88, training:75 },
-    lina:  { punctuality:96, waste:90, cleanliness:94, craft:79, upselling:74, customer:88, teamwork:92, training:85 },
-    karim: { punctuality:65, waste:78, cleanliness:80, craft:83, upselling:72, customer:79, teamwork:84, training:70 },
-  },
-  logs: [
-    { date:'2026-04-29', barista:'sara', punctuality:95, waste:90, cleanliness:100 },
-    { date:'2026-04-29', barista:'lina', punctuality:100, waste:85, cleanliness:90 },
-    { date:'2026-04-28', barista:'mo', punctuality:80, waste:75, cleanliness:80 },
-    { date:'2026-04-28', barista:'karim', punctuality:70, waste:80, cleanliness:85 },
-  ]
+  scores: {}, // keyed by Firestore doc ID, populated by loadTeamFromFirestore()
+  logs: []    // populated by loadTeamFromFirestore()
 };
 
 const KPI_LABELS = {
@@ -1251,6 +1248,23 @@ function scoreColorClass(n) {
 
 function initials(name) {
   return name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+}
+
+async function loadTeamFromFirestore() {
+  const snap = await db.collection("staff_public").where("active", "==", true).get();
+  DB.team = snap.docs
+    .filter(d => d.data().role === "barista" || d.data().role === "head_barista")
+    .map(d => ({
+      id:       d.id,
+      name:     d.data().name,
+      role:     d.data().role === "head_barista" ? "head" : "barista",
+      initials: initials(d.data().name),
+    }));
+  DB.team.forEach(m => {
+    if (!DB.scores[m.id]) {
+      DB.scores[m.id] = { punctuality:0, waste:0, cleanliness:0, craft:0, upselling:0, customer:0, teamwork:0, training:0 };
+    }
+  });
 }
 
 function showToast(msg) {
@@ -1333,7 +1347,7 @@ function renderHeatmap() {
 }
 
 // ── SCORECARD ────────────────────────────────────────────────────────────────
-let activeBarista = 'sara';
+let activeBarista = '';
 
 function renderBaristaSelector() {
   const el = document.getElementById('barista-tabs');
@@ -1573,7 +1587,7 @@ function renderRecentLogs() {
 
 // ── ACHIEVEMENTS ──────────────────────────────────────────────────────────────
 function renderAchievements() {
-  const s = DB.scores[activeBarista] || DB.scores.sara;
+  const s = DB.scores[activeBarista] || {};
   const el = document.getElementById('achievement-grid');
   el.innerHTML = ACHIEVEMENTS_DEF.map(a => {
     const unlocked = a.criteria(s);
@@ -1646,9 +1660,11 @@ function refreshDashboard() {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-function init() {
-  // Set today's date
+async function init() {
   document.getElementById('log-date').value = new Date().toISOString().slice(0,10);
+  await loadTeamFromFirestore();
+  if (DB.team.length === 0) return;
+  activeBarista = DB.team[0].id;
   renderLeaderboard();
   renderHeatmap();
   renderBaristaSelector();
@@ -1658,9 +1674,9 @@ function init() {
   renderAchievements();
   renderWeightForm();
   renderRoster();
-  // Dash stats
   const totals = DB.team.map(m => calcTotal(DB.scores[m.id]));
-  document.getElementById('dash-team-score').textContent = Math.round(totals.reduce((a,b)=>a+b,0)/totals.length);
+  document.getElementById('dash-team-score').textContent =
+    totals.length ? Math.round(totals.reduce((a,b)=>a+b,0)/totals.length) : 0;
 }
 
 window.addEventListener('DOMContentLoaded', init);
