@@ -89,9 +89,19 @@ exports.setStaffRole = onCall(async (request) => {
 exports.setStaffActive = onCall(async (request) => {
   _requireOwner(request);
   const { targetUid, active } = request.data;
-  await getAuth().updateUser(targetUid, { disabled: !active });
-  await getDb().collection("staff").doc(targetUid).update({ active });
-  await getDb().collection("staff_public").doc(targetUid).update({ active });
+  if (!targetUid) throw new HttpsError("invalid-argument", "targetUid is required.");
+
+  // Try to update Firebase Auth — may not exist for legacy/migrated users
+  try {
+    await getAuth().updateUser(targetUid, { disabled: !active });
+  } catch (e) {
+    if (e.code !== "auth/user-not-found") throw e;
+    // Legacy user has no Firebase Auth account — just update Firestore below
+  }
+
+  const db = getDb();
+  await db.collection("staff").doc(targetUid).update({ active });
+  await db.collection("staff_public").doc(targetUid).update({ active });
   return { ok: true };
 });
 
@@ -127,11 +137,14 @@ exports.updateStaffProfile = onCall(async (request) => {
       await db.collection("staff_public").doc(targetUid).update(publicUpdate);
     }
     if (role != null && branches != null) {
-      await getAuth().setCustomUserClaims(targetUid, { role, branches });
+      try { await getAuth().setCustomUserClaims(targetUid, { role, branches }); }
+      catch (e) { if (e.code !== "auth/user-not-found") throw e; }
     }
     if (active != null) {
-      await getAuth().updateUser(targetUid, { disabled: !active });
+      try { await getAuth().updateUser(targetUid, { disabled: !active }); }
+      catch (e) { if (e.code !== "auth/user-not-found") throw e; }
     }
+
   } else {
     // Self — only emergency_number allowed
     if (emergency_number != null) {
