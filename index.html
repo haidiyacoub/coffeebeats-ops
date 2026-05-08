@@ -358,6 +358,176 @@ const storage   = firebase.storage();
 const auth      = firebase.auth();
 const functions = firebase.functions();
 
+// ─── Staff Directory ─────────────────────────────────────────
+// Single source of truth for all staff: populated from Firestore `staff_public`.
+// staffDirectory is an in-memory Map<uid, {uid, id, name, role, branches, active, legacy_id?}>.
+// All code that previously read state.users should now call staffDir.*() helpers.
+// state.users is kept as a live computed proxy for backward compatibility with
+// existing callsites (salary, penalty, KPI views, etc.).
+
+const staffDir = (() => {
+  let _map = new Map(); // uid → user object
+
+  // Convert a staff_public doc to the shape state.users expects.
+  function _toUser(uid, d) {
+    return {
+      id:         uid,            // use Firebase UID as canonical id
+      uid,
+      name:       d.name       || "",
+      role:       d.role       || "barista",
+      branches:   d.branches   || [],
+      active:     d.active     !== false,
+      legacy_id:  d.legacy_id  || null,
+      // non-sensitive extras (populated after auth from staff collection)
+      deny_access:  d.deny_access  || [],
+      extra_access: d.extra_access || [],
+      pin:        "••••",         // never expose PIN in directory
+      email:      d.email || "",
+    };
+  }
+
+  return {
+    /** Load all active staff from staff_public into the in-memory map. */
+    async load() {
+      try {
+        const snap = await db.collection("staff_public").get();
+        _map = new Map();
+        snap.forEach(doc => { _map.set(doc.id, _toUser(doc.id, doc.data())); });
+        // Rebuild the state.users proxy array so existing callsites stay in sync.
+        _rebuildStateUsers();
+      } catch (e) {
+        console.warn("staffDir.load failed:", e);
+        // Fall back: keep whatever is in _map (may be empty on first load).
+      }
+    },
+
+    /** Return an array of all staff (all roles, all statuses). */
+    all()     { return [..._map.values()]; },
+
+    /** Return an array of active staff only. */
+    active()  { return [..._map.values()].filter(u => u.active); },
+
+    /** Find one staff member by UID (canonical). */
+    byId(uid) { return _map.get(uid) || null; },
+
+    /** Find by legacy state.users UUID (stored in legacy_id field). */
+    byLegacyId(lid) {
+      if (!lid) return null;
+      for (const u of _map.values()) { if (u.legacy_id === lid) return u; }
+      return null;
+    },
+
+    /** Find by name (case-insensitive prefix match, for review linking). */
+    byName(name) {
+      if (!name) return null;
+      const n = name.trim().toLowerCase();
+      for (const u of _map.values()) {
+        if (u.name && u.name.toLowerCase().startsWith(n.split(' ')[0])) return u;
+      }
+      return null;
+    },
+
+    /**
+     * Resolve a user-ID that might be either a Firebase UID or a legacy UUID.
+     * Returns the canonical user object, or null if not found.
+     */
+    resolve(id) {
+      if (!id) return null;
+      return _map.get(id) || this.byLegacyId(id) || null;
+    },
+
+    /** Active baristas + head_baristas for a given branch (or all if branch omitted). */
+    baristas(branch) {
+      return [..._map.values()].filter(u =>
+        u.active &&
+        (u.role === "barista" || u.role === "head_barista") &&
+        (!branch || u.branches.includes(branch))
+      );
+    },
+
+    /** Active staff visible in shift-close / drink-allowance dropdowns for a branch. */
+    shiftStaff(branch) {
+      return [..._map.values()].filter(u =>
+        u.active &&
+        ["barista","head_barista","manager","helper"].includes(u.role) &&
+        (!branch || u.branches.includes(branch))
+      );
+    },
+
+    /** Size of the directory (number of known staff). */
+    size() { return _map.size; },
+  };
+})();
+
+/**
+ * Rebuild state.users from staffDir so all legacy callsites work unchanged.
+ * Called every time the directory is (re)loaded.
+ */
+function _rebuildStateUsers() {
+  if (!state) return; // called before state init — safe to skip
+  state.users = staffDir.all();
+}
+
+/**
+ * One-time migration: rewrite any legacy UUID references in salary/penalty/KPI
+ * records to use the Firebase UID (matched via legacy_id stored in staff_public).
+ * Safe to re-run — only touches records that still hold old-format UUIDs.
+ */
+function _remapLegacyIds() {
+  if (!state || !staffDir.size()) return;
+  const isFbUid = id => typeof id === "string" && id.length > 20 && !id.startsWith("inv_");
+  function remap(id) {
+    if (!id || isFbUid(id)) return id; // already a Firebase UID, keep it
+    const u = staffDir.byLegacyId(id);
+    return u ? u.uid : id; // swap if we find a match; keep original otherwise
+  }
+
+  const collections = [
+    "salary_loans", "salaries", "overtime_logs", "penalties",
+    "kpi_manual", "customer_feedback", "leaves", "rosters",
+    "roaster_schedules", "leadership_assignments",
+  ];
+  let changed = false;
+  for (const col of collections) {
+    const arr = state[col];
+    if (!Array.isArray(arr)) continue;
+    for (const rec of arr) {
+      for (const key of ["user_id","barista_id","by","assigned_to","target_id"]) {
+        if (rec[key] && !isFbUid(rec[key])) {
+          const mapped = remap(rec[key]);
+          if (mapped !== rec[key]) { rec[key] = mapped; changed = true; }
+        }
+      }
+    }
+  }
+  // salary_config keys are user_ids
+  if (state.salary_config) {
+    const newCfg = {};
+    for (const [k, v] of Object.entries(state.salary_config)) {
+      const newKey = isFbUid(k) ? k : (staffDir.byLegacyId(k)?.uid || k);
+      newCfg[newKey] = v;
+      if (newKey !== k) changed = true;
+    }
+    state.salary_config = newCfg;
+  }
+  // leadership_assignments values are user_ids
+  const la = state.leadership_assignments;
+  if (Array.isArray(la)) {
+    for (const rec of la) {
+      for (const key of Object.keys(rec)) {
+        if (typeof rec[key] === "string" && !isFbUid(rec[key]) && rec[key].length > 8) {
+          const mapped = remap(rec[key]);
+          if (mapped !== rec[key]) { rec[key] = mapped; changed = true; }
+        }
+      }
+    }
+  }
+  if (changed) {
+    console.log("[staffDir] Legacy ID remap applied — saving state.");
+    saveState({ immediate: true });
+  }
+}
+
 function startReviewsListener() {
   db.collection("reviews").orderBy("at", "asc").onSnapshot(snap => {
     if (!state.customer_feedback) state.customer_feedback = [];
@@ -368,17 +538,16 @@ function startReviewsListener() {
       const doc = change.doc;
       if (existingIds.has(doc.id)) return;
       const d = doc.data();
-      const matchUser = (state.users || []).find(u =>
-        u.name && d.barista && u.name.toLowerCase().startsWith(d.barista.toLowerCase().split(' ')[0])
-      );
+      // Use staffDir.byName for review → barista matching (more reliable than state.users)
+      const matchUser = staffDir.byName(d.barista);
       state.customer_feedback.push({
         id: doc.id,
         at: d.at || new Date(d.timestamp).getTime(),
         by: "website",
         by_name: "coffeebeats.art",
         barista_name: d.barista || "",
-        barista_id: matchUser?.id || null,
-        user_id: matchUser?.id || null,
+        barista_id: matchUser?.uid || null,
+        user_id: matchUser?.uid || null,
         rating: d.rating || 0,
         source: "coffeebeats.art",
         standout: d.standout || "",
@@ -722,7 +891,7 @@ function defaultState() {
   return {
     version: 1,
     created_at: now(),
-    users,
+    users: [],            // populated at runtime from Firestore staff_public via staffDir.load()
     items,                // inventory items
     menu: menu.items,     // menu items (name, price, cost)
     snapshots: [snapshot],
@@ -755,8 +924,7 @@ function loadState() {
     if (!raw) return defaultState();
     const s = JSON.parse(raw);
     migrateState(s);
-    // Persist any migrations (e.g. seeded users) back to localStorage immediately,
-    // so they survive the next reload without needing the user to trigger an action.
+    // Persist any data-model migrations back to localStorage immediately.
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch(e) { console.warn("Migration persist failed", e); }
     return s;
   } catch (e) {
@@ -766,54 +934,11 @@ function loadState() {
 }
 
 // Runs once per load. Safe to re-run — each step is idempotent.
+// NOTE: user seeding previously done here is now managed via Cloud Functions
+// and Firestore staff_public. staffDir.load() is called after pullFromFirestore.
 function migrateState(s) {
+  // Ensure users array exists (will be overwritten by staffDir.load() at runtime)
   s.users = s.users || [];
-  const hasName = (n) => s.users.some(u => (u.name || "").toLowerCase() === n.toLowerCase());
-  const takenPin = (p) => s.users.some(u => u.pin === p);
-  const nextPin = () => { for (let i = 1000; i < 9999; i++) { const p = String(i); if (!takenPin(p)) return p; } return "0000"; };
-
-  // Track seeded user IDs so renames don't trigger re-seeding.
-  // We check by PIN (which is stable) in addition to name — if neither the default
-  // name NOR the default PIN exists, the slot is genuinely empty and we seed it.
-  s._seeded_ids = s._seeded_ids || {};
-
-  // Helper: find a user by stored seeded ID, then by name, then by default PIN.
-  function findSeeded(key, defaultName, defaultPin) {
-    if (s._seeded_ids[key]) {
-      const byId = s.users.find(u => u.id === s._seeded_ids[key]);
-      if (byId) return byId;
-    }
-    const byName = s.users.find(u => (u.name||"").toLowerCase() === defaultName.toLowerCase());
-    if (byName) { s._seeded_ids[key] = byName.id; return byName; }
-    const byPin  = s.users.find(u => u.pin === defaultPin);
-    if (byPin)  { s._seeded_ids[key] = byPin.id;  return byPin;  }
-    return null;
-  }
-
-  // Seed Khaled + Barista 3 if they don't already exist (for upgrades from older state).
-  // Checks by name OR by default PIN so renaming doesn't cause a duplicate to be seeded.
-  if (!findSeeded("khaled", "Khaled", "7777")) {
-    const u = { id: uuid(), name: "Khaled", role: "barista", pin: takenPin("7777") ? nextPin() : "7777", branches: ["maadi","zawya"], active: true };
-    s.users.push(u); s._seeded_ids.khaled = u.id;
-  }
-  if (!findSeeded("barista3", "Barista 3", "6666")) {
-    const u = { id: uuid(), name: "Barista 3", role: "barista", pin: takenPin("6666") ? nextPin() : "6666", branches: ["maadi","zawya"], active: true };
-    s.users.push(u); s._seeded_ids.barista3 = u.id;
-  }
-
-  // One-time migration: Khaled was mistakenly set to "owner" in earlier builds.
-  // Only run once (flag prevents it from fighting any deliberate role change the owner makes).
-  if (!s._migration_khaled_role_fixed) {
-    const khaledUser = findSeeded("khaled", "Khaled", "7777");
-    if (khaledUser && khaledUser.role === "owner") {
-      khaledUser.role         = "barista";
-      khaledUser.branches     = ["maadi","zawya"];
-      khaledUser.deny_access  = [];
-      khaledUser.extra_access = [];
-      khaledUser.active       = khaledUser.active !== false;
-    }
-    s._migration_khaled_role_fixed = true;
-  }
 
   // One-time migration: rename "Signature Coffee" category → "Signature Drinks" in all recipes.
   if (!s._migration_signature_drinks) {
@@ -822,35 +947,6 @@ function migrateState(s) {
     }
     s._migration_signature_drinks = true;
   }
-
-  // Seed Zawya staff Bakr (helper) & Mohamed (manager) if they don't exist yet.
-  // Same PIN-aware check so renames are safe.
-  // Both are Zawya-only with no app access but appear in the barista drink allowance list.
-  if (!findSeeded("bakr", "Bakr", "8888")) {
-    const u = { id: uuid(), name: "Bakr", role: "helper", pin: takenPin("8888") ? nextPin() : "8888", branches: ["zawya"], active: true, deny_access: [] };
-    s.users.push(u); s._seeded_ids.bakr = u.id;
-  } else {
-    const u = findSeeded("bakr", "Bakr", "8888");
-    if (u) {
-      if (!u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
-      // Upgrade role to helper (Zawya-only, no app access)
-      if (u.role === "barista") { u.role = "helper"; u.deny_access = []; }
-    }
-  }
-  if (!findSeeded("mohamed", "Mohamed", "9876")) {
-    const u = { id: uuid(), name: "Mohamed", role: "manager", pin: takenPin("9876") ? nextPin() : "9876", branches: ["zawya"], active: true, deny_access: [] };
-    s.users.push(u); s._seeded_ids.mohamed = u.id;
-  } else {
-    const u = findSeeded("mohamed", "Mohamed", "9876");
-    if (u) {
-      if (!u.branches.includes("zawya")) u.branches = [...new Set([...u.branches, "zawya"])];
-      // Upgrade role to manager (Zawya-only, no app access)
-      if (u.role === "barista") { u.role = "manager"; u.deny_access = []; }
-    }
-  }
-
-  // Ensure handbook_recipes collection exists (seeded with full menu on first run).
-  s.handbook_recipes = s.handbook_recipes || null;
 
   // Ensure new collections exist
   s.salary_config  = s.salary_config  || {};
@@ -930,9 +1026,11 @@ let pendingWrites = 0;
 const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
 
 // Each chunk key maps to the state keys it owns.
+// NOTE: `users` is no longer synced here — staff come from Firestore `staff_public`
+// via staffDir.load() and are kept as an in-memory computed view (state.users).
 const STATE_CHUNKS = {
   config:      ["settings", "salary_config"],
-  users_items: ["users", "items", "menu", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
+  users_items: ["items", "menu", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
   waste:       ["waste"],
   purchases:   ["purchases", "petty_cash", "bank_ledger"],
   sales:       ["sales", "shifts"],
@@ -942,7 +1040,7 @@ const STATE_CHUNKS = {
   overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:       ["photo_log", "assets"],
   kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
-  meta:        ["_seeded_ids", "_migration_khaled_role_fixed", "_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
+  meta:        ["_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
 };
 
 function markDirty() {
@@ -1015,12 +1113,16 @@ async function pullFromFirestore() {
     for (let i = 0; i < chunkNames.length; i++) {
       if (docs[i].exists) Object.assign(remote, docs[i].data());
     }
-    if (!remote.users && !remote.items) return { ok: false, err: "No data in Firestore yet" };
+    if (!remote.items) return { ok: false, err: "No data in Firestore yet" };
     const settingsBak = state.settings;
     Object.assign(state, remote);
     migrateState(state);
     state.settings = { ...remote.settings, ...settingsBak };
     state.settings.last_pull = now();
+    // Load staff directory from staff_public (single source of truth for users)
+    await staffDir.load();
+    // Remap any legacy UUIDs in HR/KPI records to Firebase UIDs
+    _remapLegacyIds();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     doSync(); // push back any migration fixes
     startReviewsListener();
@@ -1360,7 +1462,7 @@ function scanCashDepositPenalties() {
   const assignment  = getLeadershipAssignment(currentMonth);
   const cashMgrId   = assignment ? (assignment.cash_status || null) : null;
   if (!cashMgrId) return;
-  const cashMgr = (state.users || []).find(u => u.id === cashMgrId);
+  const cashMgr = staffDir.resolve(cashMgrId);
   const salary  = Number(((state.salary_config || {})[cashMgrId] || {}).monthly_salary || 0);
   const amount  = penaltyAmount("quarter_day", salary);
   state.penalties = state.penalties || [];
@@ -1510,18 +1612,18 @@ function loginView() {
   main.appendChild(pinPad);
 
   // Load staff from staff_public (public Firestore collection, no auth needed).
-  // Falls back to state.users (localStorage cache) if Firestore is unavailable.
+  // Falls back to staffDir in-memory cache if Firestore is unavailable.
   async function loadPeople() {
     try {
       const snap = await db.collection("staff_public").where("active", "==", true).get();
       if (!snap.empty) {
         const people = [];
-        snap.forEach(doc => people.push({ id: doc.id, ...doc.data() }));
+        snap.forEach(doc => people.push({ id: doc.id, uid: doc.id, ...doc.data() }));
         return people;
       }
     } catch (_) {}
-    // Fallback: use cached state.users (pre-migration or offline)
-    return (state.users || []).filter(u => u.active);
+    // Fallback: use in-memory staffDir cache (populated during pullFromFirestore)
+    return staffDir.active();
   }
 
   loadPeople().then(people => {
@@ -1997,11 +2099,9 @@ routes.shift_close_new = function (u) {
   let talabat_cash   = "";
 
   // Barista allowance drinks — dynamic rows [{who, drink}]
-  // Returns all active baristas/head-baristas assigned to the current branch.
+  // Returns all active baristas/head-baristas/managers/helpers assigned to the current branch.
   function getBaristaList() {
-    return state.users
-      .filter(x => x.active && (x.role === "barista" || x.role === "head_barista" || x.role === "manager" || x.role === "helper") && x.branches.includes(branch))
-      .map(x => x.name);
+    return staffDir.shiftStaff(branch).map(x => x.name);
   }
   let baristaAllowanceDrinks = [{ who: "", drink: "" }];
 
@@ -3813,6 +3913,7 @@ routes.petty_cash = function (u) {
 };
 
 // Shared: owner-only inline "add barista" — usable from Salaries, Penalties, anywhere.
+// Now delegates to the createStaffUser Cloud Function (single source of truth: staff_public).
 function addBaristaQuick(onDone) {
   openPrompt({
     title: "Add a new barista",
@@ -3825,23 +3926,28 @@ function addBaristaQuick(onDone) {
       { key: "pin",  label: "4-digit PIN", type: "text", value: "" },
       { key: "branches", label: "If head barista — branches (maadi,zawya)", type: "text", value: "maadi,zawya" },
     ],
-    onSubmit: (v) => {
+    onSubmit: async (v) => {
       const name = (v.name || "").trim();
       if (!name) return toast("Enter a name", "error");
       if (!/^\d{4}$/.test(v.pin || "")) return toast("PIN must be 4 digits", "error");
-      if (state.users.some(u => u.pin === v.pin)) return toast("That PIN is already in use — pick another", "error");
       const role = v.role === "head_barista" ? "head_barista" : "barista";
       const branches = role === "barista"
         ? ["maadi","zawya"]
         : (v.branches || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-      state.users.push({ id: uuid(), name, role, pin: v.pin, branches, active: true });
-      saveState();
-      toast(`${name} added`);
-      if (typeof onDone === "function") onDone();
-      else render();
+      try {
+        await functions.httpsCallable("createStaffUser")({ name, role, branches, pin: v.pin });
+        // Refresh the in-memory staff directory so the new member appears immediately
+        await staffDir.load();
+        toast(`${name} added \u2713`);
+        if (typeof onDone === "function") onDone();
+        else render();
+      } catch (e) {
+        toast(e.message || "Failed to add staff", "error");
+      }
     }
   });
 }
+
 
 // ==============================================================
 // SALARIES — per-barista monthly salary config, loans, payouts, total due.
@@ -6002,10 +6108,8 @@ const MANAGEABLE_ROUTES = [
 
 routes.users = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Users", "Add team members, set PINs, grant or revoke access rights."));
+  wrap.appendChild(header("Users", "View team members, manage access rights and ID photos."));
 
-  // Only owner/accountant can manage users (matches role policy — but double-check here
-  // so someone with a manually-granted "users" route can't also mutate users)
   if (u.role !== "owner" && u.role !== "accountant") {
     wrap.appendChild(el("div", { class: "card" }, "Access restricted — owner/accountant only."));
     wrap.appendChild(btnBack());
@@ -6013,59 +6117,38 @@ routes.users = function (u) {
   }
 
   wrap.appendChild(el("div", { class: "banner-arch" },
-    "Baristas rotate between Maadi and Zawya — they are never assigned to a single branch. " +
-    "Only owners and head baristas can be pinned to a branch."));
+    "Staff are managed in Team Management (Settings \u2192 Team). Use this screen to edit per-user access rights and view ID photos."));
 
-  const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
-  btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => addUser() }, "➕ Add user"));
-  btnRow.appendChild(el("button", { class: "btn ghost", onClick: () => {
-    // Re-run migration — idempotent; adds any missing default baristas if not already there.
-    // Won't overwrite renamed users — lookup is by ID/PIN, not name.
-    migrateState(state);
-    saveState();
-    toast("Missing baristas seeded");
-    render();
-  } }, "🔄 Seed missing baristas"));
+  const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" } });
+  btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => go("settings") }, "\u2699\ufe0f Go to Team Management"));
   wrap.appendChild(btnRow);
-
-  // Normalize any existing baristas that were assigned to a single branch — they should all rotate.
-  let migrated = 0;
-  for (const usr of state.users) {
-    if (usr.role === "barista") {
-      const both = ["maadi","zawya"];
-      if (!usr.branches || usr.branches.length !== 2 ||
-          !usr.branches.includes("maadi") || !usr.branches.includes("zawya")) {
-        usr.branches = both;
-        migrated++;
-      }
-    }
-  }
-  if (migrated > 0) { saveState(); }
 
   const list = el("div", { class: "list", style: { marginTop: "12px" } });
   const _currentMonth = new Date().toISOString().slice(0,7);
   const _leaderAssign = getLeadershipAssignment(_currentMonth) || {};
   const LEADERSHIP_ROLE_BADGES = {
-    weekly_schedule:      "📅 Schedule",
-    inventory_management: "📦 Inventory",
-    cash_status:          "💵 Cash",
-    barista_hygiene:      "🧹 Hygiene",
+    weekly_schedule:      "\ud83d\udcc5 Schedule",
+    inventory_management: "\ud83d\udce6 Inventory",
+    cash_status:          "\ud83d\udcb5 Cash",
+    barista_hygiene:      "\ud83e\uddf9 Hygiene",
   };
-  for (const usr of state.users) {
+
+  const allStaff = staffDir.all().sort((a,b) => a.name.localeCompare(b.name));
+  for (const usr of allStaff) {
     const branchLabel = usr.role === "barista"
       ? "rotates (Maadi + Zawya)"
-      : (usr.branches && usr.branches.length ? usr.branches.join(", ") : "—");
+      : (usr.branches && usr.branches.length ? usr.branches.join(", ") : "\u2014");
     const extra = (usr.extra_access || []).length;
     const deny  = (usr.deny_access  || []).length;
-    const rightsNote = (extra || deny) ? ` · +${extra}/-${deny} custom rights` : "";
+    const rightsNote = (extra || deny) ? ` \xb7 +${extra}/-${deny} custom rights` : "";
     let leaderBadgeLabel = null;
     for (const [rk, label] of Object.entries(LEADERSHIP_ROLE_BADGES)) {
-      if (_leaderAssign[rk] === usr.id) { leaderBadgeLabel = label; break; }
+      if (_leaderAssign[rk] === usr.uid) { leaderBadgeLabel = label; break; }
     }
     const rowChildren = [
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, usr.name),
-        el("div", { class: "sub" }, `${usr.role} · ${branchLabel} · PIN ${usr.pin}${rightsNote}`),
+        el("div", { class: "sub" }, `${usr.role} \xb7 ${branchLabel}${rightsNote}`),
       ]),
       el("span", { class: "pill " + (usr.active ? "ok" : "bad") }, usr.active ? "active" : "disabled"),
     ];
@@ -6076,77 +6159,34 @@ routes.users = function (u) {
       }, leaderBadgeLabel));
     }
     if ((usr.id_photo_urls || []).length > 0) {
-      rowChildren.push(el("span", { class: "pill ok", style: { fontSize: "11px" } }, "🪪 ID"));
+      rowChildren.push(el("span", { class: "pill ok", style: { fontSize: "11px" } }, "\ud83e\udeb9 ID"));
     }
-    list.appendChild(el("div", { class: "row", onClick: () => editUser(usr) }, rowChildren));
+    const rowOpts = u.role === "owner"
+      ? { class: "row", onClick: () => editUser(usr) }
+      : { class: "row" };
+    list.appendChild(el("div", rowOpts, rowChildren));
   }
   wrap.appendChild(list); wrap.appendChild(btnBack());
-
-  function addUser() {
-    openPrompt({
-      title: "Add user",
-      fields: [
-        { key: "name", label: "Name", type: "text", value: "" },
-        { key: "role", label: "Role (owner / accountant / head_barista / barista)", type: "text", value: "barista" },
-        { key: "pin", label: "4-digit PIN", type: "text", value: "0000" },
-        { key: "branches", label: "Branches (owner / head_barista only — baristas always rotate)", type: "text", value: "maadi,zawya" },
-        { key: "email", label: "Email (for leave notifications — optional)", type: "text", value: "" },
-      ],
-      onSubmit: v => {
-        if (!/^\d{4}$/.test(v.pin)) return toast("PIN must be 4 digits", "error");
-        if (state.users.some(x => x.pin === v.pin)) return toast("That PIN is already in use — pick another", "error");
-        const role = (v.role || "barista").trim();
-        const branches = role === "barista"
-          ? ["maadi","zawya"]
-          : v.branches.split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
-        state.users.push({ id: uuid(), name: v.name, role, pin: v.pin, branches, active: true, email: (v.email || "").trim() });
-        saveState(); toast(`Added ${v.name}`); render();
-      }
-    });
-  }
 
   function editUser(usr) {
     openPrompt({
       title: `Edit ${usr.name}`,
       fields: [
-        { key: "name", label: "Name", type: "text", value: usr.name },
-        { key: "role", label: "Role", type: "text", value: usr.role },
-        { key: "pin", label: "PIN", type: "text", value: usr.pin },
-        { key: "branches", label: "Branches (ignored for baristas — they always rotate)", type: "text", value: (usr.branches || []).join(",") },
-        { key: "email", label: "Email (for leave approval notifications — optional)", type: "text", value: usr.email || "" },
-        { key: "active", label: "Active? (yes/no)", type: "text", value: usr.active ? "yes" : "no" },
-        { key: "delete", label: "Type DELETE to permanently remove this user", type: "text", value: "" },
+        { key: "_note", label: `Role: ${usr.role} \xb7 Branches: ${(usr.branches||[]).join(",") || "\u2014"} \xb7 Tap buttons below to manage.`, type: "text", value: "", readonly: true },
       ],
       extraButtons: [
-        { label: "🔐 Access rights…", onClick: () => editAccess(usr) },
-        { label: "🪪 View / remove ID…", onClick: () => staffIdSheet(usr) },
+        { label: "\ud83d\udd10 Access rights\u2026", onClick: () => editAccess(usr) },
+        { label: "\ud83e\udeb9 View / remove ID\u2026", onClick: () => staffIdSheet(usr) },
       ],
-      onSubmit: v => {
-        if (String(v.delete || "").trim().toUpperCase() === "DELETE") {
-          if (u.role !== "owner") return toast("Only the owner can delete users", "error");
-          if (!confirm(`Remove ${usr.name} permanently? Their historical entries stay but they can no longer log in.`)) return;
-          state.users = state.users.filter(x => x.id !== usr.id);
-          saveState(); toast(`Removed ${usr.name}`); render();
-          return;
-        }
-        usr.name = v.name; usr.role = v.role; usr.pin = v.pin;
-        usr.branches = usr.role === "barista"
-          ? ["maadi","zawya"]
-          : v.branches.split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
-        usr.email  = (v.email || "").trim();
-        usr.active = /yes|y|true|1/i.test(v.active);
-        saveState(); render();
-      }
+      onSubmit: () => {}
     });
   }
 
   function editAccess(usr) {
     if (u.role !== "owner") return toast("Only the owner can edit access rights", "error");
-    // Build a dialog that shows every manageable route with a tri-state:
-    //   default (follow role) | grant | revoke
     const sheet = el("div", {});
-    sheet.appendChild(el("h2", {}, `Access rights — ${usr.name}`));
-    sheet.appendChild(el("div", { class: "muted small" }, `Role: ${usr.role}. "Default" follows the role policy. "Allow" grants this route. "Deny" revokes it.`));
+    sheet.appendChild(el("h2", {}, `Access rights \u2014 ${usr.name}`));
+    sheet.appendChild(el("div", { class: "muted small" }, `Role: ${usr.role}. \u201cDefault\u201d follows the role policy. \u201cAllow\u201d grants this route. \u201cDeny\u201d revokes it.`));
     const extras = new Set(usr.extra_access || []);
     const denies = new Set(usr.deny_access  || []);
     const rows = el("div", { class: "list" });
@@ -6157,7 +6197,7 @@ routes.users = function (u) {
       const roleDefault = roleHas(r) ? "allow (by role)" : "deny (by role)";
       const state0 = extras.has(r) ? "allow" : denies.has(r) ? "deny" : "default";
       const sel = el("select", {}, [
-        el("option", { value: "default", selected: state0==="default"?"true":null }, `Default — ${roleDefault}`),
+        el("option", { value: "default", selected: state0==="default"?"true":null }, `Default \u2014 ${roleDefault}`),
         el("option", { value: "allow",   selected: state0==="allow"  ?"true":null }, "Allow (grant this route)"),
         el("option", { value: "deny",    selected: state0==="deny"   ?"true":null }, "Deny (revoke this route)"),
       ]);
@@ -6175,9 +6215,10 @@ routes.users = function (u) {
       el("button", { class: "btn", onClick: () => {
         usr.extra_access = [...extras];
         usr.deny_access  = [...denies];
+        const localEntry = (state.users || []).find(x => x.uid === usr.uid);
+        if (localEntry) { localEntry.extra_access = usr.extra_access; localEntry.deny_access = usr.deny_access; }
         saveState(); toast("Access rights saved");
-        closeSheet();
-        render();
+        closeSheet(); render();
       } }, "Save rights"),
       el("button", { class: "btn ghost", onClick: () => closeSheet() }, "Cancel"),
     ]));
@@ -6186,11 +6227,9 @@ routes.users = function (u) {
 
   function staffIdSheet(usr) {
     const sheet = el("div", {});
-    sheet.appendChild(el("h2", {}, `🪪 Government ID — ${usr.name}`));
-
+    sheet.appendChild(el("h2", {}, `\ud83e\udeb9 Government ID \u2014 ${usr.name}`));
     const photosWrap = el("div", {});
     sheet.appendChild(photosWrap);
-
     function renderPhotos() {
       photosWrap.innerHTML = "";
       const urls = usr.id_photo_urls || [];
@@ -6207,11 +6246,9 @@ routes.users = function (u) {
             linkRow.appendChild(el("button", { class: "btn bad", style: { fontSize: "12px", padding: "2px 8px" },
               onClick: () => {
                 usr.id_photo_urls = (usr.id_photo_urls || []).filter((_, j) => j !== i);
-                saveState();
-                toast("ID photo removed");
-                renderPhotos();
+                saveState(); toast("ID photo removed"); renderPhotos();
               }
-            }, "✕ Remove"));
+            }, "\u2715 Remove"));
           }
           card.appendChild(linkRow);
           grid.appendChild(card);
@@ -6219,18 +6256,17 @@ routes.users = function (u) {
         photosWrap.appendChild(grid);
       }
     }
-
     renderPhotos();
-
     sheet.appendChild(el("div", { class: "btn-row" }, [
       el("button", { class: "btn ghost", onClick: () => closeSheet() }, "Close"),
     ]));
-
     openSheet(sheet);
   }
 
   return wrap;
 };
+
+
 
 // ==============================================================
 // DASHBOARD + P&L CLOSE
@@ -11569,7 +11605,7 @@ function exportAllCSVZip() {
     "petty_cash.csv": toCSV(state.petty_cash),
     "bank_ledger.csv": toCSV(state.bank_ledger),
     "sales.csv": toCSV(state.sales),
-    "users.csv": toCSV(state.users.map(({ pin, ...rest }) => ({ ...rest, pin: "••••", branches: rest.branches.join("|") }))),
+    "users.csv": toCSV(staffDir.all().map(({ uid, name, role, branches, active, legacy_id }) => ({ uid, name, role, active, branches: (branches||[]).join("|"), legacy_id: legacy_id||"", pin: "••••" }))),
   };
   for (const [name, text] of Object.entries(files)) {
     download(name, new Blob([text], { type: "text/csv" }));
