@@ -7,7 +7,7 @@ service cloud.firestore {
     function isOwner()   { return signedIn() && userRole() == 'owner'; }
     function isStaff()   {
       return signedIn() && userRole() in
-        ['owner', 'accountant', 'head_barista', 'barista'];
+        ['owner', 'accountant', 'head_barista', 'barista', 'manager', 'helper'];
     }
 
     // Operational state — all signed-in staff can read/write

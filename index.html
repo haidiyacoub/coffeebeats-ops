@@ -1526,9 +1526,10 @@ const ROLE_ACCESS = {
                  "my_hr","staff_hr"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
   barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr"],
-  // Zawya-only roles — no app access, kept in list for barista drink allowance tracking
-  manager: [],
-  helper:  [],
+  // Zawya-only support roles — minimal access: home screen + own profile
+  manager: ["home","my_id","users","leave_new","leave_list","my_hr"],
+  helper:  ["home","my_id","users"],
+
 };
 function canAccess(routeName, u) {
   if (!u) return false;
