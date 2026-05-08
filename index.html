@@ -10188,60 +10188,6 @@ routes.scorecard = function(u) {
 };
 
 // ─── BARISTA/HEAD: Upload government ID ───────────────────────────────────────
-routes.my_id = function(u) {
-  const wrap = el("div", {});
-  wrap.appendChild(header("My Government ID", "Upload a photo of your national ID or passport. Once uploaded, only the owner can remove it."));
-
-  const usr = state.users.find(x => x.id === u.id);
-  if (!usr) {
-    wrap.appendChild(el("div", { class: "card" }, "User record not found."));
-    wrap.appendChild(btnBack());
-    return wrap;
-  }
-
-  // Existing photos
-  const existingWrap = el("div", {});
-  wrap.appendChild(existingWrap);
-
-  function renderExisting() {
-    existingWrap.innerHTML = "";
-    const urls = usr.id_photo_urls || [];
-    if (urls.length > 0) {
-      existingWrap.appendChild(el("div", { class: "banner-arch", style: { marginBottom: "8px" } },
-        `✓ ${urls.length} ID photo${urls.length > 1 ? "s" : ""} on file. Only the owner can remove them.`));
-      const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", marginBottom: "16px" } });
-      urls.forEach(url => {
-        const card = el("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" } });
-        card.appendChild(el("img", { src: url, style: { width: "100px", height: "70px", objectFit: "cover", borderRadius: "6px", border: "1px solid var(--border,#ddd)" } }));
-        card.appendChild(el("a", { href: url, target: "_blank", class: "btn ghost", style: { fontSize: "12px", padding: "2px 10px" } }, "View"));
-        grid.appendChild(card);
-      });
-      existingWrap.appendChild(grid);
-    }
-  }
-  renderExisting();
-
-  // Upload field
-  const photoField = makePhotoField({ label: "ID photo(s)", multiple: true, formLabel: "Staff ID" });
-  wrap.appendChild(photoField.el);
-
-  wrap.appendChild(el("div", { class: "btn-row", style: { marginTop: "12px" } }, [
-    el("button", { class: "btn", onClick: () => {
-      if (photoField.count() === 0) return toast("Please select at least one photo", "error");
-      const newUrls = photoField.getCloudUrls().filter(Boolean);
-      if (newUrls.length < photoField.count()) return toast("Still uploading — please wait a moment", "error");
-      usr.id_photo_urls = [...(usr.id_photo_urls || []), ...newUrls];
-      saveState();
-      toast("ID saved ✓");
-      renderExisting();
-    } }, "Save ID"),
-  ]));
-
-  wrap.appendChild(btnBack());
-  return wrap;
-};
-
-// ─── BARISTA/HEAD: Personal scorecard (Arabic) ────────────────────────────────
 routes.my_scorecard = function(u) {
   const isAR = u.role==="barista"||u.role==="head_barista";
   const dir  = isAR?"rtl":"ltr";
@@ -10767,6 +10713,134 @@ routes.staff_hr = function(u) {
 };
 
 // ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+routes.staff_payroll = function(u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Staff Payroll Overview", "Monthly payroll, penalties, loans, KPI and leave summary for all active staff."));
+
+  if (!["owner", "accountant", "head_barista"].includes(u.role)) {
+    wrap.appendChild(el("div", { class: "card" }, "Access restricted."));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  state.salary_config  = state.salary_config  || {};
+  state.penalties      = state.penalties      || [];
+  state.overtime_logs  = state.overtime_logs  || [];
+  state.salary_loans   = state.salary_loans   || [];
+  state.leaves         = state.leaves         || [];
+
+  let selMonth = new Date().toISOString().slice(0, 7);
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+  const prevBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = d.toISOString().slice(0, 7);
+    monthLbl.textContent = selMonth;
+    drawBody();
+  }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
+
+  function drawBody() {
+    body.innerHTML = "";
+    const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
+    const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+
+    let totalPayroll = 0, totalPen = 0, totalOT = 0;
+    const staffData = staff.map(p => {
+      const salary  = Number((state.salary_config[p.id] || {}).monthly_salary || 0);
+      const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const netDue  = Math.max(0, salary + otSum - penSum - loanSum);
+      const scores  = kpiGetUserScores(p.id);
+      const kpiTotal = scores ? kpiCalcTotal(scores) : 0;
+      const thisYear = selMonth.slice(0, 4);
+      const lvDays  = (state.leaves || [])
+        .filter(x => x.user_id === p.id && x.status === "approved" && x.type === "annual" && (x.from_date || "").startsWith(thisYear))
+        .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+      totalPayroll += netDue; totalPen += penSum; totalOT += otSum;
+      return { p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays };
+    });
+
+    // Summary stat cards
+    const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
+    [
+      ["👥 Active Staff", String(staff.length)],
+      ["💰 Total Payroll", money(totalPayroll)],
+      ["⚖ Total Penalties", money(totalPen)],
+      ["⏱ Total Overtime", money(totalOT)],
+    ].forEach(([k, v]) => {
+      const c = el("div", { class: "card", style: { padding: "12px", textAlign: "center" } });
+      c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
+      c.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px" } }, v));
+      statsRow.appendChild(c);
+    });
+    body.appendChild(statsRow);
+
+    // Staff table
+    const tableCard = el("div", { class: "card" });
+    const t = el("table", {});
+    t.appendChild(el("thead", {}, [el("tr", {}, [
+      el("th", {}, "Name"),
+      el("th", {}, "Role"),
+      el("th", { style: { textAlign: "right" } }, "Base"),
+      el("th", { style: { textAlign: "right" } }, "OT"),
+      el("th", { style: { textAlign: "right" } }, "Pen."),
+      el("th", { style: { textAlign: "right" } }, "Loans"),
+      el("th", { style: { textAlign: "right" } }, "Net Due"),
+      el("th", { style: { textAlign: "center" } }, "KPI"),
+      el("th", { style: { textAlign: "center" } }, "Leave"),
+    ])]));
+    const tb = el("tbody", {});
+    let grandBase = 0, grandOT = 0, grandPen = 0, grandLoan = 0, grandNet = 0;
+    staffData.forEach(({ p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays }) => {
+      grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
+      const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
+      tb.appendChild(el("tr", { style: { cursor: "pointer" }, onClick: () => go("my_hr", { user_id: p.id }) }, [
+        el("td", { style: { fontWeight: "600" } }, p.name),
+        el("td", { class: "muted small" }, p.role === "head_barista" ? "Head" : "Barista"),
+        el("td", { class: "num" }, money(salary)),
+        el("td", { class: "num", style: { color: "var(--ok)" } }, otSum ? "+" + money(otSum) : "—"),
+        el("td", { class: "num", style: { color: penSum ? "var(--bad)" : "" } }, penSum ? "−" + money(penSum) : "—"),
+        el("td", { class: "num", style: { color: loanSum ? "var(--warn)" : "" } }, loanSum ? "−" + money(loanSum) : "—"),
+        el("td", { class: "num", style: { fontWeight: "700", color: netColor } }, money(netDue)),
+        el("td", { style: { textAlign: "center", fontSize: "12px", fontWeight: "700", color: kpiScoreColor(kpiTotal) } }, kpiTotal ? kpiGradeEn(kpiTotal).split(" ")[0] + " " + kpiTotal.toFixed(0) : "—"),
+        el("td", { style: { textAlign: "center" } }, lvDays ? String(lvDays) + "d" : "—"),
+      ]));
+    });
+    tb.appendChild(el("tr", { style: { borderTop: "2px solid var(--border)", fontWeight: "800" } }, [
+      el("td", { colspan: "2" }, "Total"),
+      el("td", { class: "num" }, money(grandBase)),
+      el("td", { class: "num" }, money(grandOT)),
+      el("td", { class: "num" }, money(grandPen)),
+      el("td", { class: "num" }, money(grandLoan)),
+      el("td", { class: "num", style: { color: "var(--ok)" } }, money(grandNet)),
+      el("td", {}), el("td", {}),
+    ]));
+    t.appendChild(tb);
+    tableCard.appendChild(t);
+    body.appendChild(tableCard);
+  }
+
+  drawBody();
+  return wrap;
+};
+
+// ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+
 routes.kpi_log_new = function(u) {
   const isAR = u.role==="barista"||u.role==="head_barista";
   const dir  = isAR?"rtl":"ltr";
@@ -11359,68 +11433,6 @@ routes.my_id = function(u) {
 
 // ==============================================================
 // STAFF HR
-// ==============================================================
-routes.staff_hr = function(u) {
-  const wrap = el("div", {});
-  wrap.appendChild(header("Staff HR", "ID documents uploaded by each team member"));
-
-  if (u.role !== "owner" && u.role !== "accountant") {
-    wrap.appendChild(el("div", { class: "card" }, "Access restricted — owner/accountant only."));
-    wrap.appendChild(btnBack());
-    return wrap;
-  }
-
-  const activeUsers = state.users.filter(usr => usr.active !== false);
-  if (!activeUsers.length) {
-    wrap.appendChild(el("div", { class: "card muted" }, "No team members found."));
-    wrap.appendChild(btnBack());
-    return wrap;
-  }
-
-  for (const usr of activeUsers) {
-    const uploads = state.staff_ids[usr.id] || [];
-    const section = el("div", { class: "card", style: { marginBottom: "12px" } });
-    section.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px", marginBottom: "2px" } }, usr.name));
-    section.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } }, usr.role));
-
-    if (!uploads.length) {
-      section.appendChild(el("div", { class: "muted small" }, "No uploads yet."));
-    } else {
-      const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px" } });
-      for (const entry of uploads) {
-        const img = el("img", {
-          src: entry.url, alt: entry.name || "ID",
-          style: { width: "90px", height: "90px", objectFit: "cover", borderRadius: "8px",
-                   border: "1px solid var(--border)", cursor: "pointer" },
-        });
-        img.addEventListener("click", () => window.open(entry.url, "_blank"));
-        const wrapper = el("div", { style: { position: "relative" } });
-        const del = el("button", {
-          style: { position: "absolute", top: "2px", right: "2px", background: "rgba(0,0,0,0.55)",
-                   color: "#fff", border: "none", borderRadius: "50%", width: "22px", height: "22px",
-                   fontSize: "12px", cursor: "pointer", lineHeight: "22px", textAlign: "center", padding: "0" },
-        }, "✕");
-        del.addEventListener("click", () => {
-          if (!confirm(`Remove this image for ${usr.name}?`)) return;
-          state.staff_ids[usr.id] = (state.staff_ids[usr.id] || []).filter(x => x.id !== entry.id);
-          saveState();
-          go("staff_hr");
-        });
-        wrapper.appendChild(img);
-        wrapper.appendChild(del);
-        grid.appendChild(wrapper);
-      }
-      section.appendChild(grid);
-    }
-    wrap.appendChild(section);
-  }
-
-  wrap.appendChild(btnBack());
-  return wrap;
-};
-
-// ==============================================================
-// LEADERBOARD — visible to all roles
 // ==============================================================
 routes.leaderboard = function(u) {
   const wrap = el("div", {});
