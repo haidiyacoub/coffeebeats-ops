@@ -865,7 +865,7 @@ function migrateState(s) {
   s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork, training
   s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
   s.kpi_settings  = s.kpi_settings  || {
-    weights: { punctuality:15, waste:15, cleanliness:15, craft:20, upselling:5, customer:15, teamwork:5, leadership:10, training:0 }
+    weights: { punctuality:5, waste:15, cleanliness:10, craft:15, upselling:10, customer:15, teamwork:5, leadership:20, hygiene:5 }
   };
   s.leadership_assignments   = s.leadership_assignments   || [];
   s.leadership_notifications = s.leadership_notifications || [];
@@ -4071,13 +4071,23 @@ const PENALTY_KINDS = [
   { label: "3 days",    value: "three_days", days: 3   },
   { label: "Other (custom amount)", value: "custom", days: null },
 ];
-// Optional context (doesn't affect amount — just labels the penalty)
+// Kept for backward-compat display of old penalty records
 const PENALTY_REASONS = [
   { label: "Late",                     value: "late" },
   { label: "No show",                  value: "no_show" },
   { label: "Not wearing the uniform",  value: "no_uniform" },
   { label: "Not following the rules",  value: "rules_break" },
+  { label: "Personal hygiene",         value: "personal_hygiene" },
   { label: "Other",                    value: "other" },
+];
+// Combined reason + deduction presets for the penalty entry form
+const PENALTY_PRESETS = [
+  { label: "Not wearing the uniform",  reason: "no_uniform",       kind: "half_day"    },
+  { label: "Late (15 mins)",           reason: "late_15",          kind: "half_day"    },
+  { label: "Late (2 hours)",           reason: "late_2h",          kind: "full_day"    },
+  { label: "No show / No stamp",       reason: "no_show",          kind: "two_days"    },
+  { label: "Personal hygiene",         reason: "personal_hygiene", kind: "quarter_day" },
+  { label: "Other",                    reason: "other",            kind: "custom"      },
 ];
 
 function penaltyAmount(kind, monthlySalary) {
@@ -4137,7 +4147,7 @@ routes.penalties = function (u) {
     list.appendChild(el("div", { class: "muted small" }, "No penalties recorded."));
   } else {
     for (const r of visible) {
-      const reasonLabel = (PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
+      const reasonLabel = (PENALTY_PRESETS.find(x => x.reason === r.reason_code) || PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
       const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
       const row = el("div", { class: "kv", style: { alignItems: "center" } }, [
         el("div", { class: "k" }, [
@@ -4172,7 +4182,7 @@ routes.penalties = function (u) {
     const trash = el("div", { class: "card", style: { marginTop: "12px", borderColor: "var(--warn)" } });
     trash.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", color:"var(--warn)" } }, "Recently deleted (tap to restore)"));
     for (const r of state.deleted_penalties.slice(0, 10)) {
-      const reasonLabel = (PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
+      const reasonLabel = (PENALTY_PRESETS.find(x => x.reason === r.reason_code) || PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
       const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
       trash.appendChild(el("div", { class: "kv", style: { alignItems:"center" } }, [
         el("div", { class: "k" }, [
@@ -4212,35 +4222,33 @@ routes.penalties = function (u) {
   function addPenalty() {
     const staff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
     const staffOptions = staff.map(p => ({ label: p.name, value: p.id }));
-    const kindOptions = PENALTY_KINDS.map(k => ({ label: k.label, value: k.value }));
-    const reasonOptions = PENALTY_REASONS.map(r => ({ label: r.label, value: r.value }));
+    const presetOptions = PENALTY_PRESETS.map(p => ({ label: p.label, value: p.reason }));
 
     openPrompt({
       title: "Record penalty",
       fields: [
-        { key: "branch",  label: "Branch (maadi/zawya)", type: "text", value: u.branches[0] || "maadi" },
-        { key: "user_id", label: "Barista", type: "select", options: staffOptions, value: staffOptions[0] ? staffOptions[0].value : "" },
-        { key: "kind",    label: "Duration (auto-calc from salary)", type: "select", options: kindOptions, value: "half_day" },
-        { key: "reason_code", label: "Reason (for the record)", type: "select", options: reasonOptions, value: "late" },
-        { key: "custom_reason", label: "Reason note (optional / required for Other)", type: "text", value: "" },
-        { key: "custom_amount", label: "Custom amount (only used if duration = Other)", type: "number", value: 0 },
-        { key: "date",    label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "branch",       label: "Branch (maadi/zawya)", type: "text", value: u.branches[0] || "maadi" },
+        { key: "user_id",      label: "Barista", type: "select", options: staffOptions, value: staffOptions[0] ? staffOptions[0].value : "" },
+        { key: "preset",       label: "Penalty type", type: "select", options: presetOptions, value: "no_uniform" },
+        { key: "other_reason", label: "Reason (required for 'Other')", type: "text", value: "" },
+        { key: "custom_amount",label: "Custom amount — EGP (only for 'Other')", type: "number", value: 0 },
+        { key: "date",         label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
       ],
       onSubmit: (vals) => {
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
         const salary = Number((state.salary_config[person.id] || {}).monthly_salary || 0);
-        const kindSpec = PENALTY_KINDS.find(k => k.value === vals.kind) || PENALTY_KINDS[0];
-        const reasonSpec = PENALTY_REASONS.find(r => r.value === vals.reason_code) || PENALTY_REASONS[0];
+        const preset = PENALTY_PRESETS.find(p => p.reason === vals.preset) || PENALTY_PRESETS[0];
+        const kindSpec = PENALTY_KINDS.find(k => k.value === preset.kind) || PENALTY_KINDS[0];
 
         let amount;
-        if (kindSpec.value === "custom") {
+        if (preset.kind === "custom") {
           amount = Number(vals.custom_amount) || 0;
           if (amount <= 0) return toast("Enter a positive custom amount", "error");
-          if (!vals.custom_reason || !vals.custom_reason.trim()) return toast("Please specify the reason note", "error");
+          if (!vals.other_reason || !vals.other_reason.trim()) return toast("Please specify the reason for 'Other'", "error");
         } else {
           if (salary <= 0) return toast(`No monthly salary set for ${person.name} — set it in Salaries first`, "error");
-          amount = penaltyAmount(kindSpec.value, salary);
+          amount = penaltyAmount(preset.kind, salary);
         }
 
         const s = stamp();
@@ -4249,19 +4257,19 @@ routes.penalties = function (u) {
           user_id: person.id,
           branch: String(vals.branch || "maadi").toLowerCase(),
           barista: person.name,
-          kind: kindSpec.value,
+          kind: preset.kind,
           kind_label: kindSpec.label,
           amount,
           date: vals.date,
           month: (vals.date || "").slice(0,7),
-          reason_code: reasonSpec.value,
-          reason: reasonSpec.label,
-          note: (vals.custom_reason || "").trim(),
+          reason_code: preset.reason,
+          reason: preset.label,
+          note: (vals.other_reason || "").trim(),
           salary_at_time: salary,
           by: s.by, by_name: s.by_name, at: s.at,
         });
         saveState();
-        toast(`Penalty ${money(amount)} — ${person.name} (${kindSpec.label})`);
+        toast(`Penalty ${money(amount)} — ${person.name} (${preset.label})`);
         render();
       }
     });
@@ -5913,7 +5921,6 @@ routes.users = function (u) {
     weekly_schedule:      "📅 Schedule",
     inventory_management: "📦 Inventory",
     cash_status:          "💵 Cash",
-    barista_hygiene:      "🧹 Hygiene",
   };
   for (const usr of state.users) {
     const branchLabel = usr.role === "barista"
@@ -8540,7 +8547,7 @@ routes.app_guide = function (u) {
         "Tap <strong>Save Action</strong>. The alert is now logged under your name.",
         "<strong>Follow-up alarms:</strong> If the item is not logged in the purchase record within <strong>3 days</strong>, the system fires a follow-up reminder. If still unresolved, another alarm fires <strong>2 days later</strong>, then <strong>1 final day</strong> after that.",
         "<strong>The alarm stops only when:</strong> (a) the item is logged in the purchase record by any team member, OR (b) you tick <strong>'Called supplier'</strong> again in a new follow-up action.",
-        "⚠️ <strong>Every missed or delayed action is automatically penalised in your Teamwork score (15% of your total KPI scorecard).</strong> Ignoring a restock alert is a team failure — it means the café may run out of ingredients.",
+        "⚠️ <strong>Every missed or delayed action is automatically penalised in your Teamwork score (5% of your total KPI scorecard).</strong> Ignoring a restock alert is a team failure — it means the café may run out of ingredients.",
       ],
       ar_steps: [
         "عندما تنخفض مخزون أي صنف إلى ما يقل عن 7 أيام من الاستهلاك المتوقع، يُطلق النظام تلقائياً <strong>تنبيه نقص المخزون</strong>. يظهر شريط أحمر على شاشتك الرئيسية.",
@@ -8551,7 +8558,7 @@ routes.app_guide = function (u) {
         "اضغط <strong>حفظ الإجراء</strong>. يُسجَّل التنبيه باسمك.",
         "<strong>تنبيهات المتابعة:</strong> إذا لم يُسجَّل الصنف في سجل المشتريات خلال <strong>3 أيام</strong>، يُطلق النظام تذكيراً. إذا لم يُحَل، يُطلق تنبيه آخر بعد <strong>يومين</strong>، ثم <strong>يوم أخير</strong> بعده.",
         "<strong>يتوقف التنبيه فقط عند:</strong> (أ) تسجيل الصنف في سجل المشتريات من أي عضو في الفريق، أو (ب) تحديد <strong>'اتصلت بالمورد'</strong> مجدداً في إجراء متابعة جديد.",
-        "⚠️ <strong>كل إجراء فائت أو متأخر يُحتسب خصماً تلقائياً في درجة العمل الجماعي (15% من إجمالي تقييم الأداء).</strong> تجاهل تنبيه إعادة التخزين هو إخفاق جماعي — يعني أن المقهى قد ينفد من المكونات.",
+        "⚠️ <strong>كل إجراء فائت أو متأخر يُحتسب خصماً تلقائياً في درجة العمل الجماعي (5% من إجمالي تقييم الأداء).</strong> تجاهل تنبيه إعادة التخزين هو إخفاق جماعي — يعني أن المقهى قد ينفد من المكونات.",
       ],
     },
     {
@@ -8656,9 +8663,9 @@ routes.app_guide = function (u) {
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 const KPI_W = () => state.kpi_settings.weights;
 function save() { saveState(); }  // KPI module alias
-const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", leadership:"Leadership", training:"Training" };
-const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", leadership:"القيادة والمسؤولية", training:"التدريب والتطور" };
-const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", leadership:"👑", training:"🌱" };
+const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", leadership:"Leadership", hygiene:"Hygiene" };
+const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", leadership:"القيادة والمسؤولية", hygiene:"النظافة الشخصية والزي" };
+const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", leadership:"👑", hygiene:"🧼" };
 const CLEAN_AR = [
   "تنظيف رأس الإسبريسو وشطف الماكينة",
   "مسح عصا البخار وتنقيتها بعد كل استخدام ✓",
@@ -8954,6 +8961,21 @@ function kpiTeamworkScore(userId, cutoff) {
   return Math.max(0, 100 - penalty);
 }
 
+// Auto-calculates per-barista hygiene score from their own penalty records for the current month.
+// −25 pts per uniform violation (no_uniform), −25 pts per personal hygiene incident.
+// Returns null if no penalty data exists for the month yet (score not counted).
+function kpiHygieneScore(userId, month) {
+  const uniformCount  = (state.penalties||[]).filter(p =>
+    p.user_id === userId && p.reason_code === "no_uniform" && p.month === month
+  ).length;
+  const hygieneCount  = (state.penalties||[]).filter(p =>
+    p.user_id === userId && p.reason_code === "personal_hygiene" && p.month === month
+  ).length;
+  const hasPenaltyData = (state.penalties||[]).some(p => p.month === month);
+  if (!hasPenaltyData) return null;
+  return Math.max(0, 100 - uniformCount * 25 - hygieneCount * 25);
+}
+
 // ─── Leadership helpers ───────────────────────────────────────────────────────
 
 function getLeadershipAssignment(month) {
@@ -8985,7 +9007,7 @@ function notifyLeadershipRole(roleKey, title, body) {
 
 function kpiLeadershipScore(userId, month) {
   const assignment = getLeadershipAssignment(month);
-  const ROLES = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+  const ROLES = ["weekly_schedule","inventory_management","cash_status"];
   const myRole = assignment ? (ROLES.find(r => assignment[r] === userId) || null) : null;
   if (!myRole) return 100;
 
@@ -9058,17 +9080,6 @@ function kpiLeadershipScore(userId, month) {
     return Math.round((weeksWithDeposit / totalWeeks) * 100);
   }
 
-  if (myRole === "barista_hygiene") {
-    const count = (state.penalties || []).filter(p =>
-      p.reason_code === "no_uniform" && p.month === month
-    ).length;
-    if (count === 0) {
-      const hasPenaltiesThisMonth = (state.penalties || []).some(p => p.month === month);
-      if (!hasPenaltiesThisMonth) return null;
-    }
-    return Math.max(0, 100 - count * 25);
-  }
-
   return null;
 }
 
@@ -9117,6 +9128,7 @@ function kpiGetUserScores(userId) {
   const customer     = kpiCustomerScore(userId);
   const craftAuto    = kpiCraftScore(userId, cutoff);           // ← customer reviews where standout = coffee
   const teamworkAuto = kpiTeamworkScore(userId, cutoff);
+  const hygiene      = kpiHygieneScore(userId, month);
 
   // ── MANUAL: entered monthly by owner / head barista in scorecard ─────────
   const manual = ((state.kpi_manual||[]).find(m => m.user_id===userId && m.month===month)) || {};
@@ -9131,7 +9143,8 @@ function kpiGetUserScores(userId) {
     // Teamwork: auto-calculated from reorder compliance; manual override by owner only
     teamwork:   teamworkAuto ?? (manual.teamwork ?? null),
     leadership: kpiLeadershipScore(userId, month) ?? null,
-    training:   manual.training  ?? null,
+    // Hygiene: auto from no_uniform + personal_hygiene penalties for this barista this month
+    hygiene,
   };
 
   const cats = Object.keys(KPI_W());
@@ -9144,7 +9157,7 @@ function kpiGetAllScores() {
   for (const u of state.users) {
     if (!["barista","head_barista"].includes(u.role)) continue;
     const s = kpiGetUserScores(u.id);
-    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,leadership:null,training:null };
+    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,leadership:null,hygiene:null };
   }
   return result;
 }
@@ -9402,6 +9415,9 @@ routes.scorecard = function(u) {
     cats.forEach(k=>{
       const v = s[k];
       if (v==null) return;
+      if (k === "teamwork") {
+        diveBody.appendChild(el("div",{style:{fontSize:"11px",fontWeight:"700",letterSpacing:"1px",textTransform:"uppercase",color:"var(--ink-dim)",marginTop:"10px",marginBottom:"4px"}},"👥 Teamwork & Hygiene"));
+      }
       const rowDiv = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"7px"}});
       rowDiv.appendChild(el("div",{style:{width:"140px",fontSize:"12px",fontWeight:"600"}},KPI_ICONS[k]+" "+KPI_LABELS_EN[k]));
       const barWrap = el("div",{style:{flex:"1",height:"7px",background:"var(--surface-2)",borderRadius:"4px",overflow:"hidden"}});
@@ -9410,6 +9426,13 @@ routes.scorecard = function(u) {
       rowDiv.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",color:kpiScoreColor(v),minWidth:"28px",textAlign:"right"}},String(v)));
       rowDiv.appendChild(el("div",{class:"pill",style:{fontSize:"10px"}},KPI_W()[k]+"%"));
       diveBody.appendChild(rowDiv);
+      if (k === "hygiene") {
+        const hMonth = new Date().toISOString().slice(0,7);
+        const uCount = (state.penalties||[]).filter(p=>p.user_id===uid&&p.reason_code==="no_uniform"&&p.month===hMonth).length;
+        const hCount = (state.penalties||[]).filter(p=>p.user_id===uid&&p.reason_code==="personal_hygiene"&&p.month===hMonth).length;
+        diveBody.appendChild(el("div",{class:"muted small",style:{paddingLeft:"148px",marginBottom:"6px"}},
+          `Uniform: ${uCount} violation${uCount!==1?"s":""} · Personal hygiene: ${hCount} incident${hCount!==1?"s":""}`));
+      }
     });
     // Recent logs for this person
     const recent = (state.kpi_logs||[]).filter(l=>l.user_id===uid).sort((a,b)=>b.at-a.at).slice(0,5);
@@ -9453,7 +9476,6 @@ routes.scorecard = function(u) {
       {k:"upselling", label:"📈 Upselling",      hint:"Avg ticket size vs branch target (0-100)"},
       {k:"customer",  label:"😊 Customer Score", hint:"Review avg × 20 — or override coffeebeats.art data (0-100)"},
       {k:"teamwork",  label:"👥 Teamwork",        hint:"Peer input, shoutouts received, shift coverage (0-100)"},
-      {k:"training",  label:"🌱 Training",        hint:"Modules completed ÷ modules assigned × 100 (0-100)"},
     ];
     manSel.addEventListener("change",()=>{
       manFields.innerHTML="";
@@ -9609,7 +9631,7 @@ routes.my_scorecard = function(u) {
   (function() {
     const lMonth = new Date().toISOString().slice(0,7);
     const lAssign = getLeadershipAssignment(lMonth);
-    const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+    const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status"];
     const ROLE_INFO = {
       weekly_schedule:      { en:"📅 Schedule Manager",  ar:"📅 مدير الجداول",
         descEn:"You are accountable for the weekly schedule and sign-in stamp compliance. You are alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from your Leadership KPI; a late stamp (>15 min) deducts 10 pts. Act on alerts the same day — a stamp submitted before the owner's missing-stamp check avoids the deduction.",
@@ -9655,13 +9677,17 @@ routes.my_scorecard = function(u) {
     customer:    isAR?"تلقائي: تقييمات العملاء":"Auto: Customer Reviews",
     teamwork:    isAR?"تلقائي: الالتزام بطلبات التوريد":"Auto: Reorder Compliance",
     leadership:  isAR?"تلقائي: دور القيادة الشهري":"Auto: Monthly Leadership Role",
-    training:    isAR?"شهري: وحدات التدريب":"Monthly: Training Modules",
+    hygiene:     isAR?"تلقائي: مخالفات الزي والنظافة الشخصية":"Auto: Uniform & Personal Hygiene Penalties",
   };
   catCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
     isAR?"الأخضر = تلقائي من تصرفاتك · الرمادي = يدخله رئيس البريستا شهرياً":"Green = auto-calculated from your actions · Grey = entered monthly by management"));
   cats.forEach(k=>{
     const v = scores[k];
     const label = isAR?KPI_LABELS_AR[k]:KPI_LABELS_EN[k];
+    if (k === "teamwork") {
+      catCard.appendChild(el("div",{style:{fontSize:"11px",fontWeight:"700",letterSpacing:"1px",textTransform:"uppercase",color:"var(--ink-dim)",marginTop:"10px",marginBottom:"4px"}},
+        isAR?"👥 العمل الجماعي والنظافة":"👥 Teamwork & Hygiene"));
+    }
     const rowDiv = el("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}});
     rowDiv.appendChild(el("div",{style:{fontSize:"16px",width:"24px",textAlign:"center"}},KPI_ICONS[k]));
     rowDiv.appendChild(el("div",{style:{flex:"2",fontSize:"13px",fontWeight:"600"}},label));
@@ -9673,6 +9699,14 @@ routes.my_scorecard = function(u) {
     rowDiv.appendChild(vEl);
     rowDiv.appendChild(el("div",{class:"pill",style:{fontSize:"10px"}},KPI_W()[k]+"%"));
     catCard.appendChild(rowDiv);
+    if (k === "hygiene") {
+      const hMonth = new Date().toISOString().slice(0,7);
+      const uCount = (state.penalties||[]).filter(p=>p.user_id===u.id&&p.reason_code==="no_uniform"&&p.month===hMonth).length;
+      const hCount = (state.penalties||[]).filter(p=>p.user_id===u.id&&p.reason_code==="personal_hygiene"&&p.month===hMonth).length;
+      catCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"6px",paddingRight:isAR?"0":"32px",paddingLeft:isAR?"32px":"0"}},
+        isAR?`الزي: ${uCount} مخالفة · النظافة الشخصية: ${hCount} حادثة`
+           :`Uniform: ${uCount} violation${uCount!==1?"s":""} · Personal hygiene: ${hCount} incident${hCount!==1?"s":""}`));
+    }
   });
   wrap.appendChild(catCard);
 
@@ -10018,6 +10052,60 @@ routes.my_jd = function(u) {
           "الاتساق الحسّي: إجراء اختبار تذوق يومي لكل عرض تحضير قبل تقديمه للعملاء · الهدف: الالتزام باختبار الصباح ١٠٠٪",
         ],
       },
+      {
+        icon:"👑",
+        en:"Section 11 — Monthly Leadership Roles",ar:"القسم ١١ — الأدوار القيادية الشهرية",
+        items_en:[
+          "Each month the owner assigns one of 3 accountability roles. As head barista you are the most likely candidate for any role — understand all three thoroughly · KPI: Leadership Score 20% of total",
+          "📅 Schedule Manager — Accountable for posting the weekly roster on time and ensuring all baristas stamp in on time. Score = % of stamps submitted on time across the team each week of the month · KPI: Stamp Compliance ≥ 90%",
+          "📦 Inventory Manager — Must submit the end-of-month inventory snapshot by the final day of the month. Receives all low-stock and reorder alerts. Failure to submit = automatic half-day deduction + leadership score drop · KPI: Snapshot submitted by last day of month",
+          "💵 Cash Manager — Logs the weekly Maadi cash deposit at the bank. Receives a Thursday reminder each week. Score = % of weeks with a logged deposit · KPI: Weekly Deposit Logged ≥ 90%",
+          "If no role is assigned to you this month, leadership score defaults to 100 — no obligation applies",
+          "Leadership is the single highest-weighted KPI at 20% of total score. Coach your team to understand this system; their leadership assignment affects your team's overall performance",
+          "Assign roles in the Leadership Roles screen (owner only). Baristas can see their current assignment on the My Scorecard screen",
+        ],
+        items_ar:[
+          "كل شهر يُخصص المالك أحد 3 أدوار مساءلة. بصفتك رئيس بريستا أنت الأكثر ترشيحاً لأي دور — افهم الثلاثة جيداً · الهدف: درجة القيادة 20% من الإجمالي",
+          "📅 مدير الجداول — مسؤول عن نشر الجدول الأسبوعي في الوقت وضمان بصمة حضور الفريق. الدرجة = نسبة البصمات المرسلة في الوقت أسبوعياً · الهدف: الالتزام بالبصمة ≥ 90%",
+          "📦 مدير المخزون — يجب تسليم جرد المخزون في اليوم الأخير من الشهر. يستلم جميع تنبيهات نقص المخزون. عدم التسليم = خصم نصف يوم تلقائي + انخفاض درجة القيادة · الهدف: تسليم الجرد في آخر يوم من الشهر",
+          "💵 مدير الودائع — يسجّل الإيداع النقدي الأسبوعي في فرع ماعدي. يتلقى تذكيراً كل خميس. الدرجة = نسبة الأسابيع ذات إيداع مسجّل · الهدف: الإيداع الأسبوعي ≥ 90%",
+          "إذا لم يُخصص لك أي دور هذا الشهر، تكون درجة القيادة 100 تلقائياً — لا التزام مُحدد",
+          "القيادة هي الفئة الأعلى وزناً بـ 20% من الإجمالي. درّب فريقك على فهم هذا النظام؛ تخصيص الأدوار لهم يؤثر على أداء الفريق كله",
+          "يتم تخصيص الأدوار في شاشة الأدوار القيادية (المالك فقط). يمكن للبريستا رؤية دورهم الحالي في شاشة بطاقتي",
+        ],
+      },
+      {
+        icon:"📊",
+        en:"Section 12 — KPI Dashboard & Scorecard",ar:"القسم ١٢ — لوحة الأداء وبطاقة التقييم",
+        items_en:[
+          "The scorecard aggregates 9 auto and manual KPIs into a single weighted score out of 100. Target: Head Barista ≥ 85 · Barista ≥ 75",
+          "⏱️ Punctuality 5% — Auto: rolling 30-day on-time arrival rate from sign-in stamps",
+          "♻️ Waste Control 15% — Auto: espresso shot and milk waste vs. SCA targets from waste logs",
+          "🧹 Cleanliness 10% — Auto: cleaning checklist completion rate from cleaning logs",
+          "☕ Coffee Craft 15% — Auto from customer reviews mentioning coffee quality; manual fallback entered monthly",
+          "📈 Upselling 10% — Manual monthly: avg ticket size vs. branch target",
+          "😊 Customer Score 15% — Auto: live from coffeebeats.art star ratings",
+          "👥 Teamwork 5% — Auto: reorder alert response speed while on shift",
+          "🧼 Hygiene 5% — Auto from penalties: starts 100, −25 pts per uniform violation, −25 pts per personal hygiene incident this month",
+          "👑 Leadership 20% — Auto from assigned monthly role performance (see Section 11)",
+          "Grades: 🥇 Gold ≥ 90 · 🥈 Silver ≥ 80 · 🥉 Bronze ≥ 70 · ✅ On Target ≥ 75/85 · KPI: Head Barista ≥ 85, Barista ≥ 75",
+          "As head barista you can view the full team heatmap and enter manual scores (Upselling, Craft override) from the Scorecard screen · KPI: Manual scores entered by 5th of each month",
+        ],
+        items_ar:[
+          "بطاقة الأداء تجمع 9 مؤشرات تلقائية ويدوية في درجة موزونة واحدة من 100. الهدف: رئيس بريستا ≥ 85 · بريستا ≥ 75",
+          "⏱️ الانضباط والحضور 5% — تلقائي: نسبة الوصول في الوقت خلال 30 يوماً من بصمات الحضور",
+          "♻️ ترشيد الهدر 15% — تلقائي: هدر الإسبريسو والحليب مقابل معايير SCA من سجلات الهدر",
+          "🧹 النظافة 10% — تلقائي: نسبة إكمال قائمة النظافة من سجلات التنظيف",
+          "☕ جودة القهوة 15% — تلقائي من تقييمات العملاء؛ درجة احتياطية يدوية تُدخل شهرياً",
+          "📈 البيع الإضافي 10% — يدوي شهري: متوسط الفاتورة مقابل هدف الفرع",
+          "😊 رضا العملاء 15% — تلقائي: مباشر من تقييمات النجوم على coffeebeats.art",
+          "👥 العمل الجماعي 5% — تلقائي: سرعة الاستجابة لتنبيهات إعادة الطلب أثناء الشيفت",
+          "🧼 النظافة الشخصية والزي 5% — تلقائي من الخصومات: تبدأ 100، −25 نقطة لكل مخالفة زي أو نظافة شخصية هذا الشهر",
+          "👑 القيادة 20% — تلقائي من أداء الدور الشهري المُخصص (راجع القسم 11)",
+          "التقديرات: 🥇 ذهبي ≥ 90 · 🥈 فضي ≥ 80 · 🥉 برونزي ≥ 70 · ✅ ضمن الهدف ≥ 75/85",
+          "بصفتك رئيس بريستا يمكنك عرض خريطة حرارة الفريق الكاملة وإدخال الدرجات اليدوية (البيع الإضافي، تجاوز الصنعة) من شاشة بطاقة الأداء · الهدف: إدخال الدرجات اليدوية بحلول الخامس من كل شهر",
+        ],
+      },
     ] : [
       {
         icon:"☕",
@@ -10159,6 +10247,60 @@ routes.my_jd = function(u) {
           "SCA مهارات البريستا (أساسي): الإتمام خلال أول ٣ أشهر من التوظيف · الهدف: اجتياز SCA Foundation بحلول الشهر الثالث",
           "تقدم لاتيه آرت: روزيتا ≥ ٩٠٪ نجاح بحلول الشهر الثاني، الصب الحر بحلول الشهر الرابع · الهدف: معالم التقدم الفني",
           "التدريب المتقاطع: تعلم وتنفيذ طريقتي تحضير على الأقل (V60، كيمكس، إيروبريس، سيفون) · الهدف: طرق التحضير ≥ ٢",
+        ],
+      },
+      {
+        icon:"👑",
+        en:"Section 11 — Monthly Leadership Roles",ar:"القسم ١١ — الأدوار القيادية الشهرية",
+        items_en:[
+          "Each month the owner assigns one of 3 accountability roles to a barista. You may or may not be assigned a role each month — check My Scorecard to see your current assignment · KPI: Leadership Score 20% of total",
+          "📅 Schedule Manager — Accountable for the weekly roster and team sign-in stamp compliance. Your score is calculated from the percentage of stamps submitted on time each week · KPI: Stamp Compliance ≥ 90%",
+          "📦 Inventory Manager — Must submit the end-of-month inventory snapshot by the final day of the month. You receive all low-stock alerts and are expected to action them. Missing the snapshot triggers an automatic half-day salary deduction · KPI: Snapshot submitted by last day of month",
+          "💵 Cash Manager — Responsible for logging the weekly Maadi cash deposit at the bank. You receive a reminder every Thursday. Score = % of weeks with a deposit logged · KPI: Weekly Deposit Logged ≥ 90%",
+          "If no role is assigned to you this month, your leadership score is 100 by default — no accountability obligation applies",
+          "Leadership carries 20% of your total scorecard — it is the single highest-weighted category. Failing your assigned role will significantly reduce your monthly score",
+          "You can view your assigned role at any time on the My Scorecard screen under 'Your Leadership Role This Month'",
+        ],
+        items_ar:[
+          "كل شهر يُخصص المالك أحد 3 أدوار مساءلة لبريستا. قد يُخصص لك دور أو لا — تحقق من بطاقتي لمعرفة تخصيصك الحالي · الهدف: درجة القيادة 20% من الإجمالي",
+          "📅 مدير الجداول — مسؤول عن الجدول الأسبوعي والتزام الفريق ببصمات الحضور. تُحسب درجتك من نسبة البصمات المرسلة في الوقت أسبوعياً · الهدف: الالتزام بالبصمة ≥ 90%",
+          "📦 مدير المخزون — يجب تسليم جرد المخزون في اليوم الأخير من الشهر. تستلم جميع تنبيهات نقص المخزون ومن المتوقع اتخاذ إجراء تجاهها. غياب الجرد يُطلق خصم نصف يوم تلقائياً · الهدف: تسليم الجرد في آخر يوم من الشهر",
+          "💵 مدير الودائع — مسؤول عن تسجيل الإيداع النقدي الأسبوعي في فرع ماعدي. تتلقى تذكيراً كل خميس. الدرجة = نسبة الأسابيع ذات إيداع مسجّل · الهدف: الإيداع الأسبوعي ≥ 90%",
+          "إذا لم يُخصص لك أي دور هذا الشهر، تكون درجة القيادة 100 تلقائياً — لا التزام مساءلة مُحدد",
+          "القيادة تحمل 20% من إجمالي بطاقتك — وهي الفئة الأعلى وزناً. الإخفاق في دورك المُخصص سيخفّض درجتك الشهرية بشكل كبير",
+          "يمكنك رؤية دورك المُخصص في أي وقت من شاشة بطاقتي ضمن 'دورك القيادي هذا الشهر'",
+        ],
+      },
+      {
+        icon:"📊",
+        en:"Section 12 — KPI Dashboard & Scorecard",ar:"القسم ١٢ — لوحة الأداء وبطاقة التقييم",
+        items_en:[
+          "Your scorecard updates automatically every time you submit a log. Open it from the My Scorecard tile on your home screen. Target: ≥ 75 to stay on track",
+          "⏱️ Punctuality 5% — Auto: rolling 30-day on-time arrival rate from your sign-in stamps. The earlier you stamp in, the better your score",
+          "♻️ Waste Control 15% — Auto: measured from your waste logs every shift. Target ≤ 3 espresso shots and ≤ 100ml milk wasted per shift",
+          "🧹 Cleanliness 10% — Auto: based on your cleaning log checklist completion. Submit with photo every shift to maintain your score",
+          "☕ Coffee Craft 15% — Auto from customer reviews mentioning coffee quality, with a monthly manual score set by your head barista as fallback",
+          "📈 Upselling 10% — Set manually by management each month based on your average ticket size vs. the branch target",
+          "😊 Customer Score 15% — Auto: every star rating submitted on coffeebeats.art flows directly into your score in real-time",
+          "👥 Teamwork 5% — Auto: measures how fast you responded to low-stock alerts when you were on shift. Respond within 24h = full score",
+          "🧼 Hygiene 5% — Auto from penalties: starts at 100 every month. Each uniform violation or personal hygiene penalty deducts 25 pts. Zero penalties = 100",
+          "👑 Leadership 20% — Auto from your assigned monthly role (see Section 11). No role = 100 by default",
+          "Grades: 🥇 Gold ≥ 90 · 🥈 Silver ≥ 80 · 🥉 Bronze ≥ 70 · ✅ On Target ≥ 75 · KPI: Barista target ≥ 75",
+          "⚠️ Hygiene and leadership scores reset at the start of every month. Punctuality, waste, cleanliness, teamwork and customer scores are rolling 30-day averages",
+        ],
+        items_ar:[
+          "بطاقتك تتحدث تلقائياً في كل مرة ترسل فيها سجلاً. افتحها من تايل بطاقتي في شاشتك الرئيسية. الهدف: ≥ 75 للبقاء في المسار الصحيح",
+          "⏱️ الانضباط والحضور 5% — تلقائي: نسبة الوصول في الوقت خلال 30 يوماً من بصمات حضورك. كلما بصّمت مبكراً كانت درجتك أفضل",
+          "♻️ ترشيد الهدر 15% — تلقائي: يُقاس من سجلات الهدر كل شيفت. الهدف ≤ 3 شوطات إسبريسو و≤ 100مل حليب مهدر لكل شيفت",
+          "🧹 النظافة 10% — تلقائي: بناءً على نسبة إكمال قائمة النظافة. أرسل مع صورة كل شيفت للحفاظ على درجتك",
+          "☕ جودة القهوة 15% — تلقائي من تقييمات العملاء التي تذكر جودة القهوة، مع درجة يدوية شهرية من رئيس البريستا كاحتياط",
+          "📈 البيع الإضافي 10% — تُحدد يدوياً من الإدارة كل شهر بناءً على متوسط فاتورتك مقابل هدف الفرع",
+          "😊 رضا العملاء 15% — تلقائي: كل تقييم نجمي يُرسل على coffeebeats.art يضاف مباشرةً لدرجتك فوراً",
+          "👥 العمل الجماعي 5% — تلقائي: يقيس سرعة استجابتك لتنبيهات نقص المخزون أثناء شيفتك. استجابة خلال 24 ساعة = درجة كاملة",
+          "🧼 النظافة الشخصية والزي 5% — تلقائي من الخصومات: تبدأ من 100 كل شهر. كل مخالفة زي أو نظافة شخصية تخصم 25 نقطة. صفر مخالفات = 100",
+          "👑 القيادة 20% — تلقائي من دورك الشهري المُخصص (راجع القسم 11). بدون دور = 100 تلقائياً",
+          "التقديرات: 🥇 ذهبي ≥ 90 · 🥈 فضي ≥ 80 · 🥉 برونزي ≥ 70 · ✅ ضمن الهدف ≥ 75",
+          "⚠️ درجات النظافة والقيادة تُعاد في بداية كل شهر. درجات الانضباط والهدر والنظافة والعمل الجماعي ورضا العملاء هي متوسطات متجددة لآخر 30 يوماً",
         ],
       },
     ];
