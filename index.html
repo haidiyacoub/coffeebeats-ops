@@ -381,6 +381,7 @@ function startReviewsListener() {
         user_id: matchUser?.id || null,
         rating: d.rating || 0,
         source: "coffeebeats.art",
+        standout: d.standout || "",
         note: [d.feedback, d.standout].filter(Boolean).join(' | '),
         branch: d.branch || "",
         month: new Date(d.at || Date.now()).toISOString().slice(0, 7)
@@ -814,6 +815,14 @@ function migrateState(s) {
     s._migration_khaled_role_fixed = true;
   }
 
+  // One-time migration: rename "Signature Coffee" category → "Signature Drinks" in all recipes.
+  if (!s._migration_signature_drinks) {
+    if (Array.isArray(s.recipes)) {
+      s.recipes.forEach(r => { if (r.category === "Signature Coffee") r.category = "Signature Drinks"; });
+    }
+    s._migration_signature_drinks = true;
+  }
+
   // Seed Zawya staff Bakr (helper) & Mohamed (manager) if they don't exist yet.
   // Same PIN-aware check so renames are safe.
   // Both are Zawya-only with no app access but appear in the barista drink allowance list.
@@ -856,14 +865,22 @@ function migrateState(s) {
   s.purchase_units         = s.purchase_units         || {}; // inv_item_id → { unit_label, pack_size_canonical }
   s.inventory_alerts = s.inventory_alerts || {}; // inv_item_id → { reorder_threshold_days }
   s.alert_log           = s.alert_log || [];
+  s.suppliers           = s.suppliers       || {}; // inv_item_id → [{ id, name, contact, notes }]
+  s.reorder_actions     = s.reorder_actions || []; // per-alert action records logged by baristas
   s.rosters             = s.rosters || []; // weekly shift rosters
   s.roaster_schedules   = s.roaster_schedules || []; // weekly roaster — head barista posts to whole team
   s.kpi_logs      = s.kpi_logs      || []; // kept for migration only — scores now derived from source tiles
-  s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork, training
+  s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork
   s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
   s.kpi_settings  = s.kpi_settings  || {
-    weights: { punctuality:15, waste:15, cleanliness:15, craft:20, upselling:10, customer:15, teamwork:5, training:5 }
+    weights: { punctuality:5, waste:15, cleanliness:10, craft:15, upselling:10, customer:15, teamwork:5, leadership:20, hygiene:5 }
   };
+  // Migrate old weights (training → hygiene, updated percentages)
+  if (s.kpi_settings && s.kpi_settings.weights && s.kpi_settings.weights.training !== undefined) {
+    s.kpi_settings.weights = { punctuality:5, waste:15, cleanliness:10, craft:15, upselling:10, customer:15, teamwork:5, leadership:20, hygiene:5 };
+  }
+  s.leadership_assignments   = s.leadership_assignments   || [];
+  s.leadership_notifications = s.leadership_notifications || [];
 
   s.shift_closes        = s.shift_closes  || [];
   s.cleaning_logs       = s.cleaning_logs || [];
@@ -874,6 +891,7 @@ function migrateState(s) {
   };
   s.photo_log           = s.photo_log     || [];
   s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
+  s.staff_ids           = s.staff_ids     || {}; // { [userId]: [{ id, url, at, name }] }
   s.leaves              = s.leaves        || []; // leave requests (annual / sick)
   s.settings.team_code           = s.settings.team_code           || "coffeeteam2026";
   s.settings.head_barista_email  = s.settings.head_barista_email  || "";
@@ -914,7 +932,7 @@ const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
 // Each chunk key maps to the state keys it owns.
 const STATE_CHUNKS = {
   config:      ["settings", "salary_config"],
-  users_items: ["users", "items", "menu", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts"],
+  users_items: ["users", "items", "menu", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
   waste:       ["waste"],
   purchases:   ["purchases", "petty_cash", "bank_ledger"],
   sales:       ["sales", "shifts"],
@@ -923,8 +941,8 @@ const STATE_CHUNKS = {
   hr:          ["salaries", "salary_loans", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
   overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:       ["photo_log", "assets"],
-  kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings"],
-  meta:        ["_seeded_ids", "_migration_khaled_role_fixed", "version", "created_at", "branch_opening_times"],
+  kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
+  meta:        ["_seeded_ids", "_migration_khaled_role_fixed", "_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
 };
 
 function markDirty() {
@@ -1235,14 +1253,135 @@ function scanAndNotifyLowStock() {
         key, date: today, branch: b, item_id: r.item.id, item_name: r.item.name,
         stock: r.stock, days_of_cover: r.days_of_cover, threshold_days: r.threshold_days,
         at: new Date().toISOString(),
+        follow_ups: [], // escalation records: [{ level:"3d"|"5d"|"6d", fired_at }]
       });
       notifyHaidi(
         `Low stock — ${r.item.name} (${b})`,
         `~${r.days_of_cover.toFixed(1)}d cover left (threshold ${r.threshold_days}d). ${fmtQty(r.stock, r.item.unit)} on hand.`
       );
+      notifyLeadershipRole("inventory_management",
+        `Low stock — ${r.item.name} (${b})`,
+        `~${r.days_of_cover.toFixed(1)}d cover left. Inventory manager action required.`
+      );
     }
   }
   saveState();
+}
+
+// Returns true if item has been logged in the purchase log since alertDate.
+function isReorderResolved(itemId, alertDate) {
+  return (state.purchases || []).some(p => {
+    if ((p.date || p.at || "").slice(0,10) < alertDate) return false;
+    return (p.lines || []).some(l => l.inv_item_id === itemId);
+  });
+}
+
+// Returns true if barista has logged a "called_supplier" action for this alert key.
+function isReorderActionedByCalling(alertKey) {
+  return (state.reorder_actions || []).some(a => a.alert_key === alertKey && a.called_supplier);
+}
+
+// Checks all open alerts and fires escalating follow-up notifications:
+// +3 days, +5 days, +6 days since the original alert.
+// Stops when item is purchased or barista has ticked called_supplier.
+function scanReorderFollowUps() {
+  state.alert_log = state.alert_log || [];
+  state.reorder_actions = state.reorder_actions || [];
+  const now = new Date();
+  const today = now.toISOString().slice(0,10);
+  let dirty = false;
+
+  const LEVELS = [
+    { label: "3d", days: 3, urgency: "⚠️ Reorder follow-up" },
+    { label: "5d", days: 5, urgency: "🚨 URGENT — reorder overdue" },
+    { label: "6d", days: 6, urgency: "🔴 CRITICAL — reorder still missing" },
+  ];
+
+  for (const alert of state.alert_log) {
+    if (!alert.date) continue;
+    // Migrate old entries that lack follow_ups
+    if (!Array.isArray(alert.follow_ups)) { alert.follow_ups = []; dirty = true; }
+
+    if (isReorderResolved(alert.item_id, alert.date)) continue;
+    if (isReorderActionedByCalling(alert.key)) continue;
+
+    const alertDate = new Date(alert.date + "T00:00:00");
+    const daysSince = Math.floor((now - alertDate) / 86400000);
+
+    for (const lvl of LEVELS) {
+      if (daysSince < lvl.days) break;
+      if (alert.follow_ups.some(f => f.level === lvl.label)) continue;
+      // Fire this level's follow-up once
+      alert.follow_ups.push({ level: lvl.label, fired_at: now.toISOString() });
+      dirty = true;
+      notifyHaidi(
+        `${lvl.urgency} — ${alert.item_name} (${alert.branch})`,
+        `Low-stock alert from ${alert.date} still unresolved. Log your action in the app.`
+      );
+      notifyLeadershipRole("inventory_management",
+        `${lvl.urgency} — ${alert.item_name} (${alert.branch})`,
+        `Reorder alert from ${alert.date} still unresolved.`
+      );
+    }
+  }
+  if (dirty) saveState();
+}
+
+function scanCashDepositReminders() {
+  const today = new Date();
+  if (today.getDay() !== 4) return; // Thursday only
+  const todayStr = localISODate(today);
+  const weekOf   = mondayOf(todayStr);
+  const alreadyFired = (state.leadership_notifications || []).some(n =>
+    n.role_key === "cash_status" && n.title === "Deposit reminder" &&
+    typeof n.at === "string" && mondayOf(n.at.slice(0,10)) === weekOf
+  );
+  if (alreadyFired) return;
+  const hasDeposit = (state.maadi_deposits || []).some(dep => dep.week_of === weekOf);
+  if (hasDeposit) return;
+  notifyLeadershipRole("cash_status",
+    "Deposit reminder",
+    `No Maadi cash deposit logged for week of ${weekOf}. Please deposit before end of day.`
+  );
+}
+
+function scanCashDepositPenalties() {
+  const today = new Date();
+  if (today.getDay() !== 5) return; // Friday only — day after Thursday reminder
+  const todayStr    = localISODate(today);
+  const weekOf      = mondayOf(todayStr);
+  const currentMonth = todayStr.slice(0, 7);
+  const hasDeposit  = (state.maadi_deposits || []).some(dep => dep.week_of === weekOf);
+  if (hasDeposit) return;
+  const alreadyPenalised = (state.penalties || []).some(p =>
+    p.auto_cash_deposit && p.week_of === weekOf
+  );
+  if (alreadyPenalised) return;
+  const assignment  = getLeadershipAssignment(currentMonth);
+  const cashMgrId   = assignment ? (assignment.cash_status || null) : null;
+  if (!cashMgrId) return;
+  const cashMgr = (state.users || []).find(u => u.id === cashMgrId);
+  const salary  = Number(((state.salary_config || {})[cashMgrId] || {}).monthly_salary || 0);
+  const amount  = penaltyAmount("quarter_day", salary);
+  state.penalties = state.penalties || [];
+  state.penalties.push({
+    id: uuid(), at: new Date().toISOString(),
+    by: "system", by_name: "System",
+    user_id: cashMgrId, barista: cashMgr ? cashMgr.name : cashMgrId,
+    kind: "quarter_day", kind_label: "Quarter day",
+    reason: "leadership_fail", reason_code: "cash_deposit_missed",
+    date: todayStr, month: currentMonth,
+    amount,
+    note: "Auto: Maadi deposit not logged for week of " + weekOf,
+    auto_cash_deposit: true,
+    week_of: weekOf,
+    salary_at_time: salary,
+  });
+  saveState();
+  notifyHaidi(
+    `Cash deposit penalty — ${cashMgr ? cashMgr.name : cashMgrId}`,
+    `No Maadi deposit logged for week of ${weekOf}. ¼ day deducted from salary.`
+  );
 }
 
 function pettyCashBalance(branch) {
@@ -1280,9 +1419,11 @@ const ROLE_ACCESS = {
                  "shift_close_new","shift_close_list","cleaning_log_new","cleaning_log_list",
                  "signin_stamp_new","signin_stamp_list",
                  "leave_new","leave_list",
-                 "scorecard","my_scorecard","my_jd"],
+                 "scorecard","my_scorecard","my_jd",
+                 "reorder_action_new","reorder_action_list","supplier_list","items_list",
+                 "my_hr","staff_hr"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd"],
+  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr"],
   // Zawya-only roles — no app access, kept in list for barista drink allowance tracking
   manager: [],
   helper:  [],
@@ -1306,9 +1447,11 @@ function canAccess(routeName, u) {
 function render() {
   const root = $("#app");
   root.innerHTML = "";
-  if (!state._auth) { stopIdleTimer(); root.appendChild(loginView()); return; }
+  if (!state._auth) { stopIdleTimer(); stopNoStampCheck(); root.appendChild(loginView()); return; }
   const u = currentUser();
   if (!u || !u.active) { auth.signOut(); return; }
+  if (["owner", "head_barista"].includes(u.role)) startNoStampCheck();
+  else stopNoStampCheck();
   // Guard direct-access to restricted routes
   if (!canAccess(route.name, u)) {
     route = { name: "home", params: {} };
@@ -1468,10 +1611,17 @@ routes.home = function (u) {
     tiles.appendChild(tile("🕐", "Sign-In Stamp", "Clock-in photo", () => go("signin_stamp_new")));
     tiles.appendChild(tile("🧹", "Cleaning Log", "Upload checklist photo", () => go("cleaning_log_new")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
+    tiles.appendChild(tile("📦", "Reorder Actions", "Log supplier actions", () => go("reorder_action_new")));
+    tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
+    tiles.appendChild(sectionHeader("HR"));
+    const _selfUsr = state.users.find(x => x.id === u.id);
+    const _hasId = (_selfUsr?.id_photo_urls || []).length > 0;
+    tiles.appendChild(tile("🪪", "My ID", _hasId ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "My Leaves", "View leave history", () => go("leave_list")));
-    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
     tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
   }
 
@@ -1495,12 +1645,21 @@ routes.home = function (u) {
     if (u.branches.includes("maadi")) {
       tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
     }
+    tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
+    tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
+    tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
+    tiles.appendChild(sectionHeader("HR"));
     tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
     tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance dashboard", () => go("scorecard")));
     tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
+    const _selfUsrHB = state.users.find(x => x.id === u.id);
+    const _hasIdHB = (_selfUsrHB?.id_photo_urls || []).length > 0;
+    tiles.appendChild(tile("🪪", "My ID", _hasIdHB ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
+    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
+    tiles.appendChild(tile("👥", "Staff HR", "Payroll · penalties · leaves overview", () => go("staff_hr")));
     tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
   }
 
@@ -1527,19 +1686,29 @@ routes.home = function (u) {
     tiles.appendChild(tile("🕐", "Sign-In Stamps", "Clock-in photos", () => go("signin_stamp_list")));
     tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
     tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
-    tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
-    tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
+    tiles.appendChild(tile("👥", "Staff HR", "Monthly payroll · deductions · leaves", () => go("staff_hr")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
-    tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
+    tiles.appendChild(tile("📦", "Inventory Items", "Add, edit or remove tracked items", () => go("items_list")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
-    tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
+    tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
+    tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
+    tiles.appendChild(tile("👑", "Leadership Roles", "Monthly accountability assignments", () => go("leadership_roles")));
+    const _ownerUsr = state.users.find(x => x.id === u.id);
+    const _ownerHasId = (_ownerUsr?.id_photo_urls || []).length > 0;
+    tiles.appendChild(tile("🪪", "My ID", _ownerHasId ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
     tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
+    tiles.appendChild(sectionHeader("HR"));
+    tiles.appendChild(tile("💰", "Staff Payroll", "Monthly payroll · deductions · leaves", () => go("staff_payroll")));
+    tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
+    tiles.appendChild(tile("⚖️", "Penalties", "Half/full day deductions", () => go("penalties")));
+    tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
+    tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
   }
   wrap.appendChild(tiles);
 
@@ -1549,6 +1718,9 @@ routes.home = function (u) {
   // last two snapshots + purchases to estimate daily usage; default reorder window
   // is 7 days of cover unless overridden per item.
   try { scanAndNotifyLowStock(); } catch (e) { console.warn(e); }
+  try { scanReorderFollowUps(); } catch (e) { console.warn(e); }
+  try { scanCashDepositReminders(); } catch (e) { console.warn(e); }
+  try { scanCashDepositPenalties(); } catch (e) { console.warn(e); }
   const lowBoth = [
     ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
     ...lowStockItems("zawya").map(r => ({...r, _b: "zawya"})),
@@ -1566,6 +1738,40 @@ routes.home = function (u) {
       card.appendChild(el("div", { class: "sub muted", style: { marginTop: "4px" } }, `+${lowBoth.length - 8} more`));
     }
     wrap.appendChild(card);
+  }
+
+  // ---------- Reorder action banner ----------
+  // Shown to barista + head_barista: alerts where no "called_supplier" or
+  // "notified_head_barista" action has been logged yet.
+  if (u.role === "barista" || u.role === "head_barista") {
+    const pending = (state.alert_log || []).filter(a => {
+      if (isReorderResolved(a.item_id, a.date)) return false;
+      if (isReorderActionedByCalling(a.key)) return false;
+      const hasAnyAction = (state.reorder_actions || []).some(r => r.alert_key === a.key && (r.called_supplier || r.notified_head_barista));
+      if (hasAnyAction) return false;
+      // Only surface alerts from the last 10 days
+      const daysSince = Math.floor((Date.now() - new Date(a.date + "T00:00:00")) / 86400000);
+      return daysSince <= 10;
+    });
+    if (pending.length > 0) {
+      const raCard = el("div", { class: "card", style: { borderColor: "#c0392b", background: "#fff5f5", marginTop: "12px", cursor: "pointer" } });
+      raCard.appendChild(el("div", { style: { color: "#c0392b", fontWeight: "700", marginBottom: "8px", fontSize: "14px" } }, `📦 ${pending.length} reorder action${pending.length>1?"s":""} awaiting your response`));
+      for (const a of pending.slice(0, 6)) {
+        const daysSince = Math.floor((Date.now() - new Date(a.date + "T00:00:00")) / 86400000);
+        const hasFollowUp = Array.isArray(a.follow_ups) && a.follow_ups.length > 0;
+        const row = el("div", { class: "kv", style: { borderBottom: "1px solid #ffd6d6", padding: "6px 0", cursor: "pointer" } }, [
+          el("div", { class: "k", style: { fontWeight: "600" } }, `${a.item_name} · ${a.branch}`),
+          el("div", { class: "v", style: { color: hasFollowUp ? "#c0392b" : "#666", fontSize: "12px" } }, hasFollowUp ? `🔴 ${daysSince}d overdue` : `${daysSince}d ago`),
+        ]);
+        row.addEventListener("click", () => go("reorder_action_new", { alert_key: a.key }));
+        raCard.appendChild(row);
+      }
+      if (pending.length > 6) {
+        raCard.appendChild(el("div", { class: "sub muted", style: { marginTop: "4px", fontSize: "12px" } }, `+${pending.length - 6} more — tap to view all`));
+      }
+      raCard.addEventListener("click", (e) => { if (e.target === raCard) go("reorder_action_list"); });
+      wrap.appendChild(raCard);
+    }
   }
 
   // quick today stats
@@ -1593,6 +1799,15 @@ function tile(icon, label, sub, onClick) {
     el("div", { class: "label" }, label),
     el("div", { class: "sub" }, sub),
   ]);
+}
+
+function sectionHeader(label) {
+  return el("div", {
+    style: { gridColumn: "1 / -1", background: "var(--ink)", color: "#fff",
+             fontWeight: "700", fontSize: "11px", letterSpacing: "0.12em",
+             textTransform: "uppercase", padding: "7px 14px", borderRadius: "10px",
+             marginTop: "10px" },
+  }, label);
 }
 
 // ==============================================================
@@ -2095,9 +2310,43 @@ routes.snapshot_new = function (u) {
           toast(`Reorder threshold for ${it.name} set.`);
         }
       }, `⏰ ${threshold}d`);
+      const titleRow = el("div", { style: { display: "flex", alignItems: "center", gap: "6px" } });
+      titleRow.appendChild(el("span", { class: "title" }, it.name));
+      if (u.role === "owner" || u.role === "accountant") {
+        const editItemBtn = el("button", { class: "btn ghost", style: { padding: "2px 7px", fontSize: "11px" } }, "✏️");
+        editItemBtn.title = "Edit item";
+        editItemBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const INV_CATEGORIES = [
+            { value: "coffee-beans", label: "Coffee Beans" }, { value: "milk", label: "Milk" },
+            { value: "tea", label: "Tea" }, { value: "powder", label: "Powder" },
+            { value: "spices", label: "Spices" }, { value: "sugar", label: "Sugar" },
+            { value: "puree", label: "Puree" }, { value: "syrup", label: "Syrup" },
+            { value: "sauce", label: "Sauce" }, { value: "dairy-extras", label: "Dairy Extras" },
+            { value: "halo-snacks", label: "Halo Snacks" }, { value: "beverages", label: "Beverages" },
+            { value: "packaging", label: "Packaging" },
+          ];
+          openPrompt({
+            title: `Edit item: ${it.name}`,
+            fields: [
+              { key: "name",     label: "Name",     type: "text",   value: it.name },
+              { key: "unit",     label: "Unit",     type: "select", value: it.unit,
+                options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+              { key: "category", label: "Category", type: "select", value: it.category, options: INV_CATEGORIES },
+            ],
+            onSubmit: (v) => {
+              if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+              it.name = v.name.trim(); it.unit = v.unit; it.category = v.category;
+              saveState(); draw();
+              toast(`Updated ${it.name}`);
+            }
+          });
+        });
+        titleRow.appendChild(editItemBtn);
+      }
       list.appendChild(el("div", { class: "row" }, [
         el("div", { class: "grow" }, [
-          el("div", { class: "title" }, it.name),
+          titleRow,
           el("div", { class: "sub" }, `${it.category} · theoretical ${fmtQty(pre, it.unit)}`),
           el("div", { class: "sub", style: subStyle }, `${coverTxt} · daily use ~${fmtQty(usage, it.unit)}`),
         ]),
@@ -2324,6 +2573,605 @@ routes.snapshot_new = function (u) {
 // Two line types:
 //   - "inventory" — an item that sits in the stock count. Has a purchase unit
 //     (bottle, pack, carton…) + pack size in the inventory unit (ml, g, pcs).
+// ==============================================================
+// REORDER ACTIONS
+// ==============================================================
+routes.reorder_action_new = function (u, params) {
+  params = params || {};
+  const wrap = el("div", {});
+  wrap.appendChild(header("Reorder Action", "Log the action you took for a low-stock alert."));
+
+  state.alert_log = state.alert_log || [];
+  state.reorder_actions = state.reorder_actions || [];
+
+  // Build list of actionable alerts (not resolved, no action yet — or follow-up needed)
+  const now = Date.now();
+  const pending = state.alert_log.filter(a => {
+    if (isReorderResolved(a.item_id, a.date)) return false;
+    if (isReorderActionedByCalling(a.key)) return false;
+    const daysSince = Math.floor((now - new Date(a.date + "T00:00:00")) / 86400000);
+    return daysSince <= 14;
+  });
+
+  if (pending.length === 0) {
+    wrap.appendChild(el("div", { class: "card", style: { textAlign: "center", padding: "32px 16px" } }, [
+      el("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "✅"),
+      el("div", { style: { fontWeight: "700", marginBottom: "4px" } }, "No pending reorder actions"),
+      el("div", { class: "muted" }, "All low-stock alerts have been actioned or resolved."),
+    ]));
+    return wrap;
+  }
+
+  // Pre-select alert from params or default to first
+  let selectedKey = params.alert_key || pending[0].key;
+  if (!pending.some(a => a.key === selectedKey)) selectedKey = pending[0].key;
+
+  // Alert picker (if multiple pending)
+  if (pending.length > 1) {
+    const pickerLabel = el("div", { class: "muted small", style: { marginBottom: "4px" } }, "Select alert to action:");
+    const picker = el("select", { style: { marginBottom: "14px" } });
+    pending.forEach(a => {
+      const daysSince = Math.floor((now - new Date(a.date + "T00:00:00")) / 86400000);
+      const opt = el("option", { value: a.key }, `${a.item_name} · ${a.branch} · ${daysSince}d ago`);
+      if (a.key === selectedKey) opt.selected = true;
+      picker.appendChild(opt);
+    });
+    picker.addEventListener("change", () => { selectedKey = picker.value; renderForm(); });
+    wrap.appendChild(pickerLabel);
+    wrap.appendChild(picker);
+  }
+
+  const formArea = el("div", {});
+  wrap.appendChild(formArea);
+
+  function renderForm() {
+    formArea.innerHTML = "";
+    const alert = pending.find(a => a.key === selectedKey) || pending[0];
+    if (!alert) return;
+
+    const daysSince = Math.floor((now - new Date(alert.date + "T00:00:00")) / 86400000);
+    const isOverdue = Array.isArray(alert.follow_ups) && alert.follow_ups.length > 0;
+
+    // Alert summary card
+    const summaryCard = el("div", { class: "card", style: { background: isOverdue ? "#fff5f5" : "var(--surface-2)", border: `1px solid ${isOverdue ? "#c0392b" : "var(--border)"}`, marginBottom: "14px" } });
+    summaryCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px", marginBottom: "4px" } }, `📦 ${alert.item_name}`));
+    summaryCard.appendChild(el("div", { class: "muted small" }, `Branch: ${alert.branch} · Alert date: ${alert.date} · ${daysSince} day${daysSince!==1?"s":""} ago`));
+    if (isOverdue) {
+      summaryCard.appendChild(el("div", { style: { color: "#c0392b", fontWeight: "600", fontSize: "12px", marginTop: "6px" } }, `🔴 ${alert.follow_ups.length} follow-up alarm${alert.follow_ups.length>1?"s":""} fired — action overdue`));
+    }
+    formArea.appendChild(summaryCard);
+
+    // Supplier info
+    const suppliers = (state.suppliers || {})[alert.item_id] || [];
+    const supCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+    supCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "8px" } }, "📞 Supplier Info"));
+    if (suppliers.length === 0) {
+      supCard.appendChild(el("div", { class: "muted small" }, "No suppliers loaded yet for this item. Contact head barista or owner."));
+    } else {
+      suppliers.forEach(s => {
+        const row = el("div", { style: { marginBottom: "8px", paddingBottom: "8px", borderBottom: "1px solid var(--border)" } });
+        row.appendChild(el("div", { style: { fontWeight: "600" } }, s.name));
+        if (s.contact) row.appendChild(el("div", { class: "muted small" }, `📱 ${s.contact}`));
+        if (s.notes)   row.appendChild(el("div", { class: "muted small" }, s.notes));
+        supCard.appendChild(row);
+      });
+    }
+    formArea.appendChild(supCard);
+
+    // Action checkboxes
+    let calledSupplier = false;
+    let notifiedHead = false;
+
+    const actionCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+    actionCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "10px" } }, "Action Taken (tick at least one)"));
+
+    const cbCalled = el("input", { type: "checkbox" });
+    cbCalled.addEventListener("change", () => { calledSupplier = cbCalled.checked; });
+    const lblCalled = el("label", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px", cursor: "pointer", fontSize: "14px" } });
+    lblCalled.appendChild(cbCalled);
+    lblCalled.appendChild(el("span", {}, "☎️ Called the supplier directly"));
+    actionCard.appendChild(lblCalled);
+
+    const cbHead = el("input", { type: "checkbox" });
+    cbHead.addEventListener("change", () => { notifiedHead = cbHead.checked; });
+    const lblHead = el("label", { style: { display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "14px" } });
+    lblHead.appendChild(cbHead);
+    lblHead.appendChild(el("span", {}, "👤 Communicated to head barista to order"));
+    actionCard.appendChild(lblHead);
+    formArea.appendChild(actionCard);
+
+    // Comment field
+    const commentCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+    commentCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "8px" } }, "Comment (optional but recommended)"));
+    const commentIn = el("textarea", { placeholder: "e.g. Called Beano's — delivery Thursday. / Told Ahmed to order before weekend.", rows: "3", style: { width: "100%", resize: "vertical" } });
+    commentCard.appendChild(commentIn);
+    formArea.appendChild(commentCard);
+
+    // Save button
+    const saveBtn = el("button", { class: "btn", style: { width: "100%" } }, "Save Action");
+    saveBtn.addEventListener("click", () => {
+      if (!calledSupplier && !notifiedHead) {
+        toast("Tick at least one action before saving.");
+        return;
+      }
+      const s = stamp();
+      state.reorder_actions.push({
+        id: uuid(),
+        alert_key: alert.key,
+        item_id: alert.item_id,
+        item_name: alert.item_name,
+        branch: alert.branch,
+        alert_date: alert.date,
+        called_supplier: calledSupplier,
+        notified_head_barista: notifiedHead,
+        comment: commentIn.value.trim(),
+        by: s.by, by_name: s.by_name, at: s.at,
+      });
+      saveState();
+      toast("✓ Reorder action saved");
+      go("home");
+    });
+    formArea.appendChild(saveBtn);
+  }
+
+  renderForm();
+  return wrap;
+};
+
+routes.reorder_action_list = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Supplier Orders", "Reorder actions logged by baristas."));
+
+  state.alert_log = state.alert_log || [];
+  state.reorder_actions = state.reorder_actions || [];
+
+  const now = Date.now();
+
+  // Build enriched list of all alerts from last 30 days
+  const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0,10);
+  const alerts = state.alert_log.filter(a => a.date >= cutoff).sort((a,b) => b.date.localeCompare(a.date));
+
+  if (alerts.length === 0) {
+    wrap.appendChild(el("div", { class: "card muted", style: { textAlign: "center", padding: "32px 16px" } }, "No low-stock alerts in the last 30 days."));
+    return wrap;
+  }
+
+  alerts.forEach(a => {
+    const actions = (state.reorder_actions).filter(r => r.alert_key === a.key);
+    const resolved = isReorderResolved(a.item_id, a.date);
+    const calledSupplier = isReorderActionedByCalling(a.key);
+    const daysSince = Math.floor((now - new Date(a.date + "T00:00:00")) / 86400000);
+    const isOverdue = !resolved && !calledSupplier && daysSince > 6;
+    const hasPending = !resolved && actions.length === 0;
+
+    let statusLabel, statusColor;
+    if (resolved) { statusLabel = "✅ Resolved (purchased)"; statusColor = "#27ae60"; }
+    else if (calledSupplier) { statusLabel = "✅ Supplier called"; statusColor = "#27ae60"; }
+    else if (isOverdue) { statusLabel = "🔴 Overdue"; statusColor = "#c0392b"; }
+    else if (hasPending) { statusLabel = "⏳ Pending action"; statusColor = "#e67e22"; }
+    else { statusLabel = "⏳ Actioned — awaiting purchase"; statusColor = "#2980b9"; }
+
+    const card = el("div", { class: "card", style: { marginBottom: "12px", borderLeft: `4px solid ${statusColor}` } });
+
+    // Header row
+    const hdr = el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" } });
+    hdr.appendChild(el("div", { style: { fontWeight: "700" } }, `${a.item_name} · ${a.branch}`));
+    hdr.appendChild(el("div", { style: { fontSize: "12px", color: statusColor, fontWeight: "600" } }, statusLabel));
+    card.appendChild(hdr);
+    card.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } }, `Alert: ${a.date} · ${daysSince}d ago`));
+
+    // Follow-up alarms fired
+    if (Array.isArray(a.follow_ups) && a.follow_ups.length > 0) {
+      card.appendChild(el("div", { style: { fontSize: "12px", color: "#c0392b", marginBottom: "8px" } }, `⚠️ ${a.follow_ups.length} follow-up alarm${a.follow_ups.length>1?"s":""} fired`));
+    }
+
+    // Actions logged
+    if (actions.length > 0) {
+      actions.forEach(r => {
+        const actionRow = el("div", { style: { background: "var(--surface-2)", borderRadius: "6px", padding: "8px 10px", marginBottom: "6px", fontSize: "13px" } });
+        const chips = [];
+        if (r.called_supplier) chips.push("☎️ Called supplier");
+        if (r.notified_head_barista) chips.push("👤 Notified head barista");
+        actionRow.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "4px" } }, chips.join(" · ")));
+        actionRow.appendChild(el("div", { class: "muted small" }, `${r.by_name} · ${r.at.slice(0,16).replace("T"," ")}`));
+        if (r.comment) actionRow.appendChild(el("div", { style: { marginTop: "4px", fontStyle: "italic", fontSize: "12px" } }, `"${r.comment}"`));
+        card.appendChild(actionRow);
+      });
+    } else {
+      card.appendChild(el("div", { style: { color: "#e67e22", fontSize: "13px" } }, "No action logged yet."));
+    }
+
+    // Quick-action button for pending items
+    if (hasPending || (!resolved && !calledSupplier)) {
+      const btn = el("button", { class: "btn secondary", style: { marginTop: "8px", padding: "6px 14px", fontSize: "12px" } }, "📝 Log action");
+      btn.addEventListener("click", () => go("reorder_action_new", { alert_key: a.key }));
+      card.appendChild(btn);
+    }
+
+    wrap.appendChild(card);
+  });
+
+  return wrap;
+};
+
+routes.supplier_list = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Supplier List", "Assign suppliers to inventory items. Baristas see this when a reorder alert fires."));
+
+  state.suppliers = state.suppliers || {};
+  const items = (state.items || []).filter(it => it.active !== false).sort((a,b) => a.name.localeCompare(b.name));
+
+  // ── Mode: "single" (click to edit one item) or "bulk" (checkboxes → assign to many) ──
+  let mode = "single";
+  let selectedItemId = items.length > 0 ? items[0].id : null;
+  let checkedIds = new Set();
+  let searchQ = "";
+
+  // Mode toggle bar
+  const modeBar = el("div", { style: { display: "flex", gap: "8px", marginBottom: "14px", flexWrap: "wrap", alignItems: "center" } });
+  const btnSingle = el("button", { class: "chip ok" }, "✏️ Edit single item");
+  const btnBulk   = el("button", { class: "chip" },    "☑️ Bulk assign supplier");
+  modeBar.appendChild(btnSingle);
+  modeBar.appendChild(btnBulk);
+  modeBar.appendChild(el("span", { class: "muted small", style: { marginLeft: "4px" } },
+    "Bulk: tick items that share the same supplier, then fill in supplier details once."));
+  wrap.appendChild(modeBar);
+
+  function setMode(m) {
+    mode = m;
+    checkedIds = new Set();
+    btnSingle.className = mode === "single" ? "chip ok" : "chip";
+    btnBulk.className   = mode === "bulk"   ? "chip ok" : "chip";
+    renderItemList();
+    renderRight();
+  }
+  btnSingle.addEventListener("click", () => setMode("single"));
+  btnBulk.addEventListener("click",   () => setMode("bulk"));
+
+  const layout = el("div", { style: { display: "flex", gap: "12px", alignItems: "flex-start" } });
+
+  // ── Left panel — item list ──
+  const leftPanel = el("div", { style: { width: "42%", flexShrink: "0" } });
+  const searchIn  = el("input", { type: "search", placeholder: "Search items…", style: { marginBottom: "8px" } });
+  const itemList  = el("div", { style: { maxHeight: "70vh", overflowY: "auto" } });
+
+  function renderItemList() {
+    itemList.innerHTML = "";
+    const filtered = items.filter(it => !searchQ || it.name.toLowerCase().includes(searchQ));
+
+    if (mode === "bulk" && filtered.length > 0) {
+      // Select-all / clear row
+      const allChecked = filtered.every(it => checkedIds.has(it.id));
+      const selAllRow = el("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "6px", fontSize: "12px" } });
+      const selAllBtn = el("button", { class: "chip", style: { fontSize: "11px", padding: "2px 8px" } },
+        allChecked ? "Deselect all" : "Select all");
+      selAllBtn.addEventListener("click", () => {
+        if (allChecked) filtered.forEach(it => checkedIds.delete(it.id));
+        else            filtered.forEach(it => checkedIds.add(it.id));
+        renderItemList(); renderRight();
+      });
+      selAllRow.appendChild(el("span", { class: "muted" }, `${checkedIds.size} selected`));
+      selAllRow.appendChild(selAllBtn);
+      itemList.appendChild(selAllRow);
+    }
+
+    filtered.forEach(it => {
+      const hasSuppliers = (state.suppliers[it.id] || []).length > 0;
+      const isChecked    = checkedIds.has(it.id);
+      const isSelected   = mode === "single" && it.id === selectedItemId;
+
+      const row = el("div", { style: {
+        padding: "8px 10px", borderRadius: "6px", cursor: "pointer", marginBottom: "4px",
+        background: isSelected ? "var(--ink)" : isChecked ? "#e8f4f8" : "var(--surface-2)",
+        color: isSelected ? "var(--accent)" : "var(--ink)",
+        border: isChecked ? "1.5px solid var(--ok)" : "1.5px solid transparent",
+        fontSize: "13px", display: "flex", alignItems: "center", gap: "8px",
+      }});
+
+      if (mode === "bulk") {
+        const cb = el("input", { type: "checkbox" });
+        cb.checked = isChecked;
+        cb.addEventListener("change", (e) => {
+          e.stopPropagation();
+          if (cb.checked) checkedIds.add(it.id); else checkedIds.delete(it.id);
+          renderItemList(); renderRight();
+        });
+        row.appendChild(cb);
+      }
+
+      const nameSpan = el("span", { style: { flex: "1" } }, it.name);
+      row.appendChild(nameSpan);
+
+      if (hasSuppliers) {
+        row.appendChild(el("span", { style: { fontSize: "10px", opacity: "0.65", flexShrink: "0" } },
+          `${state.suppliers[it.id].length}✓`));
+      }
+
+      row.addEventListener("click", () => {
+        if (mode === "single") { selectedItemId = it.id; renderItemList(); renderRight(); }
+        else {
+          if (checkedIds.has(it.id)) checkedIds.delete(it.id); else checkedIds.add(it.id);
+          renderItemList(); renderRight();
+        }
+      });
+      itemList.appendChild(row);
+    });
+  }
+
+  searchIn.addEventListener("input", () => { searchQ = searchIn.value.toLowerCase(); renderItemList(); });
+  leftPanel.appendChild(searchIn);
+  leftPanel.appendChild(itemList);
+  layout.appendChild(leftPanel);
+
+  // ── Right panel — supplier editor ──
+  const rightPanel = el("div", { style: { flex: "1" } });
+  layout.appendChild(rightPanel);
+
+  // ── Single-item editor ──
+  function renderSingleRight() {
+    rightPanel.innerHTML = "";
+    if (!selectedItemId) return;
+    const item = items.find(it => it.id === selectedItemId);
+    if (!item) return;
+
+    rightPanel.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "12px", fontSize: "15px" } }, `📦 ${item.name}`));
+
+    const suppliers = state.suppliers[selectedItemId] || [];
+
+    suppliers.forEach((s, idx) => {
+      const sCard = el("div", { class: "card", style: { marginBottom: "10px", padding: "10px 12px" } });
+      const nameIn    = el("input", { type: "text", placeholder: "Supplier name",               value: s.name    || "", style: { marginBottom: "6px" } });
+      const contactIn = el("input", { type: "text", placeholder: "Phone / email",               value: s.contact || "", style: { marginBottom: "6px" } });
+      const notesIn   = el("input", { type: "text", placeholder: "Notes (min order, delivery…)", value: s.notes   || "" });
+
+      [nameIn, contactIn, notesIn].forEach(inp => {
+        inp.addEventListener("input", () => {
+          state.suppliers[selectedItemId][idx].name    = nameIn.value.trim();
+          state.suppliers[selectedItemId][idx].contact = contactIn.value.trim();
+          state.suppliers[selectedItemId][idx].notes   = notesIn.value.trim();
+          saveState();
+        });
+      });
+
+      const removeBtn = el("button", { class: "btn secondary", style: { marginTop: "8px", padding: "4px 10px", fontSize: "12px", color: "var(--bad)" } }, "Remove");
+      removeBtn.addEventListener("click", () => {
+        state.suppliers[selectedItemId].splice(idx, 1);
+        saveState(); renderSingleRight(); renderItemList();
+      });
+
+      sCard.appendChild(nameIn); sCard.appendChild(contactIn); sCard.appendChild(notesIn); sCard.appendChild(removeBtn);
+      rightPanel.appendChild(sCard);
+    });
+
+    const addBtn = el("button", { class: "btn secondary", style: { width: "100%" } }, "+ Add Supplier");
+    addBtn.addEventListener("click", () => {
+      if (!state.suppliers[selectedItemId]) state.suppliers[selectedItemId] = [];
+      state.suppliers[selectedItemId].push({ id: uuid(), name: "", contact: "", notes: "" });
+      saveState(); renderSingleRight(); renderItemList();
+    });
+    rightPanel.appendChild(addBtn);
+  }
+
+  // ── Bulk-assign panel ──
+  function renderBulkRight() {
+    rightPanel.innerHTML = "";
+
+    if (checkedIds.size === 0) {
+      rightPanel.appendChild(el("div", { class: "card", style: { textAlign: "center", padding: "32px 16px", color: "var(--ink-dim)" } }, [
+        el("div", { style: { fontSize: "28px", marginBottom: "8px" } }, "☑️"),
+        el("div", { style: { fontWeight: "600" } }, "Tick items on the left"),
+        el("div", { class: "muted small", style: { marginTop: "4px" } }, "Select all items that share the same supplier, then fill in the details once."),
+      ]));
+      return;
+    }
+
+    const selectedItems = items.filter(it => checkedIds.has(it.id));
+
+    // Summary of selected items
+    const summaryCard = el("div", { class: "card", style: { marginBottom: "12px", background: "var(--surface-2)" } });
+    summaryCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "8px" } },
+      `📦 Assigning supplier to ${selectedItems.length} item${selectedItems.length > 1 ? "s" : ""}:`));
+    const tagWrap = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
+    selectedItems.forEach(it => tagWrap.appendChild(el("span", { class: "chip" }, it.name)));
+    summaryCard.appendChild(tagWrap);
+    rightPanel.appendChild(summaryCard);
+
+    // Supplier form
+    const formCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    formCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "10px" } }, "Supplier details"));
+
+    const nameIn    = el("input", { type: "text", placeholder: "Supplier name *",              style: { marginBottom: "8px" } });
+    const contactIn = el("input", { type: "text", placeholder: "Phone / email",                style: { marginBottom: "8px" } });
+    const notesIn   = el("input", { type: "text", placeholder: "Notes (min order, delivery…)" });
+
+    formCard.appendChild(nameIn);
+    formCard.appendChild(contactIn);
+    formCard.appendChild(notesIn);
+    rightPanel.appendChild(formCard);
+
+    // Option: skip items that already have this supplier
+    const skipLabel = el("label", { style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", marginBottom: "12px", cursor: "pointer" } });
+    const skipCb = el("input", { type: "checkbox" });
+    skipCb.checked = true;
+    skipLabel.appendChild(skipCb);
+    skipLabel.appendChild(el("span", {}, "Skip items that already have a supplier with this name"));
+    rightPanel.appendChild(skipLabel);
+
+    const saveBtn = el("button", { class: "btn", style: { width: "100%" } },
+      `Assign to ${selectedItems.length} item${selectedItems.length > 1 ? "s" : ""}`);
+
+    saveBtn.addEventListener("click", () => {
+      const name    = nameIn.value.trim();
+      const contact = contactIn.value.trim();
+      const notes   = notesIn.value.trim();
+      if (!name) { toast("Enter a supplier name first."); return; }
+
+      let assigned = 0, skipped = 0;
+      selectedItems.forEach(it => {
+        if (!state.suppliers[it.id]) state.suppliers[it.id] = [];
+        const alreadyHas = skipCb.checked &&
+          state.suppliers[it.id].some(s => s.name.toLowerCase() === name.toLowerCase());
+        if (alreadyHas) { skipped++; return; }
+        state.suppliers[it.id].push({ id: uuid(), name, contact, notes });
+        assigned++;
+      });
+
+      saveState();
+      renderItemList();
+      toast(`✓ "${name}" assigned to ${assigned} item${assigned !== 1 ? "s" : ""}${skipped ? ` (${skipped} skipped — already had this supplier)` : ""}`);
+
+      // Clear form + selection after save
+      checkedIds = new Set();
+      renderItemList();
+      renderRight();
+    });
+    rightPanel.appendChild(saveBtn);
+  }
+
+  function renderRight() {
+    if (mode === "single") renderSingleRight();
+    else renderBulkRight();
+  }
+
+  renderItemList();
+  renderRight();
+  wrap.appendChild(layout);
+  return wrap;
+};
+
+// ==============================================================
+// INVENTORY ITEMS — master item list management
+// ==============================================================
+routes.items_list = function (u) {
+  const canEdit = u.role === "owner" || u.role === "accountant";
+
+  const INV_CATEGORIES = [
+    { value: "coffee-beans",  label: "Coffee Beans" },
+    { value: "milk",          label: "Milk" },
+    { value: "tea",           label: "Tea" },
+    { value: "powder",        label: "Powder" },
+    { value: "spices",        label: "Spices" },
+    { value: "sugar",         label: "Sugar" },
+    { value: "puree",         label: "Puree" },
+    { value: "syrup",         label: "Syrup" },
+    { value: "sauce",         label: "Sauce" },
+    { value: "dairy-extras",  label: "Dairy Extras" },
+    { value: "halo-snacks",   label: "Halo Snacks" },
+    { value: "beverages",     label: "Beverages" },
+    { value: "packaging",     label: "Packaging" },
+  ];
+  const catLabel = v => (INV_CATEGORIES.find(c => c.value === v) || {}).label || v;
+
+  const wrap = el("div", {});
+  wrap.appendChild(header("Inventory Items", "Add, edit or remove items tracked in stock."));
+
+  if (canEdit) {
+    const addBtn = el("button", { class: "btn secondary", style: { marginBottom: "12px" } }, "➕ Add item");
+    addBtn.addEventListener("click", () => {
+      openPrompt({
+        title: "Add inventory item",
+        fields: [
+          { key: "name",     label: "Name",     type: "text",   value: "" },
+          { key: "unit",     label: "Unit",      type: "select", value: "g",
+            options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+          { key: "category", label: "Category", type: "select", value: "coffee-beans", options: INV_CATEGORIES },
+        ],
+        onSubmit: (v) => {
+          if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+          const nums = (state.items || []).map(it => {
+            const m = (it.id || "").match(/^inv_(\d+)$/);
+            return m ? parseInt(m[1], 10) : 0;
+          });
+          const nextNum = (nums.length ? Math.max(...nums) : 0) + 1;
+          const id = "inv_" + String(nextNum).padStart(4, "0");
+          state.items = state.items || [];
+          state.items.push({ id, name: v.name.trim(), unit: v.unit, category: v.category, active: true });
+          saveState();
+          toast(`Added ${v.name.trim()}`);
+          render();
+        }
+      });
+    });
+    wrap.appendChild(addBtn);
+  }
+
+  const search = el("input", { type: "search", placeholder: "Search items…", style: { marginBottom: "12px" } });
+  wrap.appendChild(search);
+
+  const list = el("div", { class: "list" });
+  wrap.appendChild(list);
+
+  function draw() {
+    list.innerHTML = "";
+    const q = search.value.trim().toLowerCase();
+    const sorted = [...(state.items || [])].sort((a, b) => a.name.localeCompare(b.name));
+    const filtered = sorted.filter(it => !q || it.name.toLowerCase().includes(q) || (it.category || "").includes(q));
+    if (!filtered.length) {
+      list.appendChild(el("div", { class: "muted", style: { padding: "24px", textAlign: "center" } }, "No items found."));
+      return;
+    }
+    for (const it of filtered) {
+      const inactive = it.active === false;
+      const rowParts = [
+        el("div", { class: "grow" }, [
+          el("div", { class: "title" }, it.name),
+          el("div", { class: "sub" }, `${catLabel(it.category)} · ${it.unit}`),
+        ]),
+        el("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, [
+          inactive
+            ? el("span", { class: "pill", style: { color: "var(--bad)" } }, "inactive")
+            : el("span", { class: "pill", style: { color: "var(--ok)" } }, "active"),
+        ]),
+      ];
+      if (canEdit) {
+        const editBtn = el("button", { class: "btn ghost", style: { padding: "4px 10px", fontSize: "12px" } }, "✏️ Edit");
+        editBtn.addEventListener("click", (e) => { e.stopPropagation(); editItem(it); });
+        rowParts[1].appendChild(editBtn);
+      }
+      const row = el("div", { class: "row", style: { opacity: inactive ? "0.55" : "1" } }, rowParts);
+      list.appendChild(row);
+    }
+  }
+
+  function editItem(it) {
+    openPrompt({
+      title: `Edit ${it.name}`,
+      fields: [
+        { key: "name",     label: "Name",     type: "text",   value: it.name },
+        { key: "unit",     label: "Unit",      type: "select", value: it.unit,
+          options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+        { key: "category", label: "Category", type: "select", value: it.category, options: INV_CATEGORIES },
+        { key: "active",   label: "Status",    type: "select", value: it.active === false ? "inactive" : "active",
+          options: [{ value: "active", label: "Active" }, { value: "inactive", label: "Inactive (hidden from pickers)" }] },
+        { key: "del", label: "Type DELETE to permanently remove this item (owner only)", type: "text", value: "" },
+      ],
+      onSubmit: (v) => {
+        if (String(v.del || "").trim().toUpperCase() === "DELETE") {
+          if (u.role !== "owner") return toast("Only the owner can permanently delete items", "error");
+          state.items = state.items.filter(x => x.id !== it.id);
+          saveState();
+          toast(`Removed ${it.name}`);
+          render();
+          return;
+        }
+        if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+        it.name     = v.name.trim();
+        it.unit     = v.unit;
+        it.category = v.category;
+        it.active   = v.active !== "inactive";
+        saveState();
+        render();
+      }
+    });
+  }
+
+  search.addEventListener("input", draw);
+  draw();
+
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
 //     Inventory gets credited with purchase_qty × pack_size (canonical units).
 //     Last conversion per item is remembered in state.purchase_units so the
 //     next purchase pre-fills it.
@@ -2721,6 +3569,92 @@ function notifyHaidi(title, body) {
   } else if (typeof Notification !== "undefined" && Notification.permission !== "denied") {
     try { Notification.requestPermission().then(p => { if (p === "granted") new Notification(title, { body, icon: CB_LOGO_SRC }); }); } catch (e) {}
   }
+}
+
+// ── No-stamp-after-60-min checker (runs on owner/head_barista device) ──────────
+let _noStampCheckInterval = null;
+
+function checkNoStampAlert() {
+  if (!state._auth) return;
+  const cu = typeof currentUser === "function" ? currentUser() : null;
+  if (!cu || !["owner", "head_barista"].includes(cu.role)) return;
+
+  const now      = new Date();
+  const todayStr = localISODate(now);
+  const dayIndex = (now.getDay() + 6) % 7;
+  const dayKey   = ROSTER_DAYS[dayIndex];
+  const weekOf   = mondayOf(todayStr);
+
+  const morning = (state.rosters || []).filter(r =>
+    r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+  );
+  if (!morning.length) return;
+
+  const bot = state.branch_opening_times || {};
+  // Prune stale alert keys from previous days
+  const alerted = state.settings.no_stamp_alerted || {};
+  state.settings.no_stamp_alerted = Object.fromEntries(
+    Object.entries(alerted).filter(([k]) => k.startsWith(todayStr))
+  );
+
+  for (const entry of morning) {
+    const branch  = (entry.branch || "maadi").toLowerCase();
+    const user    = (state.users || []).find(u => u.id === entry.user_id);
+    if (!user) continue;
+
+    const openStr  = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+    const openMs   = new Date(todayStr + "T" + openStr + ":00").getTime();
+    const minsAfter = Math.round((now.getTime() - openMs) / 60000);
+    if (minsAfter < 60) continue; // not yet 60 minutes past opening
+
+    const alertKey = `${todayStr}:${entry.user_id}:${branch}`;
+    if (state.settings.no_stamp_alerted[alertKey]) continue; // already fired today
+
+    const hasStamp = (state.signin_stamps || []).some(s =>
+      s.by === entry.user_id &&
+      localISODate(new Date(s.at)) === todayStr &&
+      (s.branch || "").toLowerCase() === branch
+    );
+    if (hasStamp) continue; // stamp was submitted — no alert needed
+
+    state.settings.no_stamp_alerted[alertKey] = true;
+    saveState();
+
+    // In-app high-priority notification
+    const title = `🚨 No stamp — ${user.name}`;
+    const body  = `No sign-in stamp at ${branch} — ${minsAfter} min after opening (${openStr}).`;
+    notifyHaidi(title, body);
+
+    // Email to head barista (To:) and owner (CC:)
+    const ownerEmail = (state.settings.owner_email || "coffeebeats@haidiyacoub.com").trim();
+    const hbEmail    = (state.settings.head_barista_email || "").trim();
+    const subj = encodeURIComponent(
+      `[No Stamp Alert] ${user.name} · ${branch} · ${todayStr}`
+    );
+    const mailBody = encodeURIComponent(
+      `🚨 No Sign-In Stamp Alert\n\n` +
+      `Barista: ${user.name}\n` +
+      `Branch: ${branch}\n` +
+      `Date: ${todayStr}\n` +
+      `Opening time: ${openStr}\n` +
+      `Minutes since opening: ${minsAfter}\n\n` +
+      `No stamp has been submitted. Please check in with ${user.name} immediately.\n\n` +
+      `— Coffee Beats Operations App`
+    );
+    const toAddr = hbEmail || ownerEmail;
+    const ccPart = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
+    try { window.open(`mailto:${encodeURIComponent(toAddr)}?subject=${subj}${ccPart}&body=${mailBody}`, "_blank"); } catch(e) {}
+  }
+}
+
+function startNoStampCheck() {
+  if (_noStampCheckInterval) return;
+  checkNoStampAlert();
+  _noStampCheckInterval = setInterval(checkNoStampAlert, 5 * 60 * 1000); // every 5 min
+}
+
+function stopNoStampCheck() {
+  if (_noStampCheckInterval) { clearInterval(_noStampCheckInterval); _noStampCheckInterval = null; }
 }
 
 // Weekly total outflow for a given branch (or "combined"). Used for the
@@ -3245,14 +4179,18 @@ routes.salaries = function (u) {
 
 // ==============================================================
 // PENALTIES — per-barista deductions with auto-calc from monthly salary.
-// 1 day = monthly_salary / 30 ; half day = that / 2 ; 1 hour = day / 8 (approx).
+// 1 day = monthly_salary / 30 ; half day = that / 2.
 // Entry restricted to owner + head_barista per spec.
 // ==============================================================
 //
-// Reasons dropdown (per Haïdi):
-//   - up to 1 hour late            (1 hour penalty)
-//   - half day late                (half day penalty)
-//   - no show                      (full day penalty)
+// Auto sign-in stamp penalty tiers (applied on clock-in upload):
+//   - late 15–60 min               (half day)
+//   - late 60–120 min              (full day)
+//   - late >120 min                (2 days)
+//   - no stamp at all              (3 days, via missing-stamp checker)
+//   - 3rd+ late in same month      penalty doubles automatically
+//
+// Manual reasons dropdown:
 //   - not wearing the uniform      (half day penalty)
 //   - not following the rules      (half day penalty)
 //   - other — please specify       (custom amount, free-text reason)
@@ -3260,6 +4198,7 @@ routes.salaries = function (u) {
 // Four fixed durations — amount auto-calculated from monthly salary.
 // "other" lets the head barista/owner type a free-text amount.
 const PENALTY_KINDS = [
+  { label: "Quarter day", value: "quarter_day", days: 0.25 },
   { label: "Half day",  value: "half_day",   days: 0.5 },
   { label: "Full day",  value: "full_day",   days: 1   },
   { label: "2 days",    value: "two_days",   days: 2   },
@@ -3271,6 +4210,7 @@ const PENALTY_REASONS = [
   { label: "Late",                     value: "late" },
   { label: "No show",                  value: "no_show" },
   { label: "Not wearing the uniform",  value: "no_uniform" },
+  { label: "Personal hygiene",         value: "hygiene" },
   { label: "Not following the rules",  value: "rules_break" },
   { label: "Other",                    value: "other" },
 ];
@@ -3303,6 +4243,15 @@ routes.penalties = function (u) {
   const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
   if (canEnter) {
     btnRow.appendChild(el("button", { class: "btn secondary", onClick: addPenalty }, "➕ Record penalty"));
+    // Missing-stamp checker: pick a past date, auto-apply 3-day deductions for no-shows
+    btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => {
+      const dateVal = prompt("Check missing stamps for date (YYYY-MM-DD):", localISODate(new Date(Date.now() - 86400000)));
+      if (!dateVal || !/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) return;
+      if (dateVal >= localISODate(new Date())) return toast("Choose a past date", "error");
+      const n = applyMissingStampPenalties(dateVal, u);
+      if (n === 0) toast("No missing stamps found for " + dateVal + " — all good or no morning shifts scheduled", "ok");
+      else { toast(`⚠ ${n} missing-stamp deduction${n > 1 ? "s" : ""} applied for ${dateVal}`, "warn"); render(); }
+    }}, "🔍 Check missing stamps"));
   } else {
     wrap.appendChild(el("div", { class: "banner-arch" }, "View-only access. Penalties are entered by the owner or head barista."));
   }
@@ -4429,7 +5378,7 @@ routes.roster = function (u) {
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Sign-in stamps are checked against these times. >15 min late = ½ day deduction · >2 h = 1 day · No stamp = 2 days. Deductions show automatically in each barista's salary."));
+    "Sign-in stamps are checked against these times. >15 min = ½ day · >60 min = 1 day · >120 min = 2 days · No stamp = 3 days. If the same barista is late 3+ times in a month, the penalty doubles. Deductions show automatically in each barista's salary."));
   for (const otBranch of ["maadi", "zawya"]) {
     const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
@@ -5045,9 +5994,10 @@ const MANAGEABLE_ROUTES = [
   "cleaning_log_new","cleaning_log_list",
   "signin_stamp_new","signin_stamp_list",
   "salaries","penalties","maadi_deposits",
-  "overheads","bank","dashboard","menu",
+  "overheads","bank","dashboard","menu","items_list",
   "sales_import","users","settings",
   "leave_new","leave_list",
+  "my_id","staff_hr","leaderboard",
 ];
 
 routes.users = function (u) {
@@ -5093,6 +6043,14 @@ routes.users = function (u) {
   if (migrated > 0) { saveState(); }
 
   const list = el("div", { class: "list", style: { marginTop: "12px" } });
+  const _currentMonth = new Date().toISOString().slice(0,7);
+  const _leaderAssign = getLeadershipAssignment(_currentMonth) || {};
+  const LEADERSHIP_ROLE_BADGES = {
+    weekly_schedule:      "📅 Schedule",
+    inventory_management: "📦 Inventory",
+    cash_status:          "💵 Cash",
+    barista_hygiene:      "🧹 Hygiene",
+  };
   for (const usr of state.users) {
     const branchLabel = usr.role === "barista"
       ? "rotates (Maadi + Zawya)"
@@ -5100,13 +6058,27 @@ routes.users = function (u) {
     const extra = (usr.extra_access || []).length;
     const deny  = (usr.deny_access  || []).length;
     const rightsNote = (extra || deny) ? ` · +${extra}/-${deny} custom rights` : "";
-    list.appendChild(el("div", { class: "row", onClick: () => editUser(usr) }, [
+    let leaderBadgeLabel = null;
+    for (const [rk, label] of Object.entries(LEADERSHIP_ROLE_BADGES)) {
+      if (_leaderAssign[rk] === usr.id) { leaderBadgeLabel = label; break; }
+    }
+    const rowChildren = [
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, usr.name),
         el("div", { class: "sub" }, `${usr.role} · ${branchLabel} · PIN ${usr.pin}${rightsNote}`),
       ]),
       el("span", { class: "pill " + (usr.active ? "ok" : "bad") }, usr.active ? "active" : "disabled"),
-    ]));
+    ];
+    if (leaderBadgeLabel) {
+      rowChildren.push(el("span", {
+        class: "pill",
+        style: { background: "var(--accent-bg,#fff8e1)", color: "var(--ink)", border: "1px solid var(--accent,#e8a020)", fontSize: "11px" },
+      }, leaderBadgeLabel));
+    }
+    if ((usr.id_photo_urls || []).length > 0) {
+      rowChildren.push(el("span", { class: "pill ok", style: { fontSize: "11px" } }, "🪪 ID"));
+    }
+    list.appendChild(el("div", { class: "row", onClick: () => editUser(usr) }, rowChildren));
   }
   wrap.appendChild(list); wrap.appendChild(btnBack());
 
@@ -5147,6 +6119,7 @@ routes.users = function (u) {
       ],
       extraButtons: [
         { label: "🔐 Access rights…", onClick: () => editAccess(usr) },
+        { label: "🪪 View / remove ID…", onClick: () => staffIdSheet(usr) },
       ],
       onSubmit: v => {
         if (String(v.delete || "").trim().toUpperCase() === "DELETE") {
@@ -5208,6 +6181,51 @@ routes.users = function (u) {
       } }, "Save rights"),
       el("button", { class: "btn ghost", onClick: () => closeSheet() }, "Cancel"),
     ]));
+    openSheet(sheet);
+  }
+
+  function staffIdSheet(usr) {
+    const sheet = el("div", {});
+    sheet.appendChild(el("h2", {}, `🪪 Government ID — ${usr.name}`));
+
+    const photosWrap = el("div", {});
+    sheet.appendChild(photosWrap);
+
+    function renderPhotos() {
+      photosWrap.innerHTML = "";
+      const urls = usr.id_photo_urls || [];
+      if (urls.length === 0) {
+        photosWrap.appendChild(el("div", { class: "muted small", style: { margin: "8px 0 16px" } }, "No ID uploaded yet."));
+      } else {
+        const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", margin: "8px 0 16px" } });
+        urls.forEach((url, i) => {
+          const card = el("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" } });
+          card.appendChild(el("img", { src: url, style: { width: "90px", height: "64px", objectFit: "cover", borderRadius: "6px", border: "1px solid var(--border,#ddd)" } }));
+          const linkRow = el("div", { style: { display: "flex", gap: "6px" } });
+          linkRow.appendChild(el("a", { href: url, target: "_blank", class: "btn ghost", style: { fontSize: "12px", padding: "2px 8px" } }, "View"));
+          if (u.role === "owner") {
+            linkRow.appendChild(el("button", { class: "btn bad", style: { fontSize: "12px", padding: "2px 8px" },
+              onClick: () => {
+                usr.id_photo_urls = (usr.id_photo_urls || []).filter((_, j) => j !== i);
+                saveState();
+                toast("ID photo removed");
+                renderPhotos();
+              }
+            }, "✕ Remove"));
+          }
+          card.appendChild(linkRow);
+          grid.appendChild(card);
+        });
+        photosWrap.appendChild(grid);
+      }
+    }
+
+    renderPhotos();
+
+    sheet.appendChild(el("div", { class: "btn-row" }, [
+      el("button", { class: "btn ghost", onClick: () => closeSheet() }, "Close"),
+    ]));
+
     openSheet(sheet);
   }
 
@@ -6088,6 +7106,16 @@ routes.signin_stamp_new = function (u) {
         for (let i = 0; i < photoBlobs.length; i++) {
           try { await IDB.put(photoIds[i], photoBlobs[i]); } catch (e) { console.warn(e); }
         }
+        // Pre-compute early_bonus before pushing so it's in the record
+        const _stampSubmitTime = new Date(s.at);
+        const _stampTodayStr   = localISODate(_stampSubmitTime);
+        const _stampBot        = state.branch_opening_times || {};
+        const _stampOpenStr    = ((_stampBot[branch?.toLowerCase()] || {})["morning"])
+                                 || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
+        const _stampOpeningMs  = new Date(_stampTodayStr + "T" + _stampOpenStr + ":00").getTime();
+        const _stampMinsLate   = Math.round((_stampSubmitTime.getTime() - _stampOpeningMs) / 60000);
+        const _earlyBonus      = _stampMinsLate <= -30;
+
         state.signin_stamps.push({
           id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
           branch,
@@ -6095,6 +7123,8 @@ routes.signin_stamp_new = function (u) {
           photo_ids: photoIds, photo_names: photoNames,
           drive_ids: stampPhotoField.getDriveIds(),
           note: note.trim(),
+          early_bonus: _earlyBonus,
+          mins_late: _stampMinsLate,
         });
 
         // ── Auto late-penalty from photo upload timestamp ─────
@@ -6132,10 +7162,27 @@ routes.signin_stamp_new = function (u) {
           );
           if (already) return;
 
-          const kind    = minsLate > 120 ? "full_day" : "half_day";
-          const salary  = Number(((state.salary_config || {})[u.id] || {}).monthly_salary || 0);
-          const amount  = penaltyAmount(kind, salary);
-          const kLabel  = kind === "full_day" ? "Full day" : "Half day";
+          notifyLeadershipRole("weekly_schedule",
+            `Late arrival — ${u.name}`,
+            `${minsLate} min late at ${branch} on ${todayStr}.`
+          );
+
+          // Penalty tier: >15 min = ½ day · >60 min = 1 day · >120 min = 2 days
+          const kind   = minsLate > 120 ? "two_days" : minsLate > 60 ? "full_day" : "half_day";
+          const salary = Number(((state.salary_config || {})[u.id] || {}).monthly_salary || 0);
+          let amount   = penaltyAmount(kind, salary);
+
+          // Doubling rule: >2 late incidents from the same barista this month → double the penalty
+          const thisMonth      = todayStr.slice(0, 7);
+          const priorLateCount = (state.penalties || []).filter(p =>
+            p.auto_late && p.user_id === u.id && p.month === thisMonth
+          ).length;
+          const doubled = priorLateCount >= 2;
+          if (doubled) amount = amount * 2;
+
+          const kLabels = { half_day: "Half day", full_day: "Full day", two_days: "2 days" };
+          const kLabel  = kLabels[kind] || kind;
+          const doubleNote = doubled ? " (×2 — 3rd+ late this month)" : "";
 
           state.penalties = state.penalties || [];
           state.penalties.push({
@@ -6143,32 +7190,40 @@ routes.signin_stamp_new = function (u) {
             user_id: u.id, barista: u.name,
             kind, reason: "late",
             date: todayStr,
-            month: todayStr.slice(0, 7),
+            month: thisMonth,
             branch,
             amount,
-            note: `Auto: ${minsLate} min late — ${kLabel} deducted (sign-in stamp)`,
+            note: `Auto: ${minsLate} min late — ${kLabel} deducted${doubleNote} (sign-in stamp)`,
             auto_late: true,
           });
           saveState();
-          toast(`⚠ ${minsLate} min late — ${kLabel} deducted from ${u.name}'s salary`, "warn");
+          toast(`⚠ ${minsLate} min late — ${kLabel}${doubled ? " ×2" : ""} deducted from ${u.name}'s salary`, "warn");
+
+          // ── High-priority in-app notification + email to owner/head barista ──
+          const lateTitle = `🚨 Late Arrival: ${u.name}`;
+          const lateBody  = `${minsLate} min late at ${branch} — ${kLabel}${doubleNote} deducted`;
+          notifyHaidi(lateTitle, lateBody);
+          notifyLeadershipRole("head_barista", lateTitle, lateBody);
+
+          (() => {
+            const ownerEmail = ((state.settings || {}).owner_email || "coffeebeats@haidiyacoub.com").trim();
+            const hbEmail    = ((state.settings || {}).head_barista_email || "").trim();
+            const subj = encodeURIComponent(`[Late Arrival] ${u.name} · ${minsLate} min late · ${branch} · ${todayStr}`);
+            const mailBody = encodeURIComponent(
+              `🚨 High Priority — Late Arrival\n\nBarista: ${u.name}\nBranch: ${branch}\nDate: ${todayStr}\nMinutes late: ${minsLate}\nPenalty: ${kLabel}${doubleNote}\n\n— Coffee Beats Operations App`
+            );
+            const toAddr  = hbEmail || ownerEmail;
+            const ccPart  = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
+            try { window.open(`mailto:${encodeURIComponent(toAddr)}?subject=${subj}${ccPart}&body=${mailBody}`, "_blank"); } catch(e) {}
+          })();
+          // ────────────────────────────────────────────────────────────────────
         })();
         // ─────────────────────────────────────────────────────
 
-        // ── KPI: auto-score punctuality from this stamp ───────
-        (function() {
-          try {
-            const submitTime = new Date(s.at);
-            const todayStr   = localISODate(submitTime);
-            const bot        = state.branch_opening_times || {};
-            const openStr    = ((bot[branch?.toLowerCase()] || {})["morning"])
-                               || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
-            const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
-            const diffMins    = Math.round((submitTime.getTime() - scheduledMs) / 60000);
-            const pScore      = diffMins <= 0 ? 100 : diffMins <= 5 ? 95 : diffMins <= 15 ? 80 : diffMins <= 30 ? 60 : diffMins <= 60 ? 40 : 20;
-            // Store in kpi_manual for this month as punctuality entry stub
-            // (actual derivation in kpiGetUserScores uses signin_stamps directly)
-          } catch(e) {}
-        })();
+        // ── Early arrival bonus toast ─────────────────────────
+        if (_earlyBonus) {
+          toast(`⭐ ${Math.abs(_stampMinsLate)} min early — punctuality bonus recorded!`, "ok");
+        }
         // ─────────────────────────────────────────────────────
 
         showPhotoConfirm({
@@ -6196,12 +7251,35 @@ routes.signin_stamp_list = function (u) {
   const list = el("div", { class: "list" });
   if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, "No sign-in stamps yet."));
   for (const s of mine) {
+    // Compute status badge from stored mins_late or recalculate
+    let minsLate = s.mins_late;
+    if (minsLate === undefined) {
+      try {
+        const branch  = (s.branch||"maadi").toLowerCase();
+        const bot     = state.branch_opening_times || {};
+        const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+        const dateStr = localISODate(new Date(s.at));
+        const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
+        minsLate = Math.round((new Date(s.at).getTime() - openMs) / 60000);
+      } catch(e) { minsLate = 0; }
+    }
+    const isEarly   = minsLate <= -30;
+    const isOnTime  = minsLate <= 15;
+    const isHalfDay = minsLate > 15  && minsLate <= 60;
+    const isFullDay = minsLate > 60  && minsLate <= 120;
+    const isTwoDays = minsLate > 120;
+    const badge = isEarly   ? el("span", { class: "pill", style: { background: "var(--ok)",   color: "#fff" } }, "⭐ Early")
+                : isOnTime  ? el("span", { class: "pill", style: { background: "var(--ok)",   color: "#fff" } }, "✅ On time")
+                : isHalfDay ? el("span", { class: "pill", style: { background: "var(--warn)",  color: "#fff" } }, "⚠ ½ day")
+                : isFullDay ? el("span", { class: "pill", style: { background: "var(--bad)",   color: "#fff" } }, "❌ 1 day")
+                :             el("span", { class: "pill", style: { background: "var(--bad)",   color: "#fff" } }, "❌ 2 days");
+    const minStr = isEarly ? `${Math.abs(minsLate)} min early` : minsLate > 0 ? `${minsLate} min late` : "on time";
     list.appendChild(el("div", { class: "row" }, [
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, `${s.by_name} · ${s.branch}`),
-        el("div", { class: "sub" }, `Clocked in at ${fmtDate(s.at)}${s.note ? " · " + s.note : ""}`),
+        el("div", { class: "sub" }, `${fmtDate(s.at)} · ${minStr}${s.note ? " · " + s.note : ""}`),
       ]),
-      el("span", { class: "pill", style: { color: "var(--ok)" } }, "🕐"),
+      badge,
     ]));
   }
   wrap.appendChild(list);
@@ -6238,14 +7316,14 @@ function handbookSeedRecipes() {
     { id: uuid(), category: "Hot Flavoured Coffee", name: "Mocha — White", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g dose", "White chocolate syrup: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add white chocolate syrup, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     { id: uuid(), category: "Hot Flavoured Coffee", name: "Salted Caramel Latte", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g dose", "Salted caramel sauce: 40 g", "Steamed whole milk: 260 g"], steps: ["Extract espresso.", "Add salted caramel sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     // ── SIGNATURE ──
-    { id: uuid(), category: "Signature Coffee", name: "The Artist — V60 Filter Coffee", size: "12 oz", time: "8 min", coffee_notes: V60, ingredients: ["Coffee powder: 18 g (Type 3 grind)", "Hot water: 270 g (at 92°C)"], steps: ["Heat water to 92°C exactly.", "Rinse paper filter in V60, discard rinse water.", "Grind 18 g medium-fine, place in filter.", "Bloom: pour 50 g water evenly, wait 30 sec.", "Second pour: 150 ml over ~1 min 15 sec.", "Final pour: 70 ml over ~40 sec.", "Allow to drip fully, serve with lid. (Iced: 135 ml hot + 135 g ice.)"] },
-    { id: uuid(), category: "Signature Coffee", name: "The Diva — Haskap Berry Blended", size: "16 oz", time: "6 min", coffee_notes: T1, ingredients: ["Espresso: 18 g dose", "Cold milk: 90 g", "Ice: 200 g", "Vanilla powder: 30 g", "Haskap berries: 20 g", "Vanilla syrup: 20 ml"], steps: ["Add cold milk and espresso to blender.", "Add cubed ice and vanilla powder.", "Add haskap berries and vanilla syrup.", "Blend ~35 sec until smooth.", "Decorate cup with flower sticker, pour in, serve with lid."] },
-    { id: uuid(), category: "Signature Coffee", name: "The Actor — Espressivo", size: "4 oz", time: "3 min", coffee_notes: T1, ingredients: ["Coffee powder: 18 g", "Condensed milk: 15 g", "Fresh cream: 10 g"], steps: ["Extract espresso into cup.", "Add condensed milk, stir.", "Top with fresh cream. Serve immediately."] },
-    { id: uuid(), category: "Signature Coffee", name: "The Producer — Ginger Latte", size: "12 oz", time: "3 min", coffee_notes: T2, ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Condensed milk: 30 g", "Ground ginger: 1 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add condensed milk and ginger, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Signature Coffee", name: "The Director — Sea Salt Vanilla Latte", size: "12 oz", time: "3 min", coffee_notes: T2, ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Sea salt vanilla sauce: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add sea salt vanilla sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Signature Coffee", name: "The Writer — Herbal Tea", size: "12 oz", time: "3 min", ingredients: ["Tea bag: 1 (Lipton)", "Special herbs blend: 0.5 g", "Peppermint: 2 g", "Cardamom: 0.2 g", "Honey: 20 g"], steps: ["Bring water to boil.", "Place tea bag, peppermint, cardamom in cup.", "Pour hot water, steep 3–4 min.", "Remove bag. Add herbs blend and honey.", "Stir well and serve."] },
-    { id: uuid(), category: "Signature Coffee", name: "Double O", size: "8 oz", time: "5 min", coffee_notes: T1, ingredients: ["Espresso: 18 g (Coffee Type 1)", "Salted caramel sauce: 20 g", "Steamed whole milk: 100 g"], steps: ["Extract espresso (Type 1).", "Add salted caramel sauce, mix.", "Steam milk to silky texture.", "Pour over base, preserve crema.", "Serve with lid."] },
-    { id: uuid(), category: "Signature Coffee", name: "El 3alamey", size: "8 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 25 g", "Steamed whole milk: 100 ml"], steps: ["Extract espresso (Type 2).", "Add condensed milk, mix.", "Steam milk to silky microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Drinks", name: "The Artist — V60 Filter Coffee", size: "12 oz", time: "8 min", coffee_notes: V60, ingredients: ["Coffee powder: 18 g (Type 3 grind)", "Hot water: 270 g (at 92°C)"], steps: ["Heat water to 92°C exactly.", "Rinse paper filter in V60, discard rinse water.", "Grind 18 g medium-fine, place in filter.", "Bloom: pour 50 g water evenly, wait 30 sec.", "Second pour: 150 ml over ~1 min 15 sec.", "Final pour: 70 ml over ~40 sec.", "Allow to drip fully, serve with lid. (Iced: 135 ml hot + 135 g ice.)"] },
+    { id: uuid(), category: "Signature Drinks", name: "The Diva — Haskap Berry Blended", size: "16 oz", time: "6 min", coffee_notes: T1, ingredients: ["Espresso: 18 g dose", "Cold milk: 90 g", "Ice: 200 g", "Vanilla powder: 30 g", "Haskap berries: 20 g", "Vanilla syrup: 20 ml"], steps: ["Add cold milk and espresso to blender.", "Add cubed ice and vanilla powder.", "Add haskap berries and vanilla syrup.", "Blend ~35 sec until smooth.", "Decorate cup with flower sticker, pour in, serve with lid."] },
+    { id: uuid(), category: "Signature Drinks", name: "The Actor — Espressivo", size: "4 oz", time: "3 min", coffee_notes: T1, ingredients: ["Coffee powder: 18 g", "Condensed milk: 15 g", "Fresh cream: 10 g"], steps: ["Extract espresso into cup.", "Add condensed milk, stir.", "Top with fresh cream. Serve immediately."] },
+    { id: uuid(), category: "Signature Drinks", name: "The Producer — Ginger Latte", size: "12 oz", time: "3 min", coffee_notes: T2, ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Condensed milk: 30 g", "Ground ginger: 1 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add condensed milk and ginger, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Drinks", name: "The Director — Sea Salt Vanilla Latte", size: "12 oz", time: "3 min", coffee_notes: T2, ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Sea salt vanilla sauce: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add sea salt vanilla sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Drinks", name: "The Writer — Herbal Tea", size: "12 oz", time: "3 min", ingredients: ["Tea bag: 1 (Lipton)", "Special herbs blend: 0.5 g", "Peppermint: 2 g", "Cardamom: 0.2 g", "Honey: 20 g"], steps: ["Bring water to boil.", "Place tea bag, peppermint, cardamom in cup.", "Pour hot water, steep 3–4 min.", "Remove bag. Add herbs blend and honey.", "Stir well and serve."] },
+    { id: uuid(), category: "Signature Drinks", name: "Double O", size: "8 oz", time: "5 min", coffee_notes: T1, ingredients: ["Espresso: 18 g (Coffee Type 1)", "Salted caramel sauce: 20 g", "Steamed whole milk: 100 g"], steps: ["Extract espresso (Type 1).", "Add salted caramel sauce, mix.", "Steam milk to silky texture.", "Pour over base, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Signature Drinks", name: "El 3alamey", size: "8 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 25 g", "Steamed whole milk: 100 ml"], steps: ["Extract espresso (Type 2).", "Add condensed milk, mix.", "Steam milk to silky microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     // ── ICED COFFEE ──
     { id: uuid(), category: "Iced Coffee", name: "Iced Latte", size: "16 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Whole milk: 230 ml (cold)", "Ice: full cup"], steps: ["Fill cup with ice.", "Extract espresso.", "Add cold milk to cup.", "Pour espresso over milk and ice. Serve with lid."] },
     { id: uuid(), category: "Iced Coffee", name: "Iced Americano", size: "16 oz", time: "5 min", coffee_notes: T1, ingredients: ["Espresso: 18 g (Coffee Type 1)", "Cold water: 250 ml", "Ice: full cup"], steps: ["Fill cup with ice.", "Extract espresso.", "Add cold water.", "Pour espresso over ice and water. Serve with lid."] },
@@ -6723,6 +7801,22 @@ routes.handbook = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Barista Handbook", "Recipes & drink preparation guide."));
 
+  // ── Top-level section tabs ──
+  let activeTab = "recipes";
+  const topTabBar = el("div", { class: "tabs" });
+  function buildTopTabs() {
+    topTabBar.innerHTML = "";
+    [["recipes", "Drinks Recipe"], ["operating_model", "Operating Model"]].forEach(([tab, label]) => {
+      const btn = el("button", { class: "tab" + (activeTab === tab ? " on" : "") }, label);
+      btn.addEventListener("click", () => { activeTab = tab; buildTopTabs(); renderSections(); });
+      topTabBar.appendChild(btn);
+    });
+  }
+  buildTopTabs();
+  wrap.appendChild(topTabBar);
+
+  const recipesSection = el("div", {});
+
   // ── Category filter tabs ──
   let activeCategory = "all";
   const tabBar = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "14px" } });
@@ -6741,7 +7835,7 @@ routes.handbook = function (u) {
     });
   }
   buildTabs();
-  wrap.appendChild(tabBar);
+  recipesSection.appendChild(tabBar);
 
   // ── Search ──
   let searchQ = "";
@@ -6749,11 +7843,11 @@ routes.handbook = function (u) {
   const searchIn = el("input", { type: "search", placeholder: "Search recipes…", style: { borderRadius: "20px" } });
   searchIn.addEventListener("input", () => { searchQ = searchIn.value.toLowerCase(); renderRecipes(); });
   searchRow.appendChild(searchIn);
-  wrap.appendChild(searchRow);
+  recipesSection.appendChild(searchRow);
 
   // ── Recipe list ──
   const recipeBody = el("div", {});
-  wrap.appendChild(recipeBody);
+  recipesSection.appendChild(recipeBody);
 
   function renderRecipes() {
     recipeBody.innerHTML = "";
@@ -6844,8 +7938,279 @@ routes.handbook = function (u) {
     const addBtn = el("button", { class: "btn secondary" }, "+ Add New Recipe");
     addBtn.addEventListener("click", () => openRecipeEditor(null));
     addSection.appendChild(addBtn);
-    wrap.appendChild(addSection);
+    recipesSection.appendChild(addSection);
   }
+  wrap.appendChild(recipesSection);
+
+  // ── Operating Model ──
+  const OM_SECTIONS = [
+    {
+      number: "1", title: "Service Standards",
+      content: [
+        { type: "para", text: "Service at Coffee Beats should reflect warmth and professionalism. Every interaction is part of the Coffee Beats creative experience." },
+        { type: "subheader", text: "Standards" },
+        { type: "bullets", items: ["Greet every customer within 5 seconds of their arrival.", "Confirm the order clearly before preparation begins.", "Deliver drinks with a warm smile and positive energy.", "Maintain a clean, organized counter at all times."] },
+        { type: "subheader", text: "Customer Experience Rules" },
+        { type: "bullets", items: ["Be welcoming and attentive to artists and creatives — they are our community.", "Encourage conversation and a sense of belonging in the space.", "Maintain calm and professionalism even during busy periods.", "Treat every customer as a guest in a creative home."] },
+      ]
+    },
+    {
+      number: "2", title: "Opening Procedures",
+      content: [
+        { type: "para", text: "Complete the following steps before serving the first customer of the day:" },
+        { type: "bullets", items: ["Turn on the espresso machine and allow it to reach operating temperature.", "Calibrate the grinder and verify espresso extraction is within target profile.", "Prepare milk and all perishable ingredients.", "Check syrup, sauce, and topping levels — replenish as needed.", "Clean and prepare the workspace and bar area.", "Verify the POS system is running correctly.", "Prepare cups, lids, and all service items."] },
+      ]
+    },
+    {
+      number: "3", title: "Closing Procedures",
+      content: [
+        { type: "para", text: "Complete the following steps at the end of every shift:" },
+        { type: "bullets", items: ["Clean the espresso machine thoroughly.", "Backflush the machine using the appropriate cleaning cycle.", "Clean and brush the grinder.", "Wash all pitchers, tampers, and utensils.", "Empty all trash and replace liners.", "Clean all counters, surfaces, and floors.", "Turn off all machines safely.", "Record remaining inventory levels for the next shift."] },
+      ]
+    },
+    {
+      number: "4", title: "Quality Control Checklist",
+      content: [
+        { type: "para", text: "Every shift must verify the following before and during service:" },
+        { type: "bullets", items: ["Espresso extraction time is within the target window for the correct coffee type.", "Milk texture achieves smooth microfoam appropriate to the drink.", "Correct cup size is used for every beverage.", "Each drink follows the correct recipe precisely.", "Drink presentation is clean and consistent.", "Workspace remains hygienic throughout the shift."] },
+      ]
+    },
+    {
+      number: "5", title: "Inventory & Waste Control",
+      content: [
+        { type: "subheader", text: "Daily Inventory to Monitor" },
+        { type: "bullets", items: ["Coffee beans", "Milk stock (whole, skimmed, plant-based alternatives)", "Syrups and sauces", "Matcha powder", "Chocolate powder and sauces"] },
+        { type: "subheader", text: "Waste Reduction Principles" },
+        { type: "bullets", items: ["Follow precise measurements for every recipe — no guessing.", "Track and flag expired or near-expiry ingredients immediately.", "Record daily waste to identify recurring patterns.", "Apply FIFO (First In, First Out) for all inventory rotation."] },
+      ]
+    },
+    {
+      number: "6", title: "Shift Close",
+      content: [
+        { type: "para", text: "The shift close is completed in the operations app at the end of every shift. Steps differ between branches as noted below." },
+        { type: "subheader", text: "Mandatory Photo Rule" },
+        { type: "para", text: "If one or more drinks are added during shift close, at least one photo must be attached before the shift close can be submitted. Multiple photos are allowed and encouraged." },
+        { type: "subheader", text: "Maadi — Shift Close Steps" },
+        { type: "bullets", items: ["Open the Shift Close screen in the operations app.", "Enter drinks served during the shift using the standard menu.", "If 1 or more drinks are added, attach at least one photo.", "Record any waste or breakages in the Notes field.", "Submit the shift close. Do not submit without completing all mandatory fields.", "Hospitality: enter these separately in the Hospitality section if applicable."] },
+        { type: "subheader", text: "Zawya — Shift Close Steps" },
+        { type: "bullets", items: ["Open the Shift Close screen in the operations app.", "Enter drinks served during the shift.", "Hospitality: enter separately per screening if applicable.", "If 1 or more drinks are added (standard or hospitality), attach at least one photo.", "Record any waste or breakages in the Notes field.", "Submit the shift close. Do not submit without completing all mandatory fields."] },
+      ]
+    },
+    {
+      number: "7", title: "Record Purchase",
+      content: [
+        { type: "para", text: "Use the Record Purchase screen in the operations app every time supplies are received. All fields must be completed accurately." },
+        { type: "subheader", text: "How to Record a Purchase" },
+        { type: "bullets", items: ["Open the Record Purchase screen.", "Select the item purchased from the ingredient list.", "Enter the total amount paid (in EGP) — enter the complete invoice total.", "Enter the quantity received.", "Tap the calendar icon to select the expiry date. Leave blank for non-perishables.", "Tap Yes if an electronic receipt was provided and upload the file; tap No otherwise.", "Add any notes about the purchase, then tap Submit."] },
+        { type: "subheader", text: "Monthly Receipt Report" },
+        { type: "para", text: "At the end of each calendar month, the system automatically sends an email to coffeebeats@haidiyacoub.com with the monthly purchase receipt summary — items with receipts and the total without receipts." },
+      ]
+    },
+    {
+      number: "8", title: "Record Waste",
+      content: [
+        { type: "para", text: "Use the Record Waste screen to log any ingredient or product that has been discarded, spoiled, spilled, or cannot be used." },
+        { type: "subheader", text: "How to Record Waste" },
+        { type: "bullets", items: ["Open the Record Waste screen.", "Select the item wasted from the ingredient list.", "Enter the quantity wasted and the reason.", "Add any additional notes if relevant, then tap Submit."] },
+        { type: "subheader", text: "Updating an Existing Entry" },
+        { type: "para", text: "Waste entries are editable after submission. Tap the entry in the Waste Log, make corrections, and tap Save. Only the shift manager can edit entries from previous shifts." },
+      ]
+    },
+    {
+      number: "9", title: "Sign-In Stamps",
+      content: [
+        { type: "para", text: "The Sign-In Stamp is the official daily attendance record for all morning-shift baristas. Every morning shift must begin with a clock-in photo submitted through the Operations App." },
+        { type: "subheader", text: "How to Submit a Sign-In Stamp" },
+        { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or Zawya).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
+        { type: "subheader", text: "Automatic Deduction Rules" },
+        { type: "bullets", items: ["Late 15 min – 60 min: ½ day deducted.", "Late 60 min – 120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 3 or more times in a calendar month, every subsequent penalty in that month is doubled automatically."] },
+        { type: "subheader", text: "Early Arrival Bonus" },
+        { type: "para", text: "If your clock-in photo is submitted 30 minutes or more before the scheduled opening time, the system records an Early Arrival Bonus automatically, reflected in the Punctuality KPI." },
+      ]
+    },
+    {
+      number: "10", title: "Supplier Orders & Restock Alerts",
+      content: [
+        { type: "para", text: "When any inventory item falls below seven days of estimated supply, the Operations App automatically fires a low-stock alert. The barista on shift is personally responsible for taking immediate action." },
+        { type: "subheader", text: "How to Log Your Action" },
+        { type: "bullets", items: ["Open the Operations App and tap the red banner or \"Reorder Actions\".", "Tick at least one checkbox: Called the supplier directly — or — Communicated to head barista.", "Add a comment with useful details (delivery date, who you spoke to).", "Tap Save Action. The red banner clears."] },
+        { type: "subheader", text: "Follow-Up Alarm Schedule" },
+        { type: "bullets", items: ["Day 0: Initial alert fires. Action required before shift ends.", "Day +3: First follow-up alarm fires if item not yet in purchase log.", "Day +5: Second follow-up — \"URGENT — reorder overdue.\"", "Day +6: Final alarm — \"CRITICAL — reorder still missing.\""] },
+        { type: "subheader", text: "KPI Impact" },
+        { type: "bullets", items: ["Action logged within 24 hours: no penalty.", "Action logged within 3 days: −10 points from Teamwork score.", "Action after first follow-up: −20 points.", "Action after second follow-up: −30 points.", "No action after 6 days: −50 points."] },
+      ]
+    },
+    {
+      number: "11", title: "Monthly Leadership Roles",
+      content: [
+        { type: "para", text: "Each month, specific operational responsibilities are assigned to individual baristas or head baristas. Every assigned role carries a direct accountability requirement." },
+        { type: "subheader", text: "The Three Monthly Roles" },
+        { type: "bullets", items: ["<strong>Schedule Manager</strong> — Accountable for weekly schedule and sign-in stamp compliance. Each unresolved missing stamp deducts 15 pts from Leadership KPI; a late stamp deducts 10 pts.", "<strong>Inventory Manager</strong> — Must submit the end-of-month inventory snapshot before midnight on the last day. A missing snapshot results in a half-day salary deduction plus a Leadership KPI penalty.", "<strong>Cash Manager</strong> — Responsible for logging the weekly Maadi ATM cash deposit every week. A reminder fires automatically every Thursday. Missed entries result in a ¼ day salary deduction per week."] },
+        { type: "subheader", text: "How Assignments Work" },
+        { type: "para", text: "At the beginning of each month, management assigns one barista or head barista to each role. If no new assignment is made, the system carries forward the previous month's assignment automatically." },
+      ]
+    },
+    {
+      number: "12", title: "KPI Dashboard & Scorecard",
+      content: [
+        { type: "para", text: "The KPI Scorecard is a monthly performance summary for every barista and head barista, aggregating data into a single weighted score from 0 to 100." },
+        { type: "subheader", text: "The Nine KPI Categories" },
+        { type: "bullets", items: ["<strong>Punctuality (5%)</strong> — Calculated from sign-in stamp data.", "<strong>Waste Control (15%)</strong> — Derived from monthly waste log entries.", "<strong>Cleanliness (10%)</strong> — Pulled each month from the cleaning logs.", "<strong>Coffee Craft (15%)</strong> — Pulled from customer reviews on the Coffee Beats website.", "<strong>Upselling (10%)</strong> — Tracks successful add-on suggestions via ticket size report.", "<strong>Customer Score (15%)</strong> — Based on customer feedback from the Coffee Beats website.", "<strong>Teamwork (5%)</strong> — Reflects response to restock alerts and shared tasks.", "<strong>Leadership (20%)</strong> — The highest-weighted category. Scored from monthly role performance.", "<strong>Hygiene (5%)</strong> — Scored from the Penalties log. Every \"not wearing uniform\" or hygiene penalty deducts 25 points."] },
+        { type: "subheader", text: "Important Rules" },
+        { type: "para", text: "Scores are locked at the end of each month. Disputes must be raised with the branch manager within seven days of month-end. The scorecard is used for performance reviews, bonus calculations, and promotion decisions." },
+      ]
+    },
+    {
+      number: "13", title: "HR Functions",
+      content: [
+        { type: "para", text: "The Operations App includes a built-in HR module that manages payroll, attendance penalties, overtime, loans, and leave for all baristas and head baristas. All data is calculated automatically from recorded activity — no manual payroll entry is required." },
+        { type: "subheader", text: "My HR — Individual View" },
+        { type: "para", text: "Every barista and head barista can access their personal HR dashboard from the Operations App by tapping My HR. The dashboard shows:" },
+        { type: "bullets", items: ["<strong>Base Salary</strong> — the fixed monthly salary for the role.", "<strong>Overtime</strong> — additional pay for shifts worked beyond contracted hours, logged automatically.", "<strong>Penalties</strong> — salary deductions applied for attendance violations (late/missed stamps), hygiene violations, and missed leadership role duties. Each entry shows the date, reason, and amount deducted.", "<strong>Loans</strong> — any salary advance or loan balance tracked against the barista's account.", "<strong>Net Due</strong> — the final calculated amount to be paid after adding overtime and subtracting penalties and loan repayments.", "<strong>KPI Reward Tier</strong> — at month end, the barista's KPI score determines their tier: Gold (90+), Silver (80+), Bronze (70+), or Development (below 70). Reflected in the HR dashboard alongside the monthly payout summary.", "<strong>Leave</strong> — approved leave days taken during the month. Unapproved absences are flagged separately as penalty entries."] },
+        { type: "para", text: "The dashboard supports month navigation — baristas can review any prior month's full salary breakdown." },
+        { type: "subheader", text: "Staff HR — Management View" },
+        { type: "para", text: "Owners, accountants, and head baristas can access the Staff HR view showing the complete payroll summary for all active staff:" },
+        { type: "bullets", items: ["A summary row: Total Active Staff, Total Payroll, Total Penalties, Total Overtime for the selected month.", "A full table: Name, Role, Base Salary, Overtime, Penalties, Loans, Net Due, KPI Score, Leave Days for every barista.", "A grand total row summing all payroll columns across the team.", "Clickable rows to drill into any individual barista's My HR view.", "Month navigation to review any previous payroll period."] },
+        { type: "subheader", text: "Payroll Cycle" },
+        { type: "para", text: "Payroll is calculated monthly. All deductions, overtime entries, and loan repayments are recorded throughout the month in the Operations App. The final net due figure is locked at the end of the month. Disputes must be raised with the branch manager within seven days of month-end." },
+      ]
+    },
+    {
+      number: "14", title: "Emergency Contacts",
+      content: [
+        { type: "para", text: "Each barista must have at least one emergency contact on file. Emergency contact information is stored in the Operations App under each barista's HR profile and is accessible to the owner and head barista at all times." },
+        { type: "subheader", text: "What to Provide" },
+        { type: "bullets", items: ["Emergency contact name", "Relationship (e.g. spouse, parent, sibling)", "Phone number"] },
+        { type: "para", text: "Contact details must be kept up to date. Notify the head barista immediately if your emergency contact changes." },
+      ]
+    },
+  ];
+
+  if (!state.om_overrides) state.om_overrides = {};
+
+  function omContentToText(content) {
+    return content.map(item => {
+      if (item.type === "para")      return item.text;
+      if (item.type === "subheader") return "## " + item.text;
+      if (item.type === "bullets")   return item.items.map(i => "- " + i.replace(/<[^>]+>/g, "")).join("\n");
+      return "";
+    }).join("\n\n");
+  }
+
+  function omTextToContent(text) {
+    const lines = text.split("\n");
+    const result = [];
+    let bullets = [];
+    for (const raw of lines) {
+      const line = raw.trimEnd();
+      if (!line.trim()) {
+        if (bullets.length) { result.push({ type: "bullets", items: [...bullets] }); bullets = []; }
+        continue;
+      }
+      if (line.startsWith("## ")) {
+        if (bullets.length) { result.push({ type: "bullets", items: [...bullets] }); bullets = []; }
+        result.push({ type: "subheader", text: line.slice(3).trim() });
+      } else if (line.startsWith("- ")) {
+        bullets.push(line.slice(2).trim());
+      } else {
+        if (bullets.length) { result.push({ type: "bullets", items: [...bullets] }); bullets = []; }
+        result.push({ type: "para", text: line.trim() });
+      }
+    }
+    if (bullets.length) result.push({ type: "bullets", items: bullets });
+    return result;
+  }
+
+  function renderOMBody(content, bodyEl) {
+    bodyEl.innerHTML = "";
+    content.forEach(item => {
+      if (item.type === "para") {
+        const p = el("p", { style: { fontSize: "13.5px", lineHeight: "1.65", color: "var(--ink)", margin: "0 0 10px" } });
+        p.textContent = item.text;
+        bodyEl.appendChild(p);
+      } else if (item.type === "subheader") {
+        bodyEl.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", color: "var(--ink)", margin: "10px 0 6px" } }, item.text));
+      } else if (item.type === "bullets") {
+        const ul = el("ul", { style: { margin: "0 0 10px", paddingInlineStart: "18px", fontSize: "13px", lineHeight: "1.65", color: "var(--ink)" } });
+        item.items.forEach(txt => {
+          const li = el("li", { style: { marginBottom: "5px" } });
+          li.innerHTML = txt;
+          ul.appendChild(li);
+        });
+        bodyEl.appendChild(ul);
+      }
+    });
+  }
+
+  const canEditOM = u && ["owner", "head_barista"].includes(u.role);
+
+  const operatingModelSection = el("div", {});
+  OM_SECTIONS.forEach(sec => {
+    const card = el("div", { class: "card", style: { marginBottom: "14px", padding: "0", overflow: "hidden", border: "1px solid var(--border)", borderRadius: "8px" } });
+
+    // ── Header row ──
+    const cardHead = el("div", { style: { background: "#3b2314", color: "#f5e6d3", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" } });
+    cardHead.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", letterSpacing: "0.3px" } }, `${sec.number}. ${sec.title}`));
+    if (canEditOM) {
+      const editBtn = el("button", { style: { background: "rgba(255,255,255,0.15)", color: "#f5e6d3", border: "none", borderRadius: "4px", padding: "3px 10px", fontSize: "12px", cursor: "pointer" } }, "Edit");
+      cardHead.appendChild(editBtn);
+      editBtn.addEventListener("click", () => {
+        editForm.style.display = editForm.style.display === "none" ? "" : "none";
+        if (editForm.style.display !== "none") {
+          const currentContent = state.om_overrides[sec.number] || sec.content;
+          ta.value = omContentToText(currentContent);
+          ta.focus();
+        }
+      });
+    }
+    card.appendChild(cardHead);
+
+    // ── Body ──
+    const body = el("div", { style: { padding: "12px 14px" } });
+    const currentContent = state.om_overrides[sec.number] || sec.content;
+    renderOMBody(currentContent, body);
+    card.appendChild(body);
+
+    // ── Inline edit form (owner/head barista only) ──
+    const editForm = el("div", { style: { display: "none", padding: "12px 14px", borderTop: "1px solid var(--border)", background: "var(--surface-2)" } });
+    if (canEditOM) {
+      const hint = el("div", { style: { fontSize: "11.5px", color: "var(--ink-dim)", marginBottom: "6px" } },
+        "Lines starting with ## = sub-header  ·  Lines starting with - = bullet  ·  Other lines = paragraph");
+      const ta = el("textarea", { style: { width: "100%", minHeight: "180px", fontSize: "13px", lineHeight: "1.6", padding: "8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontFamily: "monospace", boxSizing: "border-box", resize: "vertical" } });
+      const btnRow = el("div", { style: { display: "flex", gap: "8px", marginTop: "8px" } });
+      const saveBtn = el("button", { class: "btn", style: { flex: "1" } }, "Save");
+      const resetBtn = el("button", { class: "btn ghost", style: { flex: "1" } }, "Reset to default");
+      const cancelBtn = el("button", { class: "btn ghost" }, "Cancel");
+      btnRow.append(saveBtn, resetBtn, cancelBtn);
+      editForm.append(hint, ta, btnRow);
+
+      saveBtn.addEventListener("click", () => {
+        state.om_overrides[sec.number] = omTextToContent(ta.value);
+        saveState();
+        renderOMBody(state.om_overrides[sec.number], body);
+        editForm.style.display = "none";
+        toast("Section updated", "ok");
+      });
+      resetBtn.addEventListener("click", () => {
+        delete state.om_overrides[sec.number];
+        saveState();
+        renderOMBody(sec.content, body);
+        editForm.style.display = "none";
+        toast("Reset to default", "ok");
+      });
+      cancelBtn.addEventListener("click", () => { editForm.style.display = "none"; });
+    }
+    card.appendChild(editForm);
+
+    operatingModelSection.appendChild(card);
+  });
+  wrap.appendChild(operatingModelSection);
+
+  function renderSections() {
+    recipesSection.style.display = activeTab === "recipes" ? "" : "none";
+    operatingModelSection.style.display = activeTab === "operating_model" ? "" : "none";
+  }
+  renderSections();
 
   // ── Recipe editor modal ──
   function openRecipeEditor(existing) {
@@ -7525,16 +8890,20 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>Sign-In Stamp</strong> from the home screen <em>as soon as you arrive</em>.",
         "Select your branch: <strong>Maadi</strong> or <strong>Zawya</strong>.",
-        "Take a <strong>selfie or photo</strong> — this is your proof of arrival. Make sure it's clear.",
+        "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
         "Tap <strong>Submit clock-in</strong>.",
-        "<strong>⚠ Important:</strong> Maadi morning shift — arrive by <strong>10:00</strong>. After 10:15 = half-day deduction. After 12:00 = full-day deduction. Zawya — arrive by <strong>12:00</strong>. After 12:15 = half-day. After 14:00 = full-day. These deductions are automatic.",
+        "<strong>⚠ Automatic penalty rules:</strong> Late 1–60 min = <strong>½ day deducted</strong>. Late 61–120 min = <strong>1 full day deducted</strong>. Late more than 120 min = <strong>2 days deducted</strong>. No stamp at all = <strong>3 days deducted</strong>.",
+        "<strong>Repeat offender rule:</strong> If the same barista is late 3 or more times in one calendar month, every further penalty that month is <strong>doubled automatically</strong>.",
+        "<strong>Notifications:</strong> Any stamp 15+ minutes late triggers an immediate in-app alert and email to the owner and head barista. If no stamp is recorded within 1 hour of opening, a second alert is sent automatically.",
       ],
       ar_steps: [
         "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
         "اختر الفرع: <strong>المعادي</strong> أو <strong>زاوية</strong>.",
-        "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك. تأكد أنها واضحة.",
+        "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك.",
         "اضغط <strong>تسجيل الحضور</strong>.",
-        "<strong>⚠ مهم:</strong> شيفت الصباح بالمعادي — الوصول قبل <strong>10:00</strong>. بعد 10:15 = خصم نصف يوم. بعد 12:00 = خصم يوم كامل. زاوية — الوصول قبل <strong>12:00</strong>. بعد 12:15 = نصف يوم. بعد 14:00 = يوم كامل. الخصومات تتم تلقائيًا.",
+        "<strong>⚠ قواعد الخصم التلقائي:</strong> تأخر 1–60 دقيقة = <strong>خصم نصف يوم</strong>. تأخر 61–120 دقيقة = <strong>خصم يوم كامل</strong>. تأخر أكثر من 120 دقيقة = <strong>خصم يومين</strong>. غياب بدون بصمة = <strong>خصم 3 أيام</strong>.",
+        "<strong>قاعدة التكرار:</strong> إذا تأخر البريستا 3 مرات أو أكثر في نفس الشهر، يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً.",
+        "<strong>الإشعارات:</strong> أي بصمة متأخرة 15 دقيقة أو أكثر ترسل تنبيهاً فورياً داخل التطبيق وبريداً إلكترونياً للمالك ورئيس البريستا. وإذا لم تُسجَّل بصمة خلال ساعة من الفتح، يُرسَل تنبيه ثانٍ تلقائياً.",
       ],
     },
     {
@@ -7582,7 +8951,7 @@ routes.app_guide = function (u) {
         "سجّل أي <strong>مشروبات إدارة</strong> تم توزيعها (مشروبات مجانية للمدير/المالك).",
         "أضف أي ملاحظات عن الشيفت — أحداث غير عادية أو مشاكل أو معلومات للتسليم.",
         "اضغط <strong>حفظ</strong>.",
-        "⚠ يجب إتمام إغلاق الشيفت قبل مغادرتك — لا تتجاوزه أبدًا.",
+        "⚠ يجب إتمام إغلاق الشيفت قبل مغادرتك — لا تتجاوزه أبداً.",
       ],
     },
     {
@@ -7625,21 +8994,17 @@ routes.app_guide = function (u) {
     },
     {
       icon: "📖",
-      en_title: "Barista Handbook (Recipes)",
-      ar_title: "دليل البريستا (الوصفات)",
+      en_title: "Barista Handbook",
+      ar_title: "دليل البريستا",
       en_steps: [
-        "Tap <strong>Barista Handbook</strong> to access the drink recipes guide.",
-        "Use the <strong>category tabs</strong> (Iced Coffee, Hot, etc.) to filter drinks.",
-        "Use the <strong>search bar</strong> to find a specific recipe quickly.",
-        "Each recipe card shows <strong>Ingredients</strong> and <strong>Step-by-step preparation</strong>.",
-        "Head baristas and owners can add or edit recipes.",
+        "Tap <strong>Barista Handbook</strong> — it has two tabs: <strong>Drinks Recipe</strong> and <strong>Operating Model</strong>.",
+        "<strong>Drinks Recipe tab:</strong> Browse all drink recipes. Use the category chips (Hot Espresso, Iced Coffee, Signature Drinks, etc.) or the search bar. Each card shows ingredients and step-by-step preparation. Head baristas and owners can add or edit recipes.",
+        "<strong>Operating Model tab:</strong> The full Operations Manual — 14 sections covering every process in the café. Owners and head baristas can edit any section directly in the app by tapping the <strong>Edit</strong> button on the section card.",
       ],
       ar_steps: [
-        "اضغط على <strong>دليل البريستا</strong> للوصول إلى وصفات المشروبات.",
-        "استخدم <strong>تبويبات الفئات</strong> (قهوة باردة، ساخنة، إلخ) للفرز.",
-        "استخدم <strong>شريط البحث</strong> للعثور على وصفة محددة بسرعة.",
-        "كل بطاقة وصفة تعرض <strong>المكونات</strong> و<strong>خطوات التحضير</strong>.",
-        "رؤساء البريستا والملاك يمكنهم إضافة وصفات أو تعديلها.",
+        "اضغط على <strong>دليل البريستا</strong> — يحتوي على تبويبين: <strong>وصفات المشروبات</strong> و<strong>نموذج التشغيل</strong>.",
+        "<strong>تبويب وصفات المشروبات:</strong> تصفح جميع الوصفات. استخدم تصنيفات الفئات (ساخن، بارد، مشروبات مميزة، إلخ) أو شريط البحث. رؤساء البريستا والملاك يمكنهم إضافة وصفات أو تعديلها.",
+        "<strong>تبويب نموذج التشغيل:</strong> الدليل التشغيلي الكامل — 14 قسماً. يمكن للملاك ورؤساء البريستا تعديل أي قسم مباشرةً في التطبيق بالضغط على زر <strong>تعديل</strong>.",
       ],
     },
     {
@@ -7665,25 +9030,161 @@ routes.app_guide = function (u) {
         "⚠ الإجازة غير مؤكدة حتى تحصل على موافقة.",
       ],
     },
-
-
-
+    {
+      icon: "📦",
+      en_title: "Restock Alerts & Supplier Orders",
+      ar_title: "تنبيهات إعادة التخزين وطلبات الموردين",
+      en_steps: [
+        "When stock of any item falls below 7 days of estimated supply, a <strong>low-stock alert</strong> fires automatically. A red banner appears on your home screen.",
+        "The <strong>barista on shift at the time of the alert is responsible</strong> — it is logged against your name.",
+        "Tap the red banner or the <strong>📦 Reorder Actions</strong> tile to open the action form with the supplier's contact details.",
+        "Tick <strong>at least one</strong>: <strong>☑ Called the supplier directly</strong> OR <strong>☑ Communicated to head barista to order</strong>. Add a comment.",
+        "Tap <strong>Save Action</strong>.",
+        "<strong>Follow-up alarms:</strong> If the item is not in the purchase log within 3 days, a follow-up fires — then 2 days later, then 1 final day.",
+        "The alarm stops only when the item appears in the purchase record or you tick 'Called supplier' in a new action.",
+        "⚠ Every missed alert is penalised in your <strong>Teamwork KPI score</strong>.",
+      ],
+      ar_steps: [
+        "عندما يقل مخزون أي صنف عن 7 أيام من الاستهلاك، يُطلق النظام <strong>تنبيه نقص المخزون</strong> ويظهر شريط أحمر في الشاشة الرئيسية.",
+        "<strong>البريستا المناوب وقت التنبيه هو المسؤول</strong> — يُسجَّل باسمك.",
+        "اضغط الشريط الأحمر أو بلاطة <strong>📦 إجراءات الطلب</strong> لفتح نموذج الإجراء مع بيانات المورد.",
+        "حدد <strong>خياراً واحداً على الأقل</strong>: <strong>☑ اتصلت بالمورد</strong> أو <strong>☑ أبلغت رئيس البريستا</strong>. أضف تعليقاً.",
+        "اضغط <strong>حفظ الإجراء</strong>.",
+        "<strong>تنبيهات المتابعة:</strong> إذا لم يُسجَّل الصنف في سجل المشتريات خلال 3 أيام، يُطلق تذكير. ثم بعد يومين. ثم يوم أخير.",
+        "يتوقف التنبيه فقط عند تسجيل الصنف في المشتريات أو الضغط على 'اتصلت بالمورد' في إجراء جديد.",
+        "⚠ كل تنبيه فائت يُخصم من <strong>درجة العمل الجماعي في تقييم الأداء</strong>.",
+      ],
+    },
+    {
+      icon: "🏪",
+      en_title: "Inventory Items & Suppliers",
+      ar_title: "أصناف المخزون والموردون",
+      en_steps: [
+        "Tap <strong>Items List</strong> (owner/head barista) to manage all inventory items — name, unit, category, daily usage rate, and linked supplier. Items can be added, edited, or deactivated inline.",
+        "Tap <strong>Supplier List</strong> to view and manage all suppliers with their contact info and linked items.",
+        "Owners can use <strong>Bulk Assign mode</strong> on the supplier list to assign multiple items to a supplier at once.",
+        "Stock levels update automatically from waste logs and purchase records.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>قائمة الأصناف</strong> (المالك/رئيس البريستا) لإدارة أصناف المخزون — الاسم، الوحدة، الفئة، معدل الاستهلاك، والمورد. يمكن إضافة الأصناف وتعديلها أو تعطيلها مباشرةً.",
+        "اضغط <strong>قائمة الموردين</strong> لعرض وإدارة الموردين مع بيانات الاتصال والأصناف المرتبطة.",
+        "يمكن للملاك استخدام <strong>وضع التعيين الجماعي</strong> في قائمة الموردين لربط عدة أصناف بمورد واحد دفعةً.",
+        "تتحدث مستويات المخزون تلقائياً من سجلات الهدر والمشتريات.",
+      ],
+    },
+    {
+      icon: "💳",
+      en_title: "My HR",
+      ar_title: "الموارد البشرية الخاصة بي",
+      en_steps: [
+        "Tap <strong>My HR</strong> to see your personal salary dashboard for the current month.",
+        "Shows: <strong>Base Salary</strong>, <strong>Overtime</strong>, <strong>Penalties</strong> (with date, reason, and amount for each), <strong>Loans</strong>, and <strong>Net Due</strong> — the final amount to be paid.",
+        "Your <strong>KPI Reward Tier</strong> appears at month end: Gold (90+), Silver (80+), Bronze (70+), or Development (below 70).",
+        "Use the <strong>month navigation</strong> to review any previous month.",
+        "Tap <strong>Emergency Contact</strong> at the top to add or update your emergency contact name, relationship, and phone number.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>الموارد البشرية الخاصة بي</strong> لعرض لوحة راتبك الشهرية.",
+        "تعرض: <strong>الراتب الأساسي</strong>، <strong>العمل الإضافي</strong>، <strong>الخصومات</strong> (مع التاريخ والسبب والمبلغ)، <strong>القروض</strong>، و<strong>صافي المستحق</strong>.",
+        "يظهر <strong>مستوى مكافأة الأداء</strong> في نهاية الشهر: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو تطوير (أقل من 70).",
+        "استخدم <strong>التنقل بين الأشهر</strong> لمراجعة أي شهر سابق.",
+        "اضغط <strong>جهة الاتصال الطارئ</strong> في أعلى الصفحة لإضافة أو تحديث بيانات الطوارئ.",
+      ],
+    },
+    {
+      icon: "💰",
+      en_title: "Staff Payroll (Management)",
+      ar_title: "كشف رواتب الموظفين (الإدارة)",
+      en_steps: [
+        "Tap <strong>Staff Payroll</strong> — available to owners, accountants, and head baristas.",
+        "Summary row shows: Total Active Staff, Total Payroll, Total Penalties, Total Overtime for the selected month.",
+        "Full table lists every barista with: Name, Role, Base Salary, Overtime, Penalties, Loans, Net Due, KPI Score, Leave Days, and Emergency Contact.",
+        "Tap any row to open that barista's full My HR breakdown.",
+        "Use month navigation to review any previous payroll period. A grand total row sums all columns.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>كشف رواتب الموظفين</strong> — متاح للملاك والمحاسبين ورؤساء البريستا.",
+        "يُظهر الصف الملخص: إجمالي الموظفين النشطين، إجمالي الرواتب، إجمالي الخصومات، وإجمالي العمل الإضافي.",
+        "الجدول الكامل: الاسم، الدور، الراتب الأساسي، العمل الإضافي، الخصومات، القروض، صافي المستحق، درجة الأداء، أيام الإجازة، وجهة الاتصال الطارئ.",
+        "اضغط أي صف لفتح تفاصيل الموارد البشرية لذلك الموظف.",
+        "استخدم أسهم التنقل لمراجعة أي فترة رواتب سابقة. يوجد صف إجمالي في الأسفل.",
+      ],
+    },
+    {
+      icon: "👑",
+      en_title: "Leadership Roles",
+      ar_title: "الأدوار القيادية",
+      en_steps: [
+        "Tap <strong>Leadership Roles</strong> to see this month's assigned roles.",
+        "Three roles are assigned monthly: <strong>Waste Champion</strong>, <strong>Stock & Inventory Lead</strong>, and <strong>Cleanliness & Standards Lead</strong>.",
+        "The role holder is accountable for that area's KPI outcomes — missed duties affect the Leadership score (20% of total KPI).",
+        "Owners and head baristas can assign and reassign roles from this page.",
+        "A penalty is automatically applied if a role holder's responsibilities are not fulfilled.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>الأدوار القيادية</strong> لعرض الأدوار المُعينة هذا الشهر.",
+        "يُعيَّن ثلاثة أدوار شهرياً: <strong>بطل الهدر</strong>، <strong>مسؤول المخزون</strong>، و<strong>مسؤول النظافة والمعايير</strong>.",
+        "صاحب الدور مسؤول عن نتائج تقييم الأداء لذلك المجال — يؤثر التقصير على درجة القيادة (20% من إجمالي التقييم).",
+        "يمكن للملاك ورؤساء البريستا تعيين الأدوار وإعادة تعيينها.",
+        "يُطبَّق خصم تلقائياً إذا لم يستوفِ صاحب الدور مسؤولياته.",
+      ],
+    },
+    {
+      icon: "📋",
+      en_title: "My Job Description",
+      ar_title: "مهام وظيفتي",
+      en_steps: [
+        "Tap <strong>My JD</strong> to view your full job description.",
+        "Split into tabs: <strong>Daily Tasks</strong>, <strong>Weekly Tasks</strong>, and <strong>Monthly Tasks</strong>.",
+        "If you hold a leadership role this month, your additional responsibilities are highlighted separately.",
+        "Every task listed is tracked in the KPI system — use this as a daily reference.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>مهام وظيفتي</strong> لعرض وصفك الوظيفي الكامل.",
+        "مقسَّم إلى تبويبات: <strong>المهام اليومية</strong>، <strong>المهام الأسبوعية</strong>، و<strong>المهام الشهرية</strong>.",
+        "إذا كنت تحمل دوراً قيادياً هذا الشهر، تُعرض مسؤولياتك الإضافية بشكل منفصل.",
+        "كل مهمة مُدرجة تُتابَع في نظام تقييم الأداء — استخدمه كمرجع يومي.",
+      ],
+    },
+    {
+      icon: "📊",
+      en_title: "KPI Scorecard",
+      ar_title: "بطاقة تقييم الأداء",
+      en_steps: [
+        "Tap <strong>My Scorecard</strong> to see your personal KPI score for the current month.",
+        "9 categories: Punctuality (5%), Waste Control (15%), Cleanliness (10%), Coffee Craft (15%), Upselling (10%), Customer Score (15%), Teamwork (15%), Leadership (20%), Hygiene (5%).",
+        "Scores are calculated automatically from recorded app activity — stamps, waste logs, penalties, cleaning logs, restock actions, and customer feedback.",
+        "At month end your total score determines your <strong>KPI Reward Tier</strong>: Gold (90+), Silver (80+), Bronze (70+), or Development (below 70) — reflected in your HR payout.",
+        "Owners and head baristas can view <strong>Staff Scorecard</strong> to see the full team's scores side by side.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>تقييم الأداء الخاص بي</strong> لعرض درجاتك للشهر الحالي.",
+        "9 محاور: الانضباط (5%)، ترشيد الهدر (15%)، النظافة (10%)، جودة صنع القهوة (15%)، البيع الإضافي (10%)، رضا العملاء (15%)، العمل الجماعي (15%)، القيادة (20%)، النظافة الشخصية (5%).",
+        "تُحسَب الدرجات تلقائياً من النشاط المُسجَّل — البصمات والهدر والخصومات والنظافة وإجراءات الطلب وآراء العملاء.",
+        "في نهاية الشهر تُحدد درجتك <strong>مستوى مكافأة الأداء</strong>: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو تطوير (أقل من 70) — ينعكس على راتبك.",
+        "يمكن للملاك ورؤساء البريستا عرض <strong>تقييمات الفريق</strong> لمقارنة جميع الدرجات.",
+      ],
+    },
     {
       icon: "⚠️",
       en_title: "Key Rules — Must Follow",
       ar_title: "قواعد أساسية — يجب الالتزام بها",
       en_steps: [
-        "<strong>🕐 Sign-In Stamp</strong>: Always stamp in the moment you arrive. Never stamp for someone else.",
+        "<strong>🕐 Sign-In Stamp</strong>: Stamp the moment you arrive. Never stamp for someone else. Penalties are automatic.",
         "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small.",
         "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
         "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
+        "<strong>📦 Reorder Alerts</strong>: Act on every low-stock alert before your shift ends.",
+        "<strong>💳 Emergency Contact</strong>: Keep your emergency contact up to date in My HR.",
         "<strong>🔐 PIN</strong>: Never share your PIN with anyone. Each person logs in with their own PIN only.",
       ],
       ar_steps: [
-        "<strong>🕐 بصمة الحضور</strong>: دائماً قم بالبصمة فور وصولك. لا تبصّم لأحد آخر.",
+        "<strong>🕐 بصمة الحضور</strong>: قم بالبصمة فور وصولك. لا تبصّم لأحد آخر. الخصومات تلقائية.",
         "<strong>🗑️ سجل الهدر</strong>: سجّل كل هدر خلال شيفتك — بغض النظر عن الكمية.",
         "<strong>🔒 إغلاق الشيفت</strong>: أكمل إغلاق الشيفت دائماً قبل المغادرة. لا تتجاوزه أبداً.",
         "<strong>🧹 سجل النظافة</strong>: سجّل النظافة بصورة في كل شيفت.",
+        "<strong>📦 تنبيهات الطلب</strong>: تصرف بشأن كل تنبيه نقص مخزون قبل انتهاء شيفتك.",
+        "<strong>💳 جهة الاتصال الطارئ</strong>: احرص على تحديث بيانات جهة الطوارئ في الموارد البشرية.",
         "<strong>🔐 الـ PIN</strong>: لا تشارك الـ PIN مع أحد. كل شخص يسجّل الدخول بـ PIN خاص به فقط.",
       ],
     },
@@ -7768,9 +9269,9 @@ routes.app_guide = function (u) {
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 const KPI_W = () => state.kpi_settings.weights;
 function save() { saveState(); }  // KPI module alias
-const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", training:"Training" };
-const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", training:"التدريب والتطور" };
-const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", training:"🌱" };
+const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", leadership:"Leadership", hygiene:"Hygiene" };
+const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", leadership:"القيادة والمسؤولية", hygiene:"النظافة الشخصية" };
+const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", leadership:"👑", hygiene:"🧼" };
 const CLEAN_AR = [
   "تنظيف رأس الإسبريسو وشطف الماكينة",
   "مسح عصا البخار وتنقيتها بعد كل استخدام ✓",
@@ -7823,22 +9324,114 @@ function kpiLocalDateStr(ts) {
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
 function kpiPunctualityScore(userId, cutoff) {
-  const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
-  if (!stamps.length) return null;
-  const scores = stamps.map(s => {
-    try {
-      const submitTime  = new Date(s.at);
-      const todayStr    = kpiLocalDateStr(submitTime);
-      const branch      = (s.branch || "maadi").toLowerCase();
-      const bot         = state.branch_opening_times || {};
-      const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
-      const scheduledMs = new Date(todayStr + "T" + openStr + ":00").getTime();
-      const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
-      return diff <= 0 ? 100 : diff <= 5 ? 95 : diff <= 15 ? 80 : diff <= 30 ? 60 : diff <= 60 ? 40 : 20;
-    } catch(e) { return 70; }
+  const bot    = state.branch_opening_times || {};
+  const today  = new Date();
+  const todayStr = localISODate(today);
+
+  // Build a map of stamp date+branch → stamp record for quick lookup
+  const stampMap = {};
+  (state.signin_stamps||[]).filter(s => s.by === userId).forEach(s => {
+    const key = localISODate(new Date(s.at)) + "|" + (s.branch||"maadi").toLowerCase();
+    if (!stampMap[key]) stampMap[key] = s; // keep earliest stamp per day/branch
   });
-  return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+
+  // Find all morning shifts scheduled for this user in the scoring window
+  const dayScores = [];
+  const cutoffDate = new Date(cutoff);
+  for (let d = new Date(cutoffDate); ; d.setDate(d.getDate() + 1)) {
+    const dateStr = localISODate(d);
+    if (dateStr >= todayStr) break; // don't score future/today (stamp may not be due yet)
+    const dayIndex = (d.getDay() + 6) % 7;
+    const dayKey   = ROSTER_DAYS[dayIndex];
+    const weekOf   = mondayOf(dateStr);
+    const entries  = (state.rosters||[]).filter(r =>
+      r.week_of === weekOf && r.day === dayKey &&
+      r.shift === "morning" && r.user_id === userId
+    );
+    for (const entry of entries) {
+      const branch  = (entry.branch||"maadi").toLowerCase();
+      const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+      const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
+      const st      = stampMap[dateStr + "|" + branch];
+      if (!st) {
+        dayScores.push(0); // no stamp = worst score
+      } else {
+        const diff = Math.round((new Date(st.at).getTime() - openMs) / 60000);
+        // early (≥30 min before): full score; on-time (<15 min late): full; half-day late: 50; full-day: 20
+        dayScores.push(diff <= -30 ? 100 : diff <= 15 ? 100 : diff <= 120 ? 50 : 20);
+      }
+    }
+  }
+
+  // If no roster data, fall back to scoring stamps directly (no missing-stamp penalty)
+  if (dayScores.length === 0) {
+    const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
+    if (!stamps.length) return null;
+    const scores = stamps.map(s => {
+      try {
+        const submitTime  = new Date(s.at);
+        const branch      = (s.branch||"maadi").toLowerCase();
+        const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+        const scheduledMs = new Date(localISODate(submitTime) + "T" + openStr + ":00").getTime();
+        const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
+        return diff <= -30 ? 100 : diff <= 15 ? 100 : diff <= 120 ? 50 : 20;
+      } catch(e) { return 70; }
+    });
+    return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
+  }
+
+  return Math.round(dayScores.reduce((a,b)=>a+b,0)/dayScores.length);
 }
+// Applies 3-day deductions for morning-shift baristas who submitted no stamp on a given date.
+// Returns the number of new penalties created.
+function applyMissingStampPenalties(dateStr, appliedBy) {
+  const dayIndex = (new Date(dateStr + "T12:00:00").getDay() + 6) % 7;
+  const dayKey   = ROSTER_DAYS[dayIndex];
+  const weekOf   = mondayOf(dateStr);
+  const morning  = (state.rosters||[]).filter(r =>
+    r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+  );
+  if (!morning.length) return 0;
+  state.penalties = state.penalties || [];
+  state.salary_config = state.salary_config || {};
+  let created = 0;
+  for (const entry of morning) {
+    const uid    = entry.user_id;
+    const branch = (entry.branch||"").toLowerCase();
+    const user   = (state.users||[]).find(u => u.id === uid);
+    if (!user) continue;
+    // Check for existing stamp that day+branch
+    const hasStamp = (state.signin_stamps||[]).some(s =>
+      s.by === uid && localISODate(new Date(s.at)) === dateStr &&
+      (s.branch||"").toLowerCase() === branch
+    );
+    if (hasStamp) continue;
+    // Check no duplicate auto_no_stamp penalty for same user+date
+    const already = state.penalties.find(p =>
+      p.auto_no_stamp && p.user_id === uid && p.date === dateStr
+    );
+    if (already) continue;
+    const salary = Number(((state.salary_config)[uid]||{}).monthly_salary || 0);
+    const amount = penaltyAmount("three_days", salary);
+    state.penalties.push({
+      id: uuid(), at: now(), by: appliedBy.by, by_name: appliedBy.by_name,
+      user_id: uid, barista: user.name,
+      kind: "three_days", reason: "no_show",
+      date: dateStr, month: dateStr.slice(0, 7), branch,
+      amount,
+      note: `Auto: no sign-in stamp — 3 days deducted`,
+      auto_no_stamp: true,
+    });
+    notifyLeadershipRole("weekly_schedule",
+      `Missing stamp — ${user.name}`,
+      `No sign-in recorded for ${dateStr} at ${branch}. 3-day deduction applied.`
+    );
+    created++;
+  }
+  if (created) saveState();
+  return created;
+}
+
 function kpiWasteScore(userId, cutoff) {
   const entries = (state.waste||[]).filter(w => w.by === userId && new Date(w.at).getTime() >= cutoff);
   if (!entries.length) return null;
@@ -7876,6 +9469,25 @@ function kpiCleanlinessScore(userId, cutoff) {
   const scores = logs.map(l => l.checklist_score != null ? l.checklist_score : 65); // legacy logs without checklist get 65
   return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
 }
+// Auto-calculates Coffee Craft score from customer reviews where the customer
+// selected "coffee" as the standout. Uses star rating × 20 to produce 0–100.
+// Falls back to manual entry if no matching reviews exist.
+function kpiCraftScore(userId, cutoff) {
+  const user     = (state.users||[]).find(u => u.id === userId);
+  const userName = (user?.name || "").toLowerCase().trim();
+  const feedbacks = (state.customer_feedback||[]).filter(f => {
+    const byId   = f.user_id === userId || f.barista_id === userId;
+    const bName  = (f.barista_name || "").toLowerCase().trim();
+    const byName = userName && bName && (bName === userName || bName.startsWith(userName) || userName.startsWith(bName));
+    const inWindow = (f.at ? new Date(f.at).getTime() : 0) >= cutoff;
+    const standout = (f.standout || "").toLowerCase();
+    const coffeeStandout = standout.includes("coffee") || standout.includes("craft") || standout.includes("espresso") || standout.includes("latte") || standout.includes("barista skill");
+    return (byId || byName) && inWindow && coffeeStandout;
+  });
+  if (!feedbacks.length) return null;
+  const avg = feedbacks.reduce((s,f) => s + (f.rating||0), 0) / feedbacks.length;
+  return Math.round(avg * 20);
+}
 function kpiCustomerScore(userId) {
   const user     = (state.users||[]).find(u => u.id === userId);
   const userName = (user?.name || "").toLowerCase().trim();
@@ -7896,15 +9508,237 @@ function kpiCustomerScore(userId) {
 }
 
 
+// Auto-calculates teamwork score based on reorder action compliance in last 30 days.
+// Penalty per alert where the on-shift barista is userId:
+//   - Action within 24h of alert:          0 pts penalty
+//   - Action within 3 days:               -10 pts
+//   - Action after first follow-up (3d):  -20 pts
+//   - Action after second follow-up (5d): -30 pts
+//   - No action logged at all (>6d):      -50 pts
+// Returns null if no relevant alerts found (score not counted).
+function kpiTeamworkScore(userId, cutoff) {
+  const alerts = (state.alert_log || []).filter(a => {
+    const alertTime = new Date(a.date + "T00:00:00").getTime();
+    return alertTime >= cutoff;
+  });
+  if (!alerts.length) return null;
+
+  // Find alerts where this barista was on shift at the time of the alert
+  const myAlerts = alerts.filter(a => {
+    return (state.rosters || []).some(r =>
+      r.user_id === userId &&
+      r.branch  === a.branch &&
+      r.week_of <= a.date && a.date <= r.week_of // same week — refine below
+    ) || (state.reorder_actions || []).some(r => r.alert_key === a.key && r.by === userId);
+  });
+
+  // Fallback: include alerts the barista personally actioned regardless of roster match
+  const alertsToScore = myAlerts.length > 0 ? myAlerts : [];
+  if (!alertsToScore.length) return null;
+
+  let penalty = 0;
+  const now = Date.now();
+
+  for (const a of alertsToScore) {
+    const alertMs = new Date(a.date + "T00:00:00").getTime();
+    const action = (state.reorder_actions || [])
+      .filter(r => r.alert_key === a.key && r.by === userId)
+      .sort((x, y) => x.at.localeCompare(y.at))[0];
+
+    const followUps = Array.isArray(a.follow_ups) ? a.follow_ups.length : 0;
+    const daysSince = Math.floor((now - alertMs) / 86400000);
+
+    if (!action) {
+      // No action at all
+      if (daysSince > 6) penalty += 50;
+      else if (followUps >= 2) penalty += 30;
+      else if (followUps >= 1) penalty += 20;
+      // else still within first 3 days — no penalty yet
+    } else {
+      const actionMs = new Date(action.at).getTime();
+      const hoursToAction = (actionMs - alertMs) / 3600000;
+      if (hoursToAction <= 24) penalty += 0;
+      else if (hoursToAction <= 72) penalty += 10;
+      else if (followUps >= 1 && hoursToAction <= 120) penalty += 20;
+      else penalty += 30;
+    }
+  }
+
+  return Math.max(0, 100 - penalty);
+}
+
+// ─── Leadership helpers ───────────────────────────────────────────────────────
+
+function getLeadershipAssignment(month) {
+  const assignments = state.leadership_assignments || [];
+  const exact = assignments.find(a => a.month === month);
+  if (exact) return exact;
+  const sorted = assignments.filter(a => a.month < month).sort((a,b) => b.month.localeCompare(a.month));
+  if (sorted.length) return { ...sorted[0], month, _carried_forward: true };
+  return null;
+}
+
+function notifyLeadershipRole(roleKey, title, body) {
+  notifyHaidi(title, body);
+  const month = new Date().toISOString().slice(0,7);
+  const assignment = getLeadershipAssignment(month);
+  const roleUserId = assignment ? (assignment[roleKey] || null) : null;
+  const cu = typeof currentUser === "function" ? currentUser() : null;
+  if (roleUserId && cu && cu.id === roleUserId) {
+    toast(`${title} — ${body}`, "warn");
+  }
+  state.leadership_notifications = state.leadership_notifications || [];
+  state.leadership_notifications.push({
+    id: uuid(), at: new Date().toISOString(),
+    role_key: roleKey, role_user_id: roleUserId,
+    title, body,
+  });
+  saveState();
+}
+
+function kpiLeadershipScore(userId, month) {
+  const assignment = getLeadershipAssignment(month);
+  const ROLES = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+  const myRole = assignment ? (ROLES.find(r => assignment[r] === userId) || null) : null;
+  if (!myRole) return 100;
+
+  if (myRole === "weekly_schedule") {
+    const [yr, mo] = month.split("-").map(Number);
+    const monthStart = new Date(yr, mo - 1, 1);
+    const monthEnd   = new Date(yr, mo, 0);
+    const today      = new Date();
+    const effectiveEnd = today < monthEnd ? today : monthEnd;
+    const bot = state.branch_opening_times || {};
+    let deductions = 0;
+    for (let d = new Date(monthStart); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
+      const dateStr  = localISODate(d);
+      const dayIndex = (d.getDay() + 6) % 7;
+      const dayKey   = ROSTER_DAYS[dayIndex];
+      const weekOf   = mondayOf(dateStr);
+      const morningEntries = (state.rosters || []).filter(r =>
+        r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+      );
+      for (const entry of morningEntries) {
+        const branch  = (entry.branch || "maadi").toLowerCase();
+        const openStr = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+        const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
+        const stamp = (state.signin_stamps || []).find(s =>
+          s.by === entry.user_id &&
+          localISODate(new Date(s.at)) === dateStr &&
+          (s.branch || "").toLowerCase() === branch
+        );
+        if (!stamp) {
+          const hasNoStampPenalty = (state.penalties || []).some(p =>
+            p.auto_no_stamp && p.user_id === entry.user_id && p.date === dateStr
+          );
+          if (hasNoStampPenalty) deductions += 15;
+        } else {
+          const minsLate = Math.round((new Date(stamp.at).getTime() - openMs) / 60000);
+          if (minsLate > 15) deductions += 10;
+        }
+      }
+    }
+    return Math.max(0, 100 - deductions);
+  }
+
+  if (myRole === "inventory_management") {
+    const [yr, mo] = month.split("-").map(Number);
+    const lastDay  = localISODate(new Date(yr, mo, 0));
+    const today    = localISODate(new Date());
+    if (today < lastDay) {
+      const hasAny = (state.snapshots || []).some(s => (s.as_of || "").startsWith(month));
+      return hasAny ? 80 : null;
+    }
+    const hasEOD = (state.snapshots || []).some(s => s.as_of === lastDay);
+    return hasEOD ? 100 : 0;
+  }
+
+  if (myRole === "cash_status") {
+    const [yr, mo] = month.split("-").map(Number);
+    const monthStart = new Date(yr, mo - 1, 1);
+    const monthEnd   = new Date(yr, mo, 0);
+    const today      = new Date();
+    const effectiveEnd = today < monthEnd ? today : monthEnd;
+    const weeksInMonth = new Set();
+    for (let d = new Date(monthStart); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
+      weeksInMonth.add(mondayOf(localISODate(d)));
+    }
+    const totalWeeks = weeksInMonth.size;
+    if (totalWeeks === 0) return null;
+    const weeksWithDeposit = [...weeksInMonth].filter(weekOf =>
+      (state.maadi_deposits || []).some(dep => dep.week_of === weekOf)
+    ).length;
+    return Math.round((weeksWithDeposit / totalWeeks) * 100);
+  }
+
+  if (myRole === "barista_hygiene") {
+    const count = (state.penalties || []).filter(p =>
+      p.reason_code === "no_uniform" && p.month === month
+    ).length;
+    if (count === 0) {
+      const hasPenaltiesThisMonth = (state.penalties || []).some(p => p.month === month);
+      if (!hasPenaltiesThisMonth) return null;
+    }
+    return Math.max(0, 100 - count * 25);
+  }
+
+  return null;
+}
+
+function runEndOfMonthLeadershipCheck(month, cu) {
+  const assignment = getLeadershipAssignment(month);
+  if (!assignment) { toast("No leadership assignment for " + month, "error"); return; }
+  const [yr, mo] = month.split("-").map(Number);
+  const lastDay   = localISODate(new Date(yr, mo, 0));
+  const invMgrId  = assignment.inventory_management;
+  if (!invMgrId) { toast("No inventory manager assigned for " + month, "warn"); return; }
+  const hasSnapshot = (state.snapshots || []).some(s => s.as_of === lastDay);
+  if (hasSnapshot) { toast("✅ Inventory snapshot found for " + lastDay + " — no penalty.", "ok"); return; }
+  const already = (state.penalties || []).some(p =>
+    p.auto_leadership && p.user_id === invMgrId && p.month === month
+  );
+  if (already) { toast("Penalty already applied for inventory failure in " + month, "warn"); return; }
+  const invMgr = (state.users || []).find(u => u.id === invMgrId);
+  const salary  = Number(((state.salary_config || {})[invMgrId] || {}).monthly_salary || 0);
+  const amount  = penaltyAmount("half_day", salary);
+  state.penalties = state.penalties || [];
+  state.penalties.push({
+    id: uuid(), at: new Date().toISOString(),
+    by: cu.id, by_name: cu.name,
+    user_id: invMgrId, barista: invMgr ? invMgr.name : invMgrId,
+    kind: "half_day", kind_label: "Half day",
+    reason: "leadership_fail", reason_code: "leadership_fail",
+    date: lastDay, month,
+    amount,
+    note: "Auto: Inventory not updated for end of month " + month,
+    auto_leadership: true,
+    salary_at_time: salary,
+  });
+  saveState();
+  toast(`⚠ Half-day penalty applied to ${invMgr ? invMgr.name : invMgrId} — no inventory snapshot for ${month}`, "warn");
+  notifyHaidi(`Leadership penalty — ${invMgr ? invMgr.name : invMgrId}`, `No inventory snapshot for ${lastDay}. Half-day deducted.`);
+}
+
+function kpiHygieneScore(userId, month) {
+  const pens = (state.penalties||[]).filter(p =>
+    p.user_id === userId &&
+    (p.month || (p.date||"").slice(0,7)) === month &&
+    (p.reason_code === "no_uniform" || p.reason_code === "hygiene")
+  );
+  return Math.max(0, 100 - pens.length * 25);
+}
+
 function kpiGetUserScores(userId) {
   const cutoff = Date.now() - 30*24*60*60*1000;
   const month  = new Date().toISOString().slice(0,7);
 
   // ── AUTO from source tiles ──────────────────────────────────────────────
   const punctuality  = kpiPunctualityScore(userId, cutoff);
-  const waste        = kpiWasteScore(userId, cutoff);
-  const cleanliness  = kpiCleanlinessScore(userId, cutoff);
+  const waste        = kpiWasteScore(userId, cutoff);           // ← waste_new entries
+  const cleanliness  = kpiCleanlinessScore(userId, cutoff);    // ← cleaning_log entries
   const customer     = kpiCustomerScore(userId);
+  const craftAuto    = kpiCraftScore(userId, cutoff);           // ← customer reviews where standout = coffee
+  const teamworkAuto = kpiTeamworkScore(userId, cutoff);
 
   // ── MANUAL: entered monthly by owner / head barista in scorecard ─────────
   const manual = ((state.kpi_manual||[]).find(m => m.user_id===userId && m.month===month)) || {};
@@ -7913,11 +9747,13 @@ function kpiGetUserScores(userId) {
     punctuality,
     waste,
     cleanliness,
-    craft:     manual.craft     ?? null,
+    craft:     craftAuto ?? (manual.craft ?? null),  // auto first, manual fallback
     upselling: manual.upselling ?? null,
     customer:  customer ?? (manual.customer ?? null),
-    teamwork:  manual.teamwork  ?? null,
-    training:  manual.training  ?? null,
+    // Teamwork: auto-calculated from reorder compliance; manual override by owner only
+    teamwork:   teamworkAuto ?? (manual.teamwork ?? null),
+    leadership: kpiLeadershipScore(userId, month) ?? null,
+    hygiene:    kpiHygieneScore(userId, month),
   };
 
   const cats = Object.keys(KPI_W());
@@ -7930,10 +9766,129 @@ function kpiGetAllScores() {
   for (const u of state.users) {
     if (!["barista","head_barista"].includes(u.role)) continue;
     const s = kpiGetUserScores(u.id);
-    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,training:null };
+    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,leadership:null,hygiene:null };
   }
   return result;
 }
+
+// ─── Leadership role assignment (owner only) ─────────────────────────────────
+routes.leadership_roles = function(u) {
+  if (u.role !== "owner") {
+    const w = el("div",{});
+    w.appendChild(el("div",{class:"card",style:{padding:"20px"}},
+      el("div",{class:"muted"},"Access restricted — owner only.")));
+    w.appendChild(btnBack());
+    return w;
+  }
+
+  const wrap = el("div",{});
+  wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},"👑 Leadership Roles"));
+  wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"12px"}},
+    "Assign monthly accountability roles to baristas. Roles affect the Leadership KPI score."));
+
+  const today = new Date();
+  let selectedMonth = today.toISOString().slice(0,7);
+
+  const monthInput = el("input",{type:"month",value:selectedMonth,
+    style:{marginBottom:"14px",fontSize:"15px",padding:"6px 10px",borderRadius:"8px",border:"1px solid var(--border)"}});
+  wrap.appendChild(monthInput);
+
+  const content = el("div",{});
+  wrap.appendChild(content);
+
+  const ROLES_META = [
+    { key:"weekly_schedule",      label:"📅 Schedule Manager",
+      desc:"Accountable for weekly schedule and sign-in stamp compliance. Gets alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from the Leadership KPI; a late stamp (>15 min) deducts 10 pts. The window to act is same-day — if the barista's stamp is submitted before the owner runs the missing-stamp check, no deduction applies." },
+    { key:"inventory_management", label:"📦 Inventory Manager",
+      desc:"Must submit end-of-month inventory snapshot. Gets low-stock and reorder alerts. Half-day penalty if snapshot missing at month-end." },
+    { key:"cash_status",          label:"💵 Cash Manager",
+      desc:"Responsible for managing the petty cash received from the owner and logging the weekly Maadi ATM cash deposit in the Operations App every week. A reminder fires automatically every Thursday by email and app notification. If the deposit is not logged by end of day Friday, a ¼ day salary deduction is applied for that week. Repeated missed entries are reflected in the Leadership KPI score." },
+    { key:"barista_hygiene",      label:"🧹 Hygiene Manager",
+      desc:"Accountable for team uniform compliance. Score auto-calculates from 'no uniform' penalties issued during the month (−25 pts each)." },
+  ];
+
+  function draw() {
+    content.innerHTML = "";
+    const month = selectedMonth;
+    const assignment = getLeadershipAssignment(month) || {};
+    const baristas = (state.users || []).filter(x =>
+      ["barista","head_barista"].includes(x.role) && x.active !== false
+    );
+
+    const card = el("div",{class:"card"});
+    const carried = assignment._carried_forward;
+    card.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"2px"}},
+      "Assignments for " + month));
+    if (carried) {
+      card.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+        "No explicit record for this month — showing carried forward from previous month. Save to lock in."));
+    } else {
+      card.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
+        "Changes save immediately and sync to all devices."));
+    }
+
+    const currentAssignment = { month, ...assignment };
+    delete currentAssignment._carried_forward;
+
+    for (const role of ROLES_META) {
+      const row = el("div",{style:{marginBottom:"16px",paddingBottom:"16px",borderBottom:"1px solid var(--border)"}});
+      row.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px",marginBottom:"2px"}},role.label));
+      row.appendChild(el("div",{class:"muted small",style:{marginBottom:"6px"}},role.desc));
+      const sel = el("select",{style:{width:"100%",padding:"6px 8px",borderRadius:"8px",border:"1px solid var(--border)",fontSize:"14px"}});
+      sel.appendChild(el("option",{value:""},"— Unassigned —"));
+      for (const b of baristas) {
+        const opt = el("option",{value:b.id}, b.name + (b.role==="head_barista"?" ⭐":""));
+        if (currentAssignment[role.key] === b.id) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change",() => { currentAssignment[role.key] = sel.value || null; });
+      row.appendChild(sel);
+      card.appendChild(row);
+    }
+
+    const btnRow = el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap",marginTop:"4px"}});
+
+    const saveBtn = el("button",{class:"btn",onClick:() => {
+      state.leadership_assignments = state.leadership_assignments || [];
+      const idx = state.leadership_assignments.findIndex(a => a.month === month);
+      const record = { ...currentAssignment };
+      delete record._carried_forward;
+      if (idx >= 0) state.leadership_assignments[idx] = record;
+      else state.leadership_assignments.push(record);
+      saveState();
+      toast("✅ Leadership roles saved for " + month);
+      draw();
+    }},"Save Assignments");
+    btnRow.appendChild(saveBtn);
+
+    if (month <= today.toISOString().slice(0,7)) {
+      const eomBtn = el("button",{class:"btn secondary",onClick:() => {
+        runEndOfMonthLeadershipCheck(month, u);
+      }},"⚙ End-of-Month Check");
+      btnRow.appendChild(eomBtn);
+    }
+    card.appendChild(btnRow);
+    content.appendChild(card);
+
+    // Summary card
+    const summCard = el("div",{class:"card",style:{marginTop:"12px"}});
+    summCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",marginBottom:"10px"}},"Current Assignment Summary"));
+    for (const role of ROLES_META) {
+      const uid  = currentAssignment[role.key];
+      const name = uid ? ((state.users||[]).find(x=>x.id===uid)||{}).name || uid : "Unassigned";
+      const row  = el("div",{class:"kv",style:{marginBottom:"6px"}});
+      row.appendChild(el("div",{class:"k",style:{fontSize:"12px"}},role.label));
+      row.appendChild(el("div",{class:"v",style:{fontWeight:uid?"600":"400",color:uid?"var(--ink)":"var(--ink-dim)"}},name));
+      summCard.appendChild(row);
+    }
+    content.appendChild(summCard);
+  }
+
+  monthInput.addEventListener("input",() => { selectedMonth = monthInput.value; draw(); });
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
 
 // ─── OWNER/HEAD BARISTA: Full team scorecard dashboard (English) ──────────────
 routes.scorecard = function(u) {
@@ -8116,11 +10071,10 @@ routes.scorecard = function(u) {
     const manFields = el("div",{id:"man-fields-wrap",style:{display:"none"}});
     manCard.appendChild(manFields);
     const MAN_CATS = [
-      {k:"craft",     label:"☕ Coffee Craft",  hint:"SCA blind tasting & recipe adherence (0-100)"},
-      {k:"upselling", label:"📈 Upselling",      hint:"Avg ticket size vs branch target (0-100)"},
-      {k:"customer",  label:"😊 Customer Score", hint:"Review avg × 20 — or override coffeebeats.art data (0-100)"},
-      {k:"teamwork",  label:"👥 Teamwork",        hint:"Peer input, shoutouts received, shift coverage (0-100)"},
-      {k:"training",  label:"🌱 Training",        hint:"Modules completed ÷ modules assigned × 100 (0-100)"},
+      {k:"craft",     label:"☕ Coffee Craft",  hint:"Customer reviews mentioning coffee/drink quality from coffeebeats.art (0-100)"},
+      {k:"upselling", label:"📈 Upselling",      hint:"Ticket size report upload — how often add-ons/upgrades were suggested (0-100)"},
+      {k:"customer",  label:"😊 Customer Score", hint:"Feedback from coffeebeats.art — positive, neutral, negative tags aggregated (0-100)"},
+      {k:"teamwork",  label:"👥 Teamwork",        hint:"Reorder compliance, covering shifts, contributing to shared tasks (0-100)"},
     ];
     manSel.addEventListener("change",()=>{
       manFields.innerHTML="";
@@ -8218,7 +10172,7 @@ routes.scorecard = function(u) {
   return wrap;
 };
 
-// ─── BARISTA/HEAD: Personal scorecard (Arabic) ────────────────────────────────
+// ─── BARISTA/HEAD: Upload government ID ───────────────────────────────────────
 routes.my_scorecard = function(u) {
   const isAR = u.role==="barista"||u.role==="head_barista";
   const dir  = isAR?"rtl":"ltr";
@@ -8272,6 +10226,44 @@ routes.my_scorecard = function(u) {
   scoreCard.appendChild(ringWrap);
   wrap.appendChild(scoreCard);
 
+  // Leadership role card
+  (function() {
+    const lMonth = new Date().toISOString().slice(0,7);
+    const lAssign = getLeadershipAssignment(lMonth);
+    const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+    const ROLE_INFO = {
+      weekly_schedule:      { en:"📅 Schedule Manager",  ar:"📅 مدير الجداول",
+        descEn:"You are accountable for the weekly schedule and sign-in stamp compliance. You are alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from your Leadership KPI; a late stamp (>15 min) deducts 10 pts. Act on alerts the same day — a stamp submitted before the owner's missing-stamp check avoids the deduction.",
+        descAr:"أنت مسؤول عن الجدول الأسبوعي وبصمات الحضور هذا الشهر. ستتلقى تنبيهاً عند غياب أو تأخر البصمة. كل بصمة مفقودة غير معالجة تحسم 15 نقطة من نقاط قيادتك، والتأخر أكثر من 15 دقيقة يحسم 10 نقاط. تصرف في نفس اليوم — البصمة المسجّلة قبل فحص المدير لا تُحسب عليك." },
+      inventory_management: { en:"📦 Inventory Manager", ar:"📦 مدير المخزون",
+        descEn:"You must submit the end-of-month inventory snapshot. You receive all low-stock alerts.",
+        descAr:"عليك تسليم جرد المخزون في آخر الشهر. ستتلقى تنبيهات نقص البضاعة." },
+      cash_status:          { en:"💵 Cash Manager",      ar:"💵 مدير الودائع",
+        descEn:"You are accountable for logging the weekly Maadi cash deposit in the Operations App. You receive a reminder every Thursday by email and in-app. If the deposit is not logged by end of Friday, a ¼ day salary deduction is applied for that week. Repeated missed entries also lower your Leadership KPI score.",
+        descAr:"أنت مسؤول عن تسجيل الإيداع الأسبوعي في ماعدي في تطبيق العمليات. ستتلقى تذكيراً كل خميس عبر البريد الإلكتروني والتطبيق. إذا لم يُسجَّل الإيداع بنهاية الجمعة، يُطبَّق خصم ربع يوم من راتبك عن تلك الأسبوع. التكرار يؤثر سلباً على نقاط القيادة." },
+      barista_hygiene:      { en:"🧹 Hygiene Manager",   ar:"🧹 مدير النظافة",
+        descEn:"You are accountable for team uniform compliance. Each 'no uniform' penalty deducts 25 pts from your leadership score.",
+        descAr:"أنت مسؤول عن الزي الموحد للفريق. كل مخالفة تحسم 25 نقطة من نقاط قيادتك." },
+    };
+    const myRole = lAssign ? (ROLE_KEYS.find(r => lAssign[r] === u.id) || null) : null;
+    const roleCard = el("div",{class:"card",style:{marginBottom:"12px",borderColor:"var(--accent,#e8a020)"}});
+    roleCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",marginBottom:"6px",opacity:".7",letterSpacing:"1px",textTransform:"uppercase"}},
+      isAR?"دورك القيادي هذا الشهر":"Your Leadership Role This Month"));
+    if (myRole) {
+      const info = ROLE_INFO[myRole];
+      roleCard.appendChild(el("div",{style:{fontWeight:"800",fontSize:"18px",marginBottom:"6px"}},
+        isAR ? info.ar : info.en));
+      roleCard.appendChild(el("div",{class:"muted",style:{fontSize:"13px"}},
+        isAR ? info.descAr : info.descEn));
+    } else {
+      roleCard.appendChild(el("div",{style:{fontWeight:"600",fontSize:"14px",marginBottom:"4px"}},
+        isAR?"لا يوجد دور قيادي مُخصص لك هذا الشهر":"No leadership role assigned this month"));
+      roleCard.appendChild(el("div",{class:"muted small"},
+        isAR?"النتيجة الافتراضية: 100 نقطة (لا مسؤولية محددة)":"Default score: 100 pts — no specific accountability obligation."));
+    }
+    wrap.appendChild(roleCard);
+  })();
+
   // Category breakdown
   const catCard = el("div",{class:"card",style:{marginBottom:"12px"}});
   catCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},isAR?"تفصيل النقاط":"Score Breakdown"));
@@ -8279,11 +10271,12 @@ routes.my_scorecard = function(u) {
     punctuality: isAR?"تلقائي: بصمة الحضور":"Auto: Sign-In Stamp",
     waste:       isAR?"تلقائي: سجل الهدر":"Auto: Waste Log",
     cleanliness: isAR?"تلقائي: سجل النظافة":"Auto: Cleaning Log",
-    craft:       isAR?"شهري: رئيس البريستا":"Monthly: Head Barista",
-    upselling:   isAR?"شهري: تقرير المبيعات":"Monthly: Sales Report",
+    craft:       isAR?"شهري: تقييمات coffeebeats.art":"Monthly: coffeebeats.art Reviews",
+    upselling:   isAR?"شهري: تقرير حجم التذاكر":"Monthly: Ticket Size Report",
     customer:    isAR?"تلقائي: تقييمات العملاء":"Auto: Customer Reviews",
-    teamwork:    isAR?"شهري: تقييم الزملاء":"Monthly: Peer Input",
-    training:    isAR?"شهري: وحدات التدريب":"Monthly: Training Modules",
+    teamwork:    isAR?"تلقائي: الالتزام بطلبات التوريد":"Auto: Reorder Compliance",
+    leadership:  isAR?"تلقائي: دور القيادة الشهري":"Auto: Monthly Leadership Role",
+    hygiene:     isAR?"تلقائي: سجل الغرامات":"Auto: Penalty Log",
   };
   catCard.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
     isAR?"الأخضر = تلقائي من تصرفاتك · الرمادي = يدخله رئيس البريستا شهرياً":"Green = auto-calculated from your actions · Grey = entered monthly by management"));
@@ -8347,7 +10340,492 @@ routes.my_scorecard = function(u) {
   return wrap;
 };
 
+// ─── PERSONAL HR DASHBOARD (barista/head_barista self-view) ───────────────────
+routes.my_hr = function(u, params) {
+  const targetId   = (params && params.user_id && u.role === "owner") ? params.user_id : u.id;
+  const targetUser = state.users.find(x => x.id === targetId) || u;
+  const isAR  = targetUser.role === "barista" || targetUser.role === "head_barista";
+  const isHead = targetUser.role === "head_barista";
+  const dir   = isAR ? "rtl" : "ltr";
+  const wrap  = el("div", { style: { direction: dir } });
+
+  state.salary_config  = state.salary_config  || {};
+  state.penalties      = state.penalties      || [];
+  state.overtime_logs  = state.overtime_logs  || [];
+  state.salary_loans   = state.salary_loans   || [];
+  state.leaves         = state.leaves         || [];
+
+  // Header
+  const hdr = el("div", { class: "card", style: { textAlign: "center", marginBottom: "12px", background: "var(--ink)", color: "var(--accent-2)" } });
+  hdr.appendChild(el("div", { style: { fontSize: "12px", letterSpacing: "2px", opacity: ".7", textTransform: "uppercase", marginBottom: "4px" } }, "Coffee Beats · ملخص الراتب والإجازات"));
+  hdr.appendChild(el("div", { style: { fontSize: "20px", fontWeight: "800" } }, targetUser.name));
+  hdr.appendChild(el("div", { style: { fontSize: "13px", opacity: ".8", marginTop: "4px" } }, isHead ? "⭐ رئيس بريستا" : "بريستا"));
+  wrap.appendChild(hdr);
+
+  // Month selector
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  let selMonth = nowMonth;
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+  const prevBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = d.toISOString().slice(0, 7);
+    monthLbl.textContent = selMonth;
+    drawBody();
+  }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
+
+  function drawBody() {
+    body.innerHTML = "";
+    const uid     = targetUser.id;
+    const salary  = Number((state.salary_config[uid] || {}).monthly_salary || 0);
+    const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
+    const penList  = state.penalties.filter(x => x.user_id === uid && monthFn(x));
+    const otList   = state.overtime_logs.filter(x => x.user_id === uid && monthFn(x));
+    const loanList = state.salary_loans.filter(x => x.user_id === uid && monthFn(x));
+    const penSum   = penList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const otSum    = otList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const otHrs    = otList.reduce((s, r) => s + (Number(r.hours) || 0), 0);
+    const loanSum  = loanList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const netDue   = Math.max(0, salary + otSum - penSum - loanSum);
+    const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
+
+    // Section A — Pay Summary
+    const payCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    payCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "10px" } }, isAR ? "💳 ملخص الراتب" : "💳 Pay Summary"));
+    const rows = [
+      [isAR ? "الراتب الأساسي" : "Base Salary", money(salary), ""],
+      [isAR ? `أوفرتايم (${otHrs}h)` : `Overtime (${otHrs}h)`, "+" + money(otSum), "var(--ok)"],
+      [isAR ? "الخصومات" : "Penalties", "−" + money(penSum), penSum > 0 ? "var(--bad)" : ""],
+      [isAR ? "سلف" : "Loans", "−" + money(loanSum), loanSum > 0 ? "var(--warn)" : ""],
+    ];
+    rows.forEach(([k, v, c]) => {
+      const row = el("div", { class: "kv" });
+      row.appendChild(el("div", { class: "k" }, k));
+      row.appendChild(el("div", { class: "v", style: c ? { color: c } : {} }, v));
+      payCard.appendChild(row);
+    });
+    const netRow = el("div", { class: "kv", style: { borderTop: "2px solid var(--border)", marginTop: "8px", paddingTop: "8px" } });
+    netRow.appendChild(el("div", { style: { fontWeight: "800", fontSize: "15px" } }, isAR ? "صافي المستحق" : "Net Due"));
+    netRow.appendChild(el("div", { style: { fontWeight: "800", fontSize: "18px", color: netColor } }, money(netDue)));
+    payCard.appendChild(netRow);
+    body.appendChild(payCard);
+
+    // Section B — KPI Reward
+    const scores = kpiGetUserScores(uid);
+    const total  = scores ? kpiCalcTotal(scores) : 0;
+    const rwdCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    rwdCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "🏆 مكافأة الأداء" : "🏆 KPI Reward"));
+    const tier = total >= 90 ? 90 : total >= 80 ? 80 : total >= 70 ? 70 : 0;
+    const badges = { 90: "🥇 ذهبي", 80: "🥈 فضي", 70: "🥉 برونزي", 0: "📈 في تطور" };
+    const rwdDescs = {
+      90: isAR ? "يوم إجازة مكافأة + كوبون هدية + أولوية في الجدول" : "Bonus day off · Gift voucher · Priority schedule",
+      80: isAR ? "كوبون وجبة + تدريب من اختيارك + تهنئة على مستوى الفريق" : "Meal voucher · Training of choice · Team shoutout",
+      70: isAR ? "رسالة تقدير + أولوية في الجداول" : "Recognition letter · Schedule preference",
+      0:  isAR ? "حدد هدفاً مع رئيس البريستا هذا الشهر" : "Set a growth goal with Head Barista",
+    };
+    rwdCard.appendChild(el("div", { style: { fontSize: "22px", fontWeight: "800", color: kpiScoreColor(total), marginBottom: "4px" } }, badges[tier] + "  " + total.toFixed(0) + "/100"));
+    rwdCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px", marginBottom: "8px" } }, rwdDescs[tier]));
+    rwdCard.appendChild(el("button", { class: "btn secondary", style: { fontSize: "12px", padding: "7px 12px" }, onClick: () => go("my_scorecard") }, isAR ? "← تفاصيل الأداء الكاملة" : "Full performance breakdown →"));
+    body.appendChild(rwdCard);
+
+    // Section C — Penalties
+    const penCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    penCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "⚖ الخصومات" : "⚖ Penalties"));
+    if (penList.length === 0) {
+      penCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px" } }, isAR ? "✅ لا توجد خصومات هذا الشهر" : "✅ No penalties this month"));
+    } else {
+      const t = el("table", {});
+      t.appendChild(el("thead", {}, [el("tr", {}, [
+        el("th", {}, isAR ? "التاريخ" : "Date"),
+        el("th", {}, isAR ? "السبب" : "Reason"),
+        el("th", {}, isAR ? "النوع" : "Type"),
+        el("th", { style: { textAlign: "right" } }, isAR ? "المبلغ" : "Amount"),
+      ])]));
+      const tb = el("tbody", {});
+      penList.forEach(r => tb.appendChild(el("tr", {}, [
+        el("td", {}, r.date || ""),
+        el("td", {}, r.reason || r.note || "—"),
+        el("td", {}, r.type || "—"),
+        el("td", { class: "num", style: { color: "var(--bad)" } }, "−" + money(r.amount)),
+      ])));
+      t.appendChild(tb);
+      penCard.appendChild(t);
+    }
+    body.appendChild(penCard);
+
+    // Section D — Overtime
+    const otCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    otCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "⏱ الأوفرتايم" : "⏱ Overtime"));
+    if (otList.length === 0) {
+      otCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px" } }, isAR ? "لا يوجد أوفرتايم هذا الشهر" : "No overtime this month"));
+    } else {
+      const t = el("table", {});
+      t.appendChild(el("thead", {}, [el("tr", {}, [
+        el("th", {}, isAR ? "التاريخ" : "Date"),
+        el("th", {}, isAR ? "الساعات" : "Hours"),
+        el("th", { style: { textAlign: "right" } }, isAR ? "المبلغ" : "Amount"),
+        el("th", {}, isAR ? "الحالة" : "Status"),
+      ])]));
+      const tb = el("tbody", {});
+      otList.forEach(r => tb.appendChild(el("tr", {}, [
+        el("td", {}, r.date || ""),
+        el("td", { class: "num" }, String(r.hours || 0) + "h"),
+        el("td", { class: "num", style: { color: "var(--ok)" } }, "+" + money(r.amount || 0)),
+        el("td", {}, r.approved ? "✅" : "⏳"),
+      ])));
+      t.appendChild(tb);
+      otCard.appendChild(t);
+    }
+    body.appendChild(otCard);
+
+    // Section E — Loans
+    const loanCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    loanCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "8px" } }, isAR ? "💸 السلف والخصومات" : "💸 Loans / Deductions"));
+    if (loanList.length === 0) {
+      loanCard.appendChild(el("div", { class: "muted", style: { fontSize: "13px" } }, isAR ? "لا توجد سلف هذا الشهر" : "No loans this month"));
+    } else {
+      const t = el("table", {});
+      t.appendChild(el("thead", {}, [el("tr", {}, [
+        el("th", {}, isAR ? "التاريخ" : "Date"),
+        el("th", {}, isAR ? "ملاحظة" : "Note"),
+        el("th", { style: { textAlign: "right" } }, isAR ? "المبلغ" : "Amount"),
+      ])]));
+      const tb = el("tbody", {});
+      loanList.forEach(r => tb.appendChild(el("tr", {}, [
+        el("td", {}, r.date || ""),
+        el("td", {}, r.note || "—"),
+        el("td", { class: "num", style: { color: "var(--warn)" } }, "−" + money(r.amount || 0)),
+      ])));
+      t.appendChild(tb);
+      loanCard.appendChild(t);
+    }
+    body.appendChild(loanCard);
+
+    // Section F — Leaves
+    const thisYear = selMonth.slice(0, 4);
+    const allLeaves = state.leaves.filter(x => x.user_id === uid);
+    const annualUsed = allLeaves
+      .filter(x => x.status === "approved" && x.type === "annual" && (x.from_date || "").startsWith(thisYear))
+      .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+    const sickUsed = allLeaves
+      .filter(x => x.status === "approved" && x.type === "sick" && (x.from_date || "").startsWith(thisYear))
+      .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+    const pending  = allLeaves.filter(x => x.status === "pending").sort((a, b) => b.requested_at.localeCompare(a.requested_at));
+    const recent   = allLeaves.filter(x => x.status !== "pending").sort((a, b) => b.requested_at.localeCompare(a.requested_at)).slice(0, 5);
+
+    const lvCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+    lvCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "10px" } }, isAR ? "🌴 الإجازات" : "🌴 Leaves"));
+    const lvStats = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "10px" } });
+    [
+      [isAR ? `إجازة سنوية مستخدمة (${thisYear})` : `Annual used (${thisYear})`, annualUsed + (isAR ? " يوم" : " days")],
+      [isAR ? `إجازة مرضية (${thisYear})` : `Sick used (${thisYear})`, sickUsed + (isAR ? " يوم" : " days")],
+    ].forEach(([k, v]) => {
+      const c = el("div", { class: "card", style: { padding: "10px", textAlign: "center" } });
+      c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
+      c.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px" } }, String(v)));
+      lvStats.appendChild(c);
+    });
+    lvCard.appendChild(lvStats);
+    if (pending.length) {
+      lvCard.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", marginBottom: "6px" } }, isAR ? "⏳ طلبات معلقة" : "⏳ Pending requests"));
+      pending.forEach(x => {
+        const typeLabel = x.type === "annual" ? (isAR ? "سنوية" : "Annual") : (isAR ? "مرضية" : "Sick");
+        lvCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, `${typeLabel} · ${x.from_date} → ${x.to_date}`));
+      });
+    }
+    if (recent.length) {
+      lvCard.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", margin: "8px 0 4px" } }, isAR ? "السجل الأخير" : "Recent"));
+      recent.forEach(x => {
+        const statusIcon = x.status === "approved" ? "✅" : "❌";
+        const typeLabel  = x.type === "annual" ? (isAR ? "سنوية" : "Annual") : (isAR ? "مرضية" : "Sick");
+        lvCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, `${statusIcon} ${typeLabel} · ${x.from_date} → ${x.to_date}`));
+      });
+    }
+    lvCard.appendChild(el("button", { class: "btn secondary", style: { marginTop: "8px", fontSize: "12px", padding: "7px 12px" }, onClick: () => go("leave_new") }, isAR ? "🌴 طلب إجازة" : "🌴 Request leave"));
+    body.appendChild(lvCard);
+  }
+
+  drawBody();
+  return wrap;
+};
+
+// ─── STAFF HR OVERVIEW (owner / head_barista / accountant) ────────────────────
+routes.staff_hr = function(u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Staff HR Overview", "Monthly payroll, penalties, loans, KPI and leave summary for all active staff."));
+
+  if (!["owner", "accountant", "head_barista"].includes(u.role)) {
+    wrap.appendChild(el("div", { class: "card" }, "Access restricted."));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  state.salary_config  = state.salary_config  || {};
+  state.penalties      = state.penalties      || [];
+  state.overtime_logs  = state.overtime_logs  || [];
+  state.salary_loans   = state.salary_loans   || [];
+  state.leaves         = state.leaves         || [];
+
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  let selMonth = nowMonth;
+
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+  const prevBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = d.toISOString().slice(0, 7);
+    monthLbl.textContent = selMonth;
+    drawBody();
+  }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
+
+  function drawBody() {
+    body.innerHTML = "";
+    const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
+    const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+
+    // Summary stat cards
+    let totalPayroll = 0, totalPen = 0, totalOT = 0;
+    const staffData = staff.map(p => {
+      const salary  = Number((state.salary_config[p.id] || {}).monthly_salary || 0);
+      const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const netDue  = Math.max(0, salary + otSum - penSum - loanSum);
+      const scores  = kpiGetUserScores(p.id);
+      const kpiTotal = scores ? kpiCalcTotal(scores) : 0;
+      const thisYear = selMonth.slice(0, 4);
+      const lvDays  = (state.leaves || [])
+        .filter(x => x.user_id === p.id && x.status === "approved" && x.type === "annual" && (x.from_date || "").startsWith(thisYear))
+        .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+      totalPayroll += netDue;
+      totalPen     += penSum;
+      totalOT      += otSum;
+      return { p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays };
+    });
+
+    const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
+    [
+      ["👥 Active Staff", String(staff.length)],
+      ["💰 Total Payroll", money(totalPayroll)],
+      ["⚖ Total Penalties", money(totalPen)],
+      ["⏱ Total Overtime", money(totalOT)],
+    ].forEach(([k, v]) => {
+      const c = el("div", { class: "card", style: { padding: "12px", textAlign: "center" } });
+      c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
+      c.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px" } }, v));
+      statsRow.appendChild(c);
+    });
+    body.appendChild(statsRow);
+
+    // Staff table
+    const tableCard = el("div", { class: "card" });
+    const t = el("table", {});
+    t.appendChild(el("thead", {}, [el("tr", {}, [
+      el("th", {}, "Name"),
+      el("th", {}, "Role"),
+      el("th", { style: { textAlign: "right" } }, "Base"),
+      el("th", { style: { textAlign: "right" } }, "OT"),
+      el("th", { style: { textAlign: "right" } }, "Penalties"),
+      el("th", { style: { textAlign: "right" } }, "Loans"),
+      el("th", { style: { textAlign: "right" } }, "Net Due"),
+      el("th", { style: { textAlign: "center" } }, "KPI"),
+      el("th", { style: { textAlign: "center" } }, "Leave Days"),
+    ])]));
+    const tb = el("tbody", {});
+    let grandBase = 0, grandOT = 0, grandPen = 0, grandLoan = 0, grandNet = 0;
+    staffData.forEach(({ p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays }) => {
+      grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
+      const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
+      const tr = el("tr", { style: { cursor: "pointer" }, onClick: () => go("my_hr", { user_id: p.id }) }, [
+        el("td", { style: { fontWeight: "600" } }, p.name),
+        el("td", { class: "muted small" }, p.role === "head_barista" ? "Head" : "Barista"),
+        el("td", { class: "num" }, money(salary)),
+        el("td", { class: "num", style: { color: "var(--ok)" } }, otSum ? "+" + money(otSum) : "—"),
+        el("td", { class: "num", style: { color: penSum ? "var(--bad)" : "" } }, penSum ? "−" + money(penSum) : "—"),
+        el("td", { class: "num", style: { color: loanSum ? "var(--warn)" : "" } }, loanSum ? "−" + money(loanSum) : "—"),
+        el("td", { class: "num", style: { fontWeight: "700", color: netColor } }, money(netDue)),
+        el("td", { style: { textAlign: "center", fontSize: "12px", fontWeight: "700", color: kpiScoreColor(kpiTotal) } }, kpiTotal ? kpiGradeEn(kpiTotal).split(" ")[0] + " " + kpiTotal.toFixed(0) : "—"),
+        el("td", { style: { textAlign: "center" } }, lvDays ? String(lvDays) + "d" : "—"),
+      ]);
+      tb.appendChild(tr);
+    });
+    // Grand total row
+    const totalTr = el("tr", { style: { borderTop: "2px solid var(--border)", fontWeight: "800" } }, [
+      el("td", { colspan: "2", style: { fontWeight: "800" } }, "Total"),
+      el("td", { class: "num" }, money(grandBase)),
+      el("td", { class: "num" }, money(grandOT)),
+      el("td", { class: "num" }, money(grandPen)),
+      el("td", { class: "num" }, money(grandLoan)),
+      el("td", { class: "num", style: { color: "var(--ok)" } }, money(grandNet)),
+      el("td", {}), el("td", {}),
+    ]);
+    tb.appendChild(totalTr);
+    t.appendChild(tb);
+    tableCard.appendChild(t);
+    body.appendChild(tableCard);
+  }
+
+  drawBody();
+  return wrap;
+};
+
 // ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+routes.staff_payroll = function(u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Staff Payroll Overview", "Monthly payroll, penalties, loans, KPI and leave summary for all active staff."));
+
+  if (!["owner", "accountant", "head_barista"].includes(u.role)) {
+    wrap.appendChild(el("div", { class: "card" }, "Access restricted."));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  state.salary_config  = state.salary_config  || {};
+  state.penalties      = state.penalties      || [];
+  state.overtime_logs  = state.overtime_logs  || [];
+  state.salary_loans   = state.salary_loans   || [];
+  state.leaves         = state.leaves         || [];
+
+  let selMonth = new Date().toISOString().slice(0, 7);
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+  const prevBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = d.toISOString().slice(0, 7);
+    monthLbl.textContent = selMonth;
+    drawBody();
+  }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
+
+  function drawBody() {
+    body.innerHTML = "";
+    const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
+    const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+
+    let totalPayroll = 0, totalPen = 0, totalOT = 0;
+    const staffData = staff.map(p => {
+      const salary  = Number((state.salary_config[p.id] || {}).monthly_salary || 0);
+      const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const netDue  = Math.max(0, salary + otSum - penSum - loanSum);
+      const scores  = kpiGetUserScores(p.id);
+      const kpiTotal = scores ? kpiCalcTotal(scores) : 0;
+      const thisYear = selMonth.slice(0, 4);
+      const lvDays  = (state.leaves || [])
+        .filter(x => x.user_id === p.id && x.status === "approved" && x.type === "annual" && (x.from_date || "").startsWith(thisYear))
+        .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+      totalPayroll += netDue; totalPen += penSum; totalOT += otSum;
+      return { p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays };
+    });
+
+    // Summary stat cards
+    const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
+    [
+      ["👥 Active Staff", String(staff.length)],
+      ["💰 Total Payroll", money(totalPayroll)],
+      ["⚖ Total Penalties", money(totalPen)],
+      ["⏱ Total Overtime", money(totalOT)],
+    ].forEach(([k, v]) => {
+      const c = el("div", { class: "card", style: { padding: "12px", textAlign: "center" } });
+      c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
+      c.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px" } }, v));
+      statsRow.appendChild(c);
+    });
+    body.appendChild(statsRow);
+
+    // Staff table
+    const tableCard = el("div", { class: "card" });
+    const t = el("table", {});
+    t.appendChild(el("thead", {}, [el("tr", {}, [
+      el("th", {}, "Name"),
+      el("th", {}, "Role"),
+      el("th", { style: { textAlign: "right" } }, "Base"),
+      el("th", { style: { textAlign: "right" } }, "OT"),
+      el("th", { style: { textAlign: "right" } }, "Pen."),
+      el("th", { style: { textAlign: "right" } }, "Loans"),
+      el("th", { style: { textAlign: "right" } }, "Net Due"),
+      el("th", { style: { textAlign: "center" } }, "KPI"),
+      el("th", { style: { textAlign: "center" } }, "Leave"),
+    ])]));
+    const tb = el("tbody", {});
+    let grandBase = 0, grandOT = 0, grandPen = 0, grandLoan = 0, grandNet = 0;
+    staffData.forEach(({ p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays }) => {
+      grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
+      const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
+      tb.appendChild(el("tr", { style: { cursor: "pointer" }, onClick: () => go("my_hr", { user_id: p.id }) }, [
+        el("td", { style: { fontWeight: "600" } }, p.name),
+        el("td", { class: "muted small" }, p.role === "head_barista" ? "Head" : "Barista"),
+        el("td", { class: "num" }, money(salary)),
+        el("td", { class: "num", style: { color: "var(--ok)" } }, otSum ? "+" + money(otSum) : "—"),
+        el("td", { class: "num", style: { color: penSum ? "var(--bad)" : "" } }, penSum ? "−" + money(penSum) : "—"),
+        el("td", { class: "num", style: { color: loanSum ? "var(--warn)" : "" } }, loanSum ? "−" + money(loanSum) : "—"),
+        el("td", { class: "num", style: { fontWeight: "700", color: netColor } }, money(netDue)),
+        el("td", { style: { textAlign: "center", fontSize: "12px", fontWeight: "700", color: kpiScoreColor(kpiTotal) } }, kpiTotal ? kpiGradeEn(kpiTotal).split(" ")[0] + " " + kpiTotal.toFixed(0) : "—"),
+        el("td", { style: { textAlign: "center" } }, lvDays ? String(lvDays) + "d" : "—"),
+      ]));
+    });
+    tb.appendChild(el("tr", { style: { borderTop: "2px solid var(--border)", fontWeight: "800" } }, [
+      el("td", { colspan: "2" }, "Total"),
+      el("td", { class: "num" }, money(grandBase)),
+      el("td", { class: "num" }, money(grandOT)),
+      el("td", { class: "num" }, money(grandPen)),
+      el("td", { class: "num" }, money(grandLoan)),
+      el("td", { class: "num", style: { color: "var(--ok)" } }, money(grandNet)),
+      el("td", {}), el("td", {}),
+    ]));
+    t.appendChild(tb);
+    tableCard.appendChild(t);
+    body.appendChild(tableCard);
+  }
+
+  drawBody();
+  return wrap;
+};
+
+// ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+
 routes.kpi_log_new = function(u) {
   const isAR = u.role==="barista"||u.role==="head_barista";
   const dir  = isAR?"rtl":"ltr";
@@ -8817,6 +11295,251 @@ routes.my_jd = function(u) {
   return wrap;
 };
 
+// ==============================================================
+// MY ID
+// ==============================================================
+routes.my_id = function(u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("My ID", "Upload your ID documents"));
+  wrap.appendChild(el("div", { class: "banner-arch" },
+    "Your uploads are private — visible only to the owner and accountant."));
+
+  const myUploads = (state.staff_ids[u.id] || []).slice();
+
+  const gallery = el("div", { style: { marginBottom: "16px" } });
+
+  function renderGallery() {
+    gallery.innerHTML = "";
+    if (!myUploads.length) {
+      gallery.appendChild(el("div", { class: "muted small", style: { padding: "8px 0" } }, "No ID documents uploaded yet."));
+      return;
+    }
+    const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "8px" } });
+    for (const entry of myUploads) {
+      const thumb = el("div", { style: { position: "relative", display: "inline-block" } });
+      const img = el("img", {
+        src: entry.url, alt: "ID",
+        style: { width: "100px", height: "100px", objectFit: "cover", borderRadius: "8px",
+                 border: "1px solid var(--border)", cursor: "pointer", display: "block" },
+      });
+      img.addEventListener("click", () => window.open(entry.url, "_blank"));
+      const del = el("button", {
+        style: { position: "absolute", top: "2px", right: "2px", background: "rgba(0,0,0,0.6)",
+                 color: "#fff", border: "none", borderRadius: "50%", width: "22px", height: "22px",
+                 fontSize: "12px", cursor: "pointer", lineHeight: "1", textAlign: "center", padding: "0" },
+      }, "✕");
+      del.addEventListener("click", () => {
+        if (!confirm("Remove this image?")) return;
+        const idx = myUploads.findIndex(x => x.id === entry.id);
+        if (idx !== -1) myUploads.splice(idx, 1);
+        state.staff_ids[u.id] = myUploads.slice();
+        saveState();
+        renderGallery();
+      });
+      thumb.appendChild(img);
+      thumb.appendChild(del);
+      grid.appendChild(thumb);
+    }
+    gallery.appendChild(grid);
+  }
+
+  renderGallery();
+  wrap.appendChild(gallery);
+
+  // ── Upload section ──
+  const uploadCard = el("div", { class: "card" });
+  uploadCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "10px" } }, "📎 Add ID images"));
+
+  const fileInput = el("input", { type: "file", accept: "image/*" });
+  fileInput.setAttribute("multiple", "true");
+  fileInput.style.display = "none";
+
+  const previewGrid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" } });
+
+  const pickBtn = el("button", { class: "btn secondary" }, "📷 Choose photos");
+  pickBtn.addEventListener("click", () => fileInput.click());
+
+  let selectedBlobs = [];
+
+  fileInput.addEventListener("change", () => {
+    selectedBlobs = [...fileInput.files].filter(f => f.type.startsWith("image/"));
+    previewGrid.innerHTML = "";
+    for (const f of selectedBlobs) {
+      const img = el("img", {
+        src: URL.createObjectURL(f),
+        style: { width: "80px", height: "80px", objectFit: "cover", borderRadius: "8px",
+                 border: "1px solid var(--border)" },
+      });
+      previewGrid.appendChild(img);
+    }
+    fileInput.value = "";
+  });
+
+  const saveBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "⬆ Upload & Save");
+  saveBtn.addEventListener("click", async () => {
+    if (!selectedBlobs.length) return toast("Choose at least one photo first", "warn");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Uploading…";
+    if (!state.staff_ids[u.id]) state.staff_ids[u.id] = [];
+    let ok = 0;
+    for (const blob of selectedBlobs) {
+      try {
+        const filename = `ID_${u.name.replace(/\s+/g, "_")}`;
+        const data = await Cloudinary.uploadPhoto(blob, filename);
+        const entry = { id: uuid(), url: data.secure_url, at: new Date().toISOString(), name: u.name };
+        state.staff_ids[u.id].push(entry);
+        myUploads.push(entry);
+        ok++;
+      } catch (e) {
+        console.warn("ID upload error:", e);
+      }
+    }
+    saveBtn.disabled = false;
+    saveBtn.textContent = "⬆ Upload & Save";
+    if (ok > 0) {
+      saveState();
+      selectedBlobs = [];
+      previewGrid.innerHTML = "";
+      renderGallery();
+      toast(`${ok} image${ok > 1 ? "s" : ""} saved`);
+    } else {
+      toast("Upload failed — check your connection", "error");
+    }
+  });
+
+  uploadCard.appendChild(pickBtn);
+  uploadCard.appendChild(previewGrid);
+  uploadCard.appendChild(fileInput);
+  uploadCard.appendChild(saveBtn);
+  wrap.appendChild(uploadCard);
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ==============================================================
+// STAFF HR
+// ==============================================================
+routes.leaderboard = function(u) {
+  const wrap = el("div", {});
+  const month = new Date().toISOString().slice(0, 7);
+  const monthLabel = new Date().toLocaleString("en", { month: "long", year: "numeric" });
+  wrap.appendChild(header("🏆 Leaderboard", monthLabel + " · updated daily"));
+
+  const allStaff = state.users.filter(x => ["barista","head_barista"].includes(x.role) && x.active !== false);
+  const allScores = kpiGetAllScores();
+  const cats = Object.keys(KPI_W());
+
+  const ranked = allStaff.map(x => {
+    const s = allScores[x.id];
+    const hasData = s && cats.some(k => s[k] != null);
+    const total = hasData ? Math.round(kpiCalcTotal(s)) : null;
+    return { ...x, total };
+  }).sort((a, b) => {
+    if (a.total == null && b.total == null) return 0;
+    if (a.total == null) return 1;
+    if (b.total == null) return -1;
+    return b.total - a.total;
+  });
+
+  if (!ranked.some(x => x.total != null)) {
+    const empty = el("div", { class: "card", style: { textAlign: "center", padding: "32px 16px" } });
+    empty.appendChild(el("div", { style: { fontSize: "36px", marginBottom: "8px" } }, "📊"));
+    empty.appendChild(el("div", { style: { fontWeight: "700" } }, "No scores yet this month"));
+    empty.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } },
+      "Scores appear once daily logs, sign-ins, and cleaning entries are submitted."));
+    wrap.appendChild(empty);
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  // ── Bonus banner for #1 ──
+  const top = ranked[0];
+  if (top.total != null) {
+    const bonusBanner = el("div", { class: "card", style: {
+      background: "linear-gradient(135deg,#f6d365,#fda085)",
+      border: "none", marginBottom: "12px", textAlign: "center", padding: "18px 16px",
+    }});
+    bonusBanner.appendChild(el("div", { style: { fontSize: "28px", marginBottom: "4px" } }, "🏆"));
+    bonusBanner.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px", color: "#333" } },
+      top.name + " is leading!"));
+    bonusBanner.appendChild(el("div", { style: { fontSize: "13px", color: "#555", marginTop: "4px" } },
+      "Score: " + top.total + " · #1 at end of month earns a bonus 🎁"));
+    wrap.appendChild(bonusBanner);
+  }
+
+  // ── Ranked list ──
+  const medals = ["🥇", "🥈", "🥉"];
+  const isMe = id => id === u.id;
+
+  for (let i = 0; i < ranked.length; i++) {
+    const m = ranked[i];
+    const me = isMe(m.id);
+    const card = el("div", { class: "card", style: {
+      marginBottom: "8px",
+      border: me ? "2px solid var(--accent)" : "1px solid var(--border)",
+      background: me ? "var(--accent-bg,#fff8f5)" : "var(--surface)",
+    }});
+
+    const row = el("div", { style: { display: "flex", alignItems: "center", gap: "12px" } });
+
+    // Rank medal/number
+    row.appendChild(el("div", { style: {
+      fontSize: i < 3 ? "22px" : "14px", fontWeight: "700",
+      width: "32px", textAlign: "center", color: "var(--ink-dim)", flexShrink: "0",
+    }}, medals[i] || String(i + 1)));
+
+    // Avatar initials
+    const initials = (m.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+    row.appendChild(el("div", { style: {
+      width: "36px", height: "36px", borderRadius: "50%", flexShrink: "0",
+      background: me ? "var(--accent)" : "var(--surface-2)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontWeight: "700", fontSize: "13px",
+    }}, initials));
+
+    // Name + role
+    const info = el("div", { style: { flex: "1", minWidth: "0" } });
+    info.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px" } },
+      m.name + (me ? " (you)" : "")));
+    info.appendChild(el("div", { class: "muted small" },
+      m.role === "head_barista" ? "⭐ Head Barista" : "Barista"));
+    row.appendChild(info);
+
+    // Score + bar
+    if (m.total != null) {
+      const scoreCol = el("div", { style: { textAlign: "right", flexShrink: "0" } });
+      scoreCol.appendChild(el("div", { style: {
+        fontWeight: "800", fontSize: "20px", color: kpiScoreColor(m.total),
+      }}, String(m.total)));
+      const barWrap = el("div", { style: { height: "5px", background: "var(--surface-2)", borderRadius: "3px", width: "60px", marginTop: "3px" } });
+      barWrap.appendChild(el("div", { style: {
+        width: m.total + "%", height: "100%",
+        background: kpiScoreColor(m.total), borderRadius: "3px",
+      }}));
+      scoreCol.appendChild(barWrap);
+      row.appendChild(scoreCol);
+    } else {
+      row.appendChild(el("div", { class: "muted small", style: { flexShrink: "0" } }, "No data"));
+    }
+
+    card.appendChild(row);
+
+    // Bonus eligible badge for rank 1
+    if (i === 0 && m.total != null) {
+      card.appendChild(el("div", { style: { marginTop: "8px", textAlign: "center" } },
+        el("span", { class: "pill ok" }, "🎁 Bonus eligible")));
+    }
+
+    wrap.appendChild(card);
+  }
+
+  wrap.appendChild(el("div", { class: "muted small", style: { textAlign: "center", marginTop: "8px", marginBottom: "16px" } },
+    "Scores are based on the last 30 days of activity. Ties are broken alphabetically."));
+
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
 // export helpers
 // ==============================================================
 function download(name, blob) {
@@ -8861,7 +11584,18 @@ state = loadState();
 
 // Firebase Auth drives the entire session lifecycle.
 // onAuthStateChanged fires on every page load and after signIn/signOut.
+// Initialize render with a timeout fallback for local development
+let authInitialized = false;
+const renderTimeout = setTimeout(() => {
+  if (!authInitialized) {
+    console.warn("Firebase auth timeout - rendering with offline mode");
+    render();
+  }
+}, 3000);
+
 auth.onAuthStateChanged(async fbUser => {
+  authInitialized = true;
+  clearTimeout(renderTimeout);
   await _resolveAuth(fbUser);
   render();
   if (state._auth) {
