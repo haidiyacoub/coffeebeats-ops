@@ -1615,18 +1615,14 @@ routes.home = function (u) {
     tiles.appendChild(tile("📦", "Reorder Actions", "Log supplier actions", () => go("reorder_action_new")));
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
     tiles.appendChild(sectionHeader("HR"));
-    tiles.appendChild(tile("🪪", "My ID", "Upload your ID documents", () => go("my_id")));
+    const _selfUsr = state.users.find(x => x.id === u.id);
+    const _hasId = (_selfUsr?.id_photo_urls || []).length > 0;
+    tiles.appendChild(tile("🪪", "My ID", _hasId ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "My Leaves", "View leave history", () => go("leave_list")));
     tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
     tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
     tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
-    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
-    tiles.appendChild(tile("📦", "Reorder Actions", "Log supplier actions", () => go("reorder_action_new")));
-    const _selfUsr = state.users.find(x => x.id === u.id);
-    const _hasId = (_selfUsr?.id_photo_urls || []).length > 0;
-    tiles.appendChild(tile("🪪", "My ID", _hasId ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
-    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
   }
 
   // ── Head barista: full frontline + management extras ──
@@ -1653,24 +1649,18 @@ routes.home = function (u) {
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
     tiles.appendChild(sectionHeader("HR"));
-    tiles.appendChild(tile("🪪", "My ID", "Upload your ID documents", () => go("my_id")));
     tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
     tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("🌴", "Request Leave", "Annual or sick leave", () => go("leave_new")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance dashboard", () => go("scorecard")));
     tiles.appendChild(tile("📊", "بطاقة أدائي", "نقاطي وتقدمي هذا الشهر", () => go("my_scorecard")));
-    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
-    tiles.appendChild(tile("👥", "Staff HR", "Payroll · penalties · leaves overview", () => go("staff_hr")));
-    tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
-    tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
-    tiles.appendChild(tile("👥", "Staff HR", "Payroll · penalties · leaves overview", () => go("staff_hr")));
-    tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
-    tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     const _selfUsrHB = state.users.find(x => x.id === u.id);
     const _hasIdHB = (_selfUsrHB?.id_photo_urls || []).length > 0;
     tiles.appendChild(tile("🪪", "My ID", _hasIdHB ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
     tiles.appendChild(tile("💰", "راتبي وإجازاتي", "الراتب · الخصومات · الإجازات", () => go("my_hr")));
+    tiles.appendChild(tile("👥", "Staff HR", "Payroll · penalties · leaves overview", () => go("staff_hr")));
+    tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
   }
 
   // ── Manager / Helper (Zawya only): no app tiles — drink allowance tracking only ──
@@ -1709,20 +1699,15 @@ routes.home = function (u) {
     tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("👑", "Leadership Roles", "Monthly accountability assignments", () => go("leadership_roles")));
-    tiles.appendChild(tile("💰", "Staff HR", "Payroll · penalties · leaves", () => go("staff_hr")));
     const _ownerUsr = state.users.find(x => x.id === u.id);
     const _ownerHasId = (_ownerUsr?.id_photo_urls || []).length > 0;
     tiles.appendChild(tile("🪪", "My ID", _ownerHasId ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
     tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
     tiles.appendChild(sectionHeader("HR"));
-    tiles.appendChild(tile("🪪", "My ID", "Upload your ID documents", () => go("my_id")));
-    tiles.appendChild(tile("🗂️", "Staff HR", "ID documents · all staff", () => go("staff_hr")));
-    tiles.appendChild(tile("👥", "Staff Payroll", "Monthly payroll · deductions · leaves", () => go("staff_payroll")));
+    tiles.appendChild(tile("💰", "Staff Payroll", "Monthly payroll · deductions · leaves", () => go("staff_payroll")));
     tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
-    tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
+    tiles.appendChild(tile("⚖️", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
-    tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
-    tiles.appendChild(tile("👑", "Leadership Roles", "Monthly accountability assignments", () => go("leadership_roles")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
   }
   wrap.appendChild(tiles);
