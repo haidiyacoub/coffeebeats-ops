@@ -95,6 +95,54 @@ exports.setStaffActive = onCall(async (request) => {
   return { ok: true };
 });
 
+// ─── updateStaffProfile ───────────────────────────────────────────────────────
+// Any signed-in user can update their own emergency_number.
+// Owners can additionally update name, role, branches, active, and emergency_number for anyone.
+exports.updateStaffProfile = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+  const { targetUid, name, role, branches, active, emergency_number } = request.data;
+  const callerUid = request.auth.uid;
+  const isOwner   = request.auth.token.role === "owner";
+  const isSelf    = callerUid === targetUid;
+
+  if (!isOwner && !isSelf) throw new HttpsError("permission-denied", "Not authorised.");
+
+  const db = getDb();
+
+  if (isOwner) {
+    // Owner can update everything
+    const staffUpdate   = {};
+    const publicUpdate  = {};
+    if (name              != null) { staffUpdate.name              = name;              publicUpdate.name      = name; }
+    if (role              != null) { staffUpdate.role              = role;              publicUpdate.role      = role; }
+    if (branches          != null) { staffUpdate.branches          = branches;          publicUpdate.branches  = branches; }
+    if (active            != null) { staffUpdate.active            = active;            publicUpdate.active    = active; }
+    if (emergency_number  != null) { staffUpdate.emergency_number  = emergency_number; }
+
+    if (Object.keys(staffUpdate).length) {
+      await db.collection("staff").doc(targetUid).update(staffUpdate);
+    }
+    if (Object.keys(publicUpdate).length) {
+      await db.collection("staff_public").doc(targetUid).update(publicUpdate);
+    }
+    if (role != null && branches != null) {
+      await getAuth().setCustomUserClaims(targetUid, { role, branches });
+    }
+    if (active != null) {
+      await getAuth().updateUser(targetUid, { disabled: !active });
+    }
+  } else {
+    // Self — only emergency_number allowed
+    if (emergency_number != null) {
+      await db.collection("staff").doc(targetUid).update({ emergency_number });
+    }
+  }
+
+  return { ok: true };
+});
+
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function _requireOwner(request) {
   if (!request.auth || request.auth.token.role !== "owner") {
@@ -102,7 +150,7 @@ function _requireOwner(request) {
   }
 }
 
-async function _createUser({ name, role, branches, pin, legacyId }) {
+async function _createUser({ name, role, branches, pin, legacyId, emergency_number }) {
   if (!name || !role || !pin) throw new HttpsError("invalid-argument", "name, role, and pin are required.");
 
   const validRoles = ["owner", "head_barista", "barista", "accountant", "manager", "helper"];
@@ -117,13 +165,14 @@ async function _createUser({ name, role, branches, pin, legacyId }) {
 
   await getDb().collection("staff").doc(uid).set({
     name, role,
-    branches:     branches || [],
-    active:       true,
+    branches:         branches || [],
+    active:           true,
     pin_hash,
-    deny_access:  [],
-    extra_access: [],
-    legacy_id:    legacyId || null,
-    created_at:   admin.firestore.FieldValue.serverTimestamp(),
+    deny_access:      [],
+    extra_access:     [],
+    legacy_id:        legacyId || null,
+    emergency_number: emergency_number || null,
+    created_at:       admin.firestore.FieldValue.serverTimestamp(),
   });
 
   await getDb().collection("staff_public").doc(uid).set({

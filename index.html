@@ -6108,20 +6108,21 @@ const MANAGEABLE_ROUTES = [
 
 routes.users = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Users", "View team members, manage access rights and ID photos."));
+  wrap.appendChild(header("Users", "View team · tap your own name to update your emergency contact."));
 
-  if (u.role !== "owner" && u.role !== "accountant") {
-    wrap.appendChild(el("div", { class: "card" }, "Access restricted — owner/accountant only."));
-    wrap.appendChild(btnBack());
-    return wrap;
+  // Admin controls visible only to owner/accountant
+  const isAdmin = u.role === "owner" || u.role === "accountant";
+
+  if (isAdmin) {
+    wrap.appendChild(el("div", { class: "banner-arch" },
+      "Staff are managed in Team Management (Settings \u2192 Team). Tap any member to edit their profile."));
+    const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" } });
+    btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => go("settings") }, "\u2699\ufe0f Go to Team Management"));
+    wrap.appendChild(btnRow);
+  } else {
+    wrap.appendChild(el("div", { class: "banner-arch" },
+      "Tap your name to update your emergency contact number."));
   }
-
-  wrap.appendChild(el("div", { class: "banner-arch" },
-    "Staff are managed in Team Management (Settings \u2192 Team). Use this screen to edit per-user access rights and view ID photos."));
-
-  const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" } });
-  btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => go("settings") }, "\u2699\ufe0f Go to Team Management"));
-  wrap.appendChild(btnRow);
 
   const list = el("div", { class: "list", style: { marginTop: "12px" } });
   const _currentMonth = new Date().toISOString().slice(0,7);
@@ -6161,28 +6162,137 @@ routes.users = function (u) {
     if ((usr.id_photo_urls || []).length > 0) {
       rowChildren.push(el("span", { class: "pill ok", style: { fontSize: "11px" } }, "\ud83e\udeb9 ID"));
     }
-    const rowOpts = u.role === "owner"
+    // Owner can edit anyone; any user can edit their own entry (emergency number)
+    const rowOpts = (u.role === "owner" || u.uid === usr.uid)
       ? { class: "row", onClick: () => editUser(usr) }
       : { class: "row" };
     list.appendChild(el("div", rowOpts, rowChildren));
+
   }
   wrap.appendChild(list); wrap.appendChild(btnBack());
 
   function editUser(usr) {
-    openPrompt({
-      title: `Edit ${usr.name}`,
-      fields: [
-        { key: "_note", label: `Role: ${usr.role} \xb7 Branches: ${(usr.branches||[]).join(",") || "\u2014"} \xb7 Tap buttons below to manage.`, type: "text", value: "", readonly: true },
-      ],
-      extraButtons: [
-        { label: "\ud83d\udd10 Access rights\u2026", onClick: () => editAccess(usr) },
-        { label: "\ud83e\udeb9 View / remove ID\u2026", onClick: () => staffIdSheet(usr) },
-      ],
-      onSubmit: () => {}
+    const isSelf  = u.uid === usr.uid;
+    const isOwner = u.role === "owner";
+    if (!isOwner && !isSelf) return toast("Access denied", "error");
+
+    const sheet = el("div", {});
+    sheet.appendChild(el("h2", {}, "Edit — " + usr.name));
+
+    // Role dropdown (owner only)
+    let roleEl = null;
+    if (isOwner) {
+      const rw = el("div", { style: { marginBottom: "14px" } });
+      rw.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "4px" } }, "Role"));
+      roleEl = el("select", { style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border,#ddd)", background: "var(--surface,#fff)", color: "var(--ink,#222)" } }, [
+        el("option", { value: "barista",      selected: usr.role === "barista"      ? "true" : null }, "Barista"),
+        el("option", { value: "head_barista", selected: usr.role === "head_barista" ? "true" : null }, "Head Barista"),
+        el("option", { value: "manager",      selected: usr.role === "manager"      ? "true" : null }, "Manager"),
+        el("option", { value: "helper",       selected: usr.role === "helper"       ? "true" : null }, "Helper"),
+        el("option", { value: "accountant",   selected: usr.role === "accountant"   ? "true" : null }, "Accountant"),
+        el("option", { value: "owner",        selected: usr.role === "owner"        ? "true" : null }, "Owner"),
+      ]);
+      rw.appendChild(roleEl); sheet.appendChild(rw);
+    }
+
+    // Branch checkboxes (owner only)
+    let cbMaadi = null, cbZawya = null;
+    if (isOwner) {
+      const bw = el("div", { style: { marginBottom: "14px" } });
+      bw.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "6px" } }, "Branch"));
+      const cur = usr.branches || [];
+      const row = el("div", { style: { display: "flex", gap: "20px" } });
+      const mkCb = (lbl, chk) => {
+        const lEl = el("label", { style: { display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" } });
+        const cb  = el("input", { type: "checkbox" });
+        cb.checked = chk;
+        lEl.appendChild(cb); lEl.appendChild(document.createTextNode(lbl));
+        return { wrap: lEl, cb };
+      };
+      const mP = mkCb("Maadi", cur.includes("maadi"));
+      const zP = mkCb("Zawya", cur.includes("zawya"));
+      cbMaadi = mP.cb; cbZawya = zP.cb;
+      row.appendChild(mP.wrap); row.appendChild(zP.wrap);
+      bw.appendChild(row); sheet.appendChild(bw);
+    }
+
+    // Emergency contact (self or owner)
+    const ew = el("div", { style: { marginBottom: "14px" } });
+    ew.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "4px" } }, "Emergency Contact Number"));
+    const emerInp = el("input", {
+      type: "tel", placeholder: "+20 1XX XXX XXXX",
+      value: usr.emergency_number || "",
+      style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border,#ddd)", background: "var(--surface,#fff)", color: "var(--ink,#222)", boxSizing: "border-box" }
     });
+    ew.appendChild(emerInp); sheet.appendChild(ew);
+
+    // Active toggle (owner only)
+    let activeEl = null;
+    if (isOwner) {
+      const aw = el("div", { style: { marginBottom: "16px" } });
+      aw.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "4px" } }, "Status"));
+      activeEl = el("select", { style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border,#ddd)", background: "var(--surface,#fff)", color: "var(--ink,#222)" } }, [
+        el("option", { value: "true",  selected: usr.active !== false ? "true" : null }, "Active"),
+        el("option", { value: "false", selected: usr.active === false  ? "true" : null }, "Disabled"),
+      ]);
+      aw.appendChild(activeEl); sheet.appendChild(aw);
+    }
+
+    // Save button
+    const saveBtn = el("button", { class: "btn", style: { width: "100%", marginBottom: "10px" } }, "Save");
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true; saveBtn.textContent = "Saving...";
+      try {
+        const payload = { targetUid: usr.uid, emergency_number: emerInp.value.trim() || null };
+        if (isOwner) {
+          payload.role     = roleEl.value;
+          payload.branches = [...(cbMaadi.checked ? ["maadi"] : []), ...(cbZawya.checked ? ["zawya"] : [])];
+          payload.active   = activeEl.value === "true";
+        }
+        await functions.httpsCallable("updateStaffProfile")(payload);
+        usr.emergency_number = payload.emergency_number;
+        if (isOwner) { usr.role = payload.role; usr.branches = payload.branches; usr.active = payload.active; }
+        const lc = (state.users || []).find(x => x.uid === usr.uid);
+        if (lc) Object.assign(lc, { emergency_number: payload.emergency_number, ...(isOwner ? { role: payload.role, branches: payload.branches, active: payload.active } : {}) });
+        await staffDir.load(); saveState();
+        toast("Saved"); closeSheet(); render();
+      } catch (e) { toast(e.message || "Save failed", "error"); }
+      saveBtn.disabled = false; saveBtn.textContent = "Save";
+    });
+    sheet.appendChild(saveBtn);
+
+    // Access rights (owner only)
+    if (isOwner) {
+      const ar = el("button", { class: "btn ghost", style: { width: "100%", marginBottom: "10px" } }, "Access rights...");
+      ar.addEventListener("click", () => editAccess(usr));
+      sheet.appendChild(ar);
+    }
+
+    // ID viewer
+    const idBtn = el("button", { class: "btn ghost", style: { width: "100%", marginBottom: "10px" } }, "View / remove ID...");
+    idBtn.addEventListener("click", () => staffIdSheet(usr));
+    sheet.appendChild(idBtn);
+
+    // Deactivate button (owner only, not self)
+    if (isOwner && !isSelf) {
+      const delBtn = el("button", { class: "btn bad", style: { width: "100%", marginBottom: "10px" } }, "Deactivate & remove access");
+      delBtn.addEventListener("click", async () => {
+        if (!confirm("Deactivate " + usr.name + "? They cannot log in but historical records are kept.")) return;
+        delBtn.disabled = true; delBtn.textContent = "Removing...";
+        try {
+          await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: false });
+          await staffDir.load();
+          toast(usr.name + " deactivated"); closeSheet(); render();
+        } catch (e) { toast(e.message || "Failed", "error"); delBtn.disabled = false; delBtn.textContent = "Deactivate & remove access"; }
+      });
+      sheet.appendChild(delBtn);
+    }
+
+    sheet.appendChild(el("button", { class: "btn ghost", style: { width: "100%" }, onClick: () => closeSheet() }, "Close"));
+    openSheet(sheet);
   }
 
-  function editAccess(usr) {
+    function editAccess(usr) {
     if (u.role !== "owner") return toast("Only the owner can edit access rights", "error");
     const sheet = el("div", {});
     sheet.appendChild(el("h2", {}, `Access rights \u2014 ${usr.name}`));
