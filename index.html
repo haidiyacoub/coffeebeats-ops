@@ -815,6 +815,14 @@ function migrateState(s) {
     s._migration_khaled_role_fixed = true;
   }
 
+  // One-time migration: rename "Signature Coffee" category → "Signature Drinks" in all recipes.
+  if (!s._migration_signature_drinks) {
+    if (Array.isArray(s.recipes)) {
+      s.recipes.forEach(r => { if (r.category === "Signature Coffee") r.category = "Signature Drinks"; });
+    }
+    s._migration_signature_drinks = true;
+  }
+
   // Seed Zawya staff Bakr (helper) & Mohamed (manager) if they don't exist yet.
   // Same PIN-aware check so renames are safe.
   // Both are Zawya-only with no app access but appear in the barista drink allowance list.
@@ -934,7 +942,7 @@ const STATE_CHUNKS = {
   overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:       ["photo_log", "assets"],
   kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
-  meta:        ["_seeded_ids", "_migration_khaled_role_fixed", "version", "created_at", "branch_opening_times"],
+  meta:        ["_seeded_ids", "_migration_khaled_role_fixed", "_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
 };
 
 function markDirty() {
