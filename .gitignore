@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V8
+.Trashes
+
+# Office temp lock files
+~$*
+
+# Claude local files
+.claude/
+
+# Business documents (not part of the web app)
+*.docx
+*.xlsx
+*.xls
+*.csv
+*.pdf
+
+# Old Google Sheets integration (replaced by Firebase)
+Google_Sheets_Sync_Setup/
+CoffeeBeats_AppsScript.gs
+
+# Claude skill files
+*.skill
+SKILL.md
+Skills/
+
+# Alternate / eval HTML pages
+index_coffeebeatsart.html
+zawya-item-filter-eval-review.html
+
+# Firebase / Node
+functions/node_modules/
+functions/package-lock.json
+firebase-debug*.log
+functions/firebase-debug*.log
+.firebase/

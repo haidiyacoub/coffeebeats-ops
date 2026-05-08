@@ -1,0 +1,1669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coffee Beats · Ops Scorecard — ops.coffeebeats.art</title>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&family=Georgia:ital@1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --peach: #EFBBA3;
+    --peach-light: #f7dcd1;
+    --peach-dark: #e0956f;
+    --charcoal: #333333;
+    --slate: #9AA0A1;
+    --slate-mid: #5F6668;
+    --cream: #EFECE5;
+    --soft-gray: #E8E8E8;
+    --white: #FFFFFF;
+    --green: #4CAF87;
+    --green-light: #e8f5ee;
+    --amber: #F0A500;
+    --amber-light: #fdf3dc;
+    --red: #E05A5A;
+    --red-light: #fdeaea;
+    --gold: #D4AF37;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Montserrat', sans-serif;
+    background: var(--cream);
+    color: var(--charcoal);
+    min-height: 100vh;
+  }
+
+  /* ── NAV ── */
+  .topbar {
+    background: var(--charcoal);
+    color: #fff;
+    padding: 0 2rem;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 12px rgba(0,0,0,.3);
+  }
+  .topbar-brand {
+    display: flex; align-items: center; gap: .75rem;
+  }
+  .topbar-brand .logo-dot {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--peach);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: .75rem; color: var(--charcoal);
+  }
+  .topbar-brand span {
+    font-weight: 700; font-size: .95rem; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .topbar-brand .sep { color: var(--peach); margin: 0 .4rem; }
+  .topbar-brand .sub { font-weight: 400; font-size: .8rem; color: var(--slate); letter-spacing: .06em; }
+  .topbar-nav { display: flex; gap: 0; }
+  .topbar-nav button {
+    background: none; border: none; color: var(--slate);
+    font-family: 'Montserrat', sans-serif;
+    font-size: .75rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    padding: .5rem 1rem; cursor: pointer; border-bottom: 2px solid transparent;
+    transition: all .2s;
+  }
+  .topbar-nav button:hover, .topbar-nav button.active {
+    color: var(--peach); border-bottom-color: var(--peach);
+  }
+
+  /* ── VIEWS ── */
+  .view { display: none; padding: 2rem; max-width: 1200px; margin: 0 auto; }
+  .view.active { display: block; }
+
+  /* ── PAGE HEADER ── */
+  .page-header {
+    margin-bottom: 2rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--soft-gray);
+    display: flex; align-items: flex-end; justify-content: space-between;
+  }
+  .page-header h1 {
+    font-size: 1.6rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--charcoal);
+  }
+  .page-header h1 span { color: var(--peach); }
+  .page-header p { color: var(--slate-mid); font-size: .82rem; margin-top: .3rem; font-weight: 500; }
+  .badge {
+    display: inline-flex; align-items: center; gap: .35rem;
+    background: var(--peach-light); color: var(--peach-dark);
+    font-size: .7rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    padding: .35rem .75rem; border-radius: 20px;
+  }
+
+  /* ── CARDS ── */
+  .card {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    margin-bottom: 1.5rem;
+  }
+  .card-title {
+    font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--peach); margin-bottom: .75rem;
+  }
+  .card h2 {
+    font-size: 1.1rem; font-weight: 700; color: var(--charcoal);
+    text-transform: uppercase; letter-spacing: .05em; margin-bottom: .5rem;
+  }
+  .card p { color: var(--slate-mid); font-size: .88rem; line-height: 1.6; }
+
+  /* ── GRID LAYOUTS ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.25rem; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 1rem; }
+  @media(max-width:768px) {
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  }
+
+  /* ── STAT CALLOUT ── */
+  .stat-card {
+    background: var(--white);
+    border-radius: 12px; padding: 1.25rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    text-align: center;
+    border-top: 3px solid var(--soft-gray);
+    transition: border-color .2s;
+  }
+  .stat-card.green { border-top-color: var(--green); }
+  .stat-card.amber { border-top-color: var(--amber); }
+  .stat-card.red { border-top-color: var(--red); }
+  .stat-card.peach { border-top-color: var(--peach); }
+  .stat-card .val {
+    font-size: 2.2rem; font-weight: 800; color: var(--charcoal); line-height: 1;
+  }
+  .stat-card .val.green { color: var(--green); }
+  .stat-card .val.amber { color: var(--amber); }
+  .stat-card .val.red { color: var(--red); }
+  .stat-card .val.peach { color: var(--peach-dark); }
+  .stat-card .label {
+    font-size: .7rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--slate); margin-top: .4rem;
+  }
+  .stat-card .sub-label { font-size: .72rem; color: var(--slate); margin-top: .2rem; }
+
+  /* ── SCORE RING ── */
+  .score-ring-wrap { display: flex; align-items: center; gap: 1.5rem; }
+  .score-ring {
+    position: relative; width: 88px; height: 88px; flex-shrink: 0;
+  }
+  .score-ring svg { transform: rotate(-90deg); }
+  .score-ring .ring-val {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    font-size: 1.3rem; font-weight: 800; color: var(--charcoal); text-align: center; line-height: 1;
+  }
+  .score-ring .ring-val small {
+    display: block; font-size: .55rem; font-weight: 600; color: var(--slate); text-transform: uppercase; margin-top: 1px;
+  }
+
+  /* ── BARISTA SELECTOR ── */
+  .barista-tabs { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.5rem; }
+  .barista-tab {
+    display: flex; align-items: center; gap: .5rem;
+    background: var(--white); border: 1.5px solid var(--soft-gray);
+    border-radius: 50px; padding: .5rem 1rem .5rem .5rem;
+    cursor: pointer; font-family: 'Montserrat', sans-serif;
+    font-size: .8rem; font-weight: 600; color: var(--slate-mid);
+    transition: all .2s;
+  }
+  .barista-tab:hover { border-color: var(--peach); color: var(--charcoal); }
+  .barista-tab.active { border-color: var(--peach); background: var(--peach-light); color: var(--charcoal); }
+  .barista-tab .avatar {
+    width: 28px; height: 28px; border-radius: 50%; background: var(--peach);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: .7rem; color: var(--charcoal);
+  }
+  .barista-tab .role-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+    margin-left: auto;
+  }
+  .barista-tab .role-dot.head { background: var(--gold); }
+
+  /* ── KPI CATEGORY ROWS ── */
+  .kpi-section { margin-bottom: 1.5rem; }
+  .kpi-section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: .75rem;
+  }
+  .kpi-section-header h3 {
+    font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--peach); display: flex; align-items: center; gap: .5rem;
+  }
+  .kpi-section-header .weight-tag {
+    font-size: .65rem; background: var(--cream); border-radius: 10px;
+    padding: .15rem .5rem; color: var(--slate-mid); font-weight: 600; letter-spacing: .05em;
+  }
+  .kpi-rows { display: flex; flex-direction: column; gap: .5rem; }
+  .kpi-row {
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1.5fr;
+    align-items: center; gap: .75rem;
+    background: var(--cream); border-radius: 8px; padding: .6rem .9rem;
+    font-size: .82rem;
+  }
+  .kpi-row.header-row {
+    background: none; font-size: .65rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--slate); padding-bottom: .2rem;
+  }
+  .kpi-row .metric-name { font-weight: 600; color: var(--charcoal); }
+  .kpi-row .metric-target { color: var(--slate-mid); font-size: .78rem; }
+  .kpi-row .score-pill {
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: .75rem; font-weight: 700; border-radius: 20px; padding: .2rem .65rem; min-width: 48px;
+  }
+  .score-pill.g { background: var(--green-light); color: var(--green); }
+  .score-pill.a { background: var(--amber-light); color: var(--amber); }
+  .score-pill.r { background: var(--red-light); color: var(--red); }
+  .score-pill.na { background: var(--soft-gray); color: var(--slate); }
+  .kpi-row .auto-tag {
+    font-size: .62rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--slate); background: var(--soft-gray); border-radius: 4px; padding: .1rem .35rem;
+    white-space: nowrap;
+  }
+  .auto-tag.auto { background: #e6f4ff; color: #1a7abf; }
+  .auto-tag.self { background: #e8f5ee; color: var(--green); }
+  .auto-tag.mgr { background: var(--amber-light); color: var(--amber); }
+
+  /* ── PROGRESS BAR ── */
+  .progress-bar-wrap { width: 100%; background: var(--soft-gray); border-radius: 10px; height: 7px; overflow: hidden; }
+  .progress-bar { height: 100%; border-radius: 10px; background: var(--peach); transition: width .6s ease; }
+  .progress-bar.green { background: var(--green); }
+  .progress-bar.amber { background: var(--amber); }
+  .progress-bar.red { background: var(--red); }
+
+  /* ── FORM INPUTS ── */
+  .form-section { margin-bottom: 1.5rem; }
+  .form-section h3 {
+    font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--peach); margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem;
+  }
+  .form-group { margin-bottom: 1rem; }
+  .form-group label {
+    display: block; font-size: .75rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--charcoal); margin-bottom: .4rem;
+  }
+  .form-group .hint {
+    font-size: .7rem; color: var(--slate); margin-top: .25rem; font-weight: 400;
+  }
+  input, select, textarea {
+    width: 100%; background: var(--cream); border: 1.5px solid var(--soft-gray);
+    border-radius: 8px; padding: .6rem .85rem;
+    font-family: 'Montserrat', sans-serif; font-size: .85rem; color: var(--charcoal);
+    outline: none; transition: border-color .2s;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--peach); }
+  .checklist { display: flex; flex-direction: column; gap: .4rem; }
+  .check-item {
+    display: flex; align-items: center; gap: .6rem;
+    background: var(--cream); border-radius: 7px; padding: .5rem .75rem;
+    cursor: pointer; font-size: .83rem; color: var(--charcoal); font-weight: 500;
+    transition: background .15s;
+  }
+  .check-item:hover { background: var(--peach-light); }
+  .check-item input[type=checkbox] {
+    width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--peach);
+  }
+  .btn {
+    font-family: 'Montserrat', sans-serif; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; font-size: .78rem;
+    padding: .7rem 1.6rem; border-radius: 8px; border: none; cursor: pointer; transition: all .2s;
+  }
+  .btn-primary { background: var(--charcoal); color: var(--white); }
+  .btn-primary:hover { background: var(--peach-dark); }
+  .btn-secondary { background: var(--peach-light); color: var(--charcoal); }
+  .btn-secondary:hover { background: var(--peach); }
+  .btn-ghost { background: none; border: 1.5px solid var(--soft-gray); color: var(--slate-mid); }
+  .btn-ghost:hover { border-color: var(--peach); color: var(--charcoal); }
+
+  /* ── RATING STARS ── */
+  .star-rating { display: flex; gap: .3rem; }
+  .star { font-size: 1.5rem; cursor: pointer; color: var(--soft-gray); transition: color .15s; }
+  .star.lit { color: var(--gold); }
+  .star:hover { color: var(--gold); }
+
+  /* ── JOB DESC ── */
+  .jd-section { margin-bottom: 1rem; }
+  .jd-section h3 {
+    font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--peach); margin-bottom: .6rem;
+  }
+  .jd-list { list-style: none; display: flex; flex-direction: column; gap: .35rem; }
+  .jd-list li {
+    font-size: .85rem; color: var(--slate-mid); padding: .35rem 0 .35rem .9rem;
+    border-left: 2px solid var(--peach-light); position: relative; line-height: 1.5;
+  }
+  .jd-list li::before {
+    content: ''; position: absolute; left: -4px; top: .75rem;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--peach);
+  }
+  .kpi-badge {
+    display: inline-block; background: var(--cream); border: 1px solid var(--soft-gray);
+    border-radius: 6px; padding: .1rem .4rem; font-size: .68rem; font-weight: 600;
+    color: var(--peach-dark); margin-left: .4rem; vertical-align: middle;
+    white-space: nowrap;
+  }
+
+  /* ── REWARD BADGES ── */
+  .achievement-grid { display: flex; flex-wrap: wrap; gap: .75rem; }
+  .achievement {
+    display: flex; align-items: center; gap: .6rem;
+    background: var(--cream); border: 1.5px solid var(--soft-gray); border-radius: 10px;
+    padding: .65rem 1rem; min-width: 160px;
+    transition: all .2s;
+  }
+  .achievement.unlocked { background: var(--white); border-color: var(--gold); }
+  .achievement .ach-icon { font-size: 1.6rem; }
+  .achievement .ach-info .name {
+    font-size: .78rem; font-weight: 700; color: var(--charcoal); text-transform: uppercase; letter-spacing: .04em;
+  }
+  .achievement .ach-info .desc { font-size: .7rem; color: var(--slate); margin-top: .1rem; }
+  .achievement.locked .ach-icon { filter: grayscale(1) opacity(.4); }
+  .achievement.locked .ach-info .name { color: var(--slate); }
+
+  /* ── LEADERBOARD ── */
+  .leaderboard-row {
+    display: flex; align-items: center; gap: 1rem;
+    padding: .75rem 1rem; border-radius: 8px; transition: background .2s;
+  }
+  .leaderboard-row:hover { background: var(--cream); }
+  .lb-rank { font-size: 1rem; font-weight: 800; width: 24px; text-align: center; color: var(--slate); }
+  .lb-rank.gold { color: var(--gold); }
+  .lb-rank.silver { color: #A8A9AD; }
+  .lb-rank.bronze { color: #CD7F32; }
+  .lb-avatar {
+    width: 38px; height: 38px; border-radius: 50%; background: var(--peach-light);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: .85rem; color: var(--charcoal); flex-shrink: 0;
+  }
+  .lb-name-wrap { flex: 1; }
+  .lb-name { font-weight: 700; font-size: .88rem; color: var(--charcoal); }
+  .lb-role { font-size: .7rem; color: var(--slate); text-transform: uppercase; letter-spacing: .06em; }
+  .lb-score { font-weight: 800; font-size: 1.05rem; color: var(--charcoal); }
+  .lb-score.top { color: var(--green); }
+  .lb-bar { flex: 2; }
+
+  /* ── LOG TABLE ── */
+  .log-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .log-table th {
+    text-align: left; font-size: .65rem; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--slate); font-weight: 700; padding: .4rem .75rem; border-bottom: 1px solid var(--soft-gray);
+  }
+  .log-table td { padding: .5rem .75rem; border-bottom: 1px solid var(--cream); color: var(--slate-mid); }
+  .log-table tr:last-child td { border-bottom: none; }
+  .log-table tr:hover td { background: var(--cream); }
+
+  /* ── TABS (inside views) ── */
+  .inner-tabs { display: flex; gap: 0; border-bottom: 1.5px solid var(--soft-gray); margin-bottom: 1.5rem; }
+  .inner-tab {
+    font-family: 'Montserrat',sans-serif; font-size: .78rem; font-weight: 600;
+    letter-spacing: .07em; text-transform: uppercase; background: none; border: none;
+    color: var(--slate); padding: .65rem 1.1rem; cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1.5px; transition: all .2s;
+  }
+  .inner-tab:hover, .inner-tab.active { color: var(--charcoal); border-bottom-color: var(--peach); }
+
+  /* ── MONTH PICKER ── */
+  .period-picker {
+    display: flex; align-items: center; gap: .5rem;
+    font-size: .8rem; font-weight: 600; color: var(--charcoal);
+  }
+  .period-picker select { width: auto; padding: .3rem .65rem; font-size: .78rem; }
+
+  /* ── CALLOUT BOX ── */
+  .callout {
+    border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; font-size: .84rem;
+    display: flex; align-items: flex-start; gap: .75rem;
+  }
+  .callout.info { background: #e6f4ff; color: #1a5f8a; border-left: 3px solid #1a7abf; }
+  .callout.success { background: var(--green-light); color: #1e6b4a; border-left: 3px solid var(--green); }
+  .callout.warn { background: var(--amber-light); color: #7a5000; border-left: 3px solid var(--amber); }
+  .callout.future { background: var(--cream); color: var(--slate-mid); border-left: 3px solid var(--peach); }
+  .callout-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: .05rem; }
+  .callout p { line-height: 1.55; }
+  .callout strong { font-weight: 700; }
+
+  /* ── UPLOAD ZONE ── */
+  .upload-zone {
+    border: 2px dashed var(--soft-gray); border-radius: 10px; padding: 1.5rem;
+    text-align: center; background: var(--cream); cursor: pointer; transition: all .2s;
+  }
+  .upload-zone:hover { border-color: var(--peach); background: var(--peach-light); }
+  .upload-zone .upload-icon { font-size: 2rem; margin-bottom: .5rem; }
+  .upload-zone p { font-size: .82rem; color: var(--slate-mid); font-weight: 500; }
+  .upload-zone p strong { color: var(--charcoal); }
+
+  /* ── DIVIDER ── */
+  .divider { border: none; border-top: 1px solid var(--soft-gray); margin: 1.5rem 0; }
+  .section-label {
+    font-size: .65rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--slate); margin-bottom: .75rem; display: flex; align-items: center; gap: .5rem;
+  }
+  .section-label::after {
+    content: ''; flex: 1; height: 1px; background: var(--soft-gray);
+  }
+
+  /* ── TOAST ── */
+  #toast {
+    position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 999;
+    background: var(--charcoal); color: #fff; border-radius: 10px;
+    padding: .75rem 1.25rem; font-size: .82rem; font-weight: 600;
+    transform: translateY(80px); opacity: 0; transition: all .3s;
+    display: flex; align-items: center; gap: .5rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,.2);
+  }
+  #toast.show { transform: translateY(0); opacity: 1; }
+  #toast .t-icon { font-size: 1rem; }
+
+  /* ── MISC ── */
+  .text-peach { color: var(--peach-dark); }
+  .text-green { color: var(--green); }
+  .text-amber { color: var(--amber); }
+  .text-slate { color: var(--slate); }
+  .fw-700 { font-weight: 700; }
+  .mt-1 { margin-top: .5rem; }
+  .mt-2 { margin-top: 1rem; }
+  .flex-between { display: flex; align-items: center; justify-content: space-between; }
+  .flex-gap { display: flex; align-items: center; gap: .75rem; }
+  .tag {
+    display: inline-block; font-size: .67rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; border-radius: 4px; padding: .15rem .45rem;
+  }
+  .tag-peach { background: var(--peach-light); color: var(--peach-dark); }
+  .tag-green { background: var(--green-light); color: var(--green); }
+  .tag-amber { background: var(--amber-light); color: var(--amber); }
+  .tag-charcoal { background: var(--charcoal); color: var(--white); }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: var(--cream); }
+  ::-webkit-scrollbar-thumb { background: var(--peach); border-radius: 10px; }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="topbar-brand">
+    <div class="logo-dot">CB</div>
+    <span>Coffee Beats</span>
+    <span class="sep">•</span>
+    <span class="sub">OPS SCORECARD</span>
+  </div>
+  <nav class="topbar-nav">
+    <button class="active" onclick="showView('dashboard')">Dashboard</button>
+    <button onclick="showView('scorecard')">Scorecard</button>
+    <button onclick="showView('log')">Daily Log</button>
+    <button onclick="showView('jobs')">Job Descriptions</button>
+    <button onclick="showView('rewards')">Rewards</button>
+    <button onclick="showView('settings')">Setup</button>
+  </nav>
+</div>
+
+<!-- ════════════════════════════════════════
+     VIEW: DASHBOARD
+════════════════════════════════════════ -->
+<div id="view-dashboard" class="view active">
+  <div class="page-header">
+    <div>
+      <h1>Team <span>Performance</span> Dashboard</h1>
+      <p>April 2026 · Maadi Branch · Live scoring updated from self-reports + uploads</p>
+    </div>
+    <div class="flex-gap">
+      <div class="period-picker">
+        <label>Period:</label>
+        <select id="dash-period" onchange="refreshDashboard()">
+          <option>April 2026</option>
+          <option>March 2026</option>
+          <option>February 2026</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- TEAM STAT CALLOUTS -->
+  <div class="grid-4" style="margin-bottom:1.5rem">
+    <div class="stat-card peach">
+      <div class="val peach" id="dash-team-score">76</div>
+      <div class="label">Team Avg Score</div>
+      <div class="sub-label">out of 100</div>
+    </div>
+    <div class="stat-card green">
+      <div class="val green" id="dash-logs-today">3</div>
+      <div class="label">Logs Today</div>
+      <div class="sub-label">daily self-reports</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="val amber" id="dash-late-today">1</div>
+      <div class="label">Late Arrivals</div>
+      <div class="sub-label">this week</div>
+    </div>
+    <div class="stat-card">
+      <div class="val" id="dash-waste-week">0.8 kg</div>
+      <div class="label">Waste Logged</div>
+      <div class="sub-label">this week</div>
+    </div>
+  </div>
+
+  <!-- LEADERBOARD -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">🏆 Achievers Board — April 2026</div>
+      <div id="leaderboard-list"></div>
+    </div>
+
+    <!-- QUICK ACTIONS -->
+    <div>
+      <div class="card">
+        <div class="card-title">⚡ Quick Actions</div>
+        <div style="display:flex;flex-direction:column;gap:.6rem">
+          <button class="btn btn-primary" onclick="showView('log')" style="text-align:left;display:flex;align-items:center;gap:.6rem">
+            <span>📋</span> Log Today's Shift
+          </button>
+          <button class="btn btn-secondary" onclick="showView('scorecard')" style="text-align:left;display:flex;align-items:center;gap:.6rem">
+            <span>📊</span> View My Scorecard
+          </button>
+          <button class="btn btn-ghost" onclick="showView('rewards')" style="text-align:left;display:flex;align-items:center;gap:.6rem">
+            <span>⭐</span> Check My Achievements
+          </button>
+        </div>
+      </div>
+
+      <div class="callout future">
+        <span class="callout-icon">🔗</span>
+        <div>
+          <p><strong>Roadmap integrations coming:</strong></p>
+          <p style="margin-top:.35rem">① Upload sales CSV → auto-calculate avg ticket per barista<br>
+          ② coffeebeats.art review widget → auto-populate Customer Score<br>
+          ③ Drink consistency scores from blind tasting logs</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BRANCH HEATMAP -->
+  <div class="card">
+    <div class="flex-between" style="margin-bottom:1rem">
+      <div class="card-title">📈 Category Scores by Barista — This Month</div>
+      <span class="tag tag-peach">Auto-calculated</span>
+    </div>
+    <div id="heatmap-table"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     VIEW: SCORECARD
+════════════════════════════════════════ -->
+<div id="view-scorecard" class="view">
+  <div class="page-header">
+    <div>
+      <h1>KPI <span>Scorecard</span></h1>
+      <p>Individual barista performance, scored across 8 categories</p>
+    </div>
+    <div class="period-picker">
+      <label>Period:</label>
+      <select id="sc-period">
+        <option>April 2026</option>
+        <option>March 2026</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- BARISTA SELECTOR -->
+  <div class="barista-tabs" id="barista-tabs"></div>
+
+  <!-- SCORECARD CONTENT -->
+  <div id="scorecard-content"></div>
+</div>
+
+<!-- ════════════════════════════════════════
+     VIEW: DAILY LOG (Self-Reporting)
+════════════════════════════════════════ -->
+<div id="view-log" class="view">
+  <div class="page-header">
+    <div>
+      <h1>Daily <span>Self-Report</span></h1>
+      <p>Baristas log their own shift — drives automatic KPI scoring</p>
+    </div>
+    <span class="badge">✅ Eliminates Manager Subjectivity</span>
+  </div>
+
+  <div class="grid-2">
+    <!-- LEFT: FORM -->
+    <div>
+      <div class="card">
+        <div class="card-title">📋 Shift Log Entry</div>
+
+        <div class="form-group">
+          <label>Your Name</label>
+          <select id="log-barista">
+            <option value="">— Select your name —</option>
+            <option value="sara">Sara K. · Head Barista</option>
+            <option value="mo">Mo A. · Barista</option>
+            <option value="lina">Lina M. · Barista</option>
+            <option value="karim">Karim T. · Barista</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" id="log-date">
+        </div>
+
+        <div class="form-group">
+          <label>Shift Type</label>
+          <select id="log-shift">
+            <option value="morning">☀️ Morning (Opening)</option>
+            <option value="afternoon">🌤️ Afternoon</option>
+            <option value="closing">🌙 Closing</option>
+          </select>
+        </div>
+
+        <hr class="divider">
+
+        <!-- PUNCTUALITY -->
+        <div class="form-section">
+          <h3>⏱️ Punctuality</h3>
+          <div class="grid-2">
+            <div class="form-group">
+              <label>Scheduled Start</label>
+              <input type="time" id="log-sched" value="09:00">
+            </div>
+            <div class="form-group">
+              <label>Actual Clock-In</label>
+              <input type="time" id="log-actual" oninput="calcPunctuality()">
+              <div class="hint" id="punct-result">Enter your actual clock-in time</div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="divider">
+
+        <!-- WASTE CONTROL -->
+        <div class="form-section">
+          <h3>♻️ Waste Control</h3>
+          <div class="callout info" style="margin-bottom:.75rem">
+            <span class="callout-icon">ℹ️</span>
+            <p>Log <strong>all waste</strong>: spilled drinks, expired milk, failed shots. Honesty earns points — hiding waste loses them.</p>
+          </div>
+          <div class="grid-2">
+            <div class="form-group">
+              <label>Espresso Shots Wasted</label>
+              <input type="number" id="log-shots-waste" min="0" max="50" placeholder="0" oninput="calcWasteScore()">
+              <div class="hint">Target: ≤ 3 shots/shift</div>
+            </div>
+            <div class="form-group">
+              <label>Milk Wasted (ml)</label>
+              <input type="number" id="log-milk-waste" min="0" placeholder="0" oninput="calcWasteScore()">
+              <div class="hint">Target: ≤ 100ml/shift</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Other Waste Notes</label>
+            <input type="text" id="log-waste-notes" placeholder="e.g. Dropped syrup bottle, expired oat milk (1L)">
+          </div>
+          <div id="waste-score-display" style="display:none" class="callout success">
+            <span class="callout-icon">✅</span>
+            <p id="waste-score-text"></p>
+          </div>
+        </div>
+
+        <hr class="divider">
+
+        <!-- CLEANLINESS CHECKLIST -->
+        <div class="form-section">
+          <h3>🧹 Cleanliness Checklist</h3>
+          <div class="callout success" style="margin-bottom:.75rem">
+            <span class="callout-icon">⭐</span>
+            <p>Each checked item scores points. Completing 100% earns a <strong>Clean Sweep</strong> badge!</p>
+          </div>
+          <div class="checklist" id="cleanliness-checklist"></div>
+          <div style="margin-top:.75rem;font-size:.8rem;font-weight:700;color:var(--charcoal)">
+            Score: <span id="clean-score-val" style="color:var(--peach-dark)">0/100</span>
+          </div>
+        </div>
+
+        <hr class="divider">
+
+        <!-- DRINKS MADE & SPEED -->
+        <div class="form-section">
+          <h3>☕ Service Performance</h3>
+          <div class="grid-2">
+            <div class="form-group">
+              <label>Total Drinks Made</label>
+              <input type="number" id="log-drinks" min="0" placeholder="0">
+            </div>
+            <div class="form-group">
+              <label>Longest Wait (mins)</label>
+              <input type="number" id="log-wait" min="0" placeholder="0">
+              <div class="hint">Self-estimate. Target: ≤ 4 min</div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="divider">
+
+        <!-- MOOD / TEAM NOTES -->
+        <div class="form-section">
+          <h3>💬 Team Notes</h3>
+          <div class="form-group">
+            <label>Shift Highlight or Challenge</label>
+            <textarea id="log-notes" rows="2" placeholder="What went great today? Any challenges or ideas to share?"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Team Shoutout (optional)</label>
+            <input type="text" id="log-shoutout" placeholder="e.g. 'Lina covered my prep when I was swamped — huge help 💪'">
+            <div class="hint">Shoutouts contribute to Teamwork scores and are shared with the team!</div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="submitLog()" style="width:100%;margin-top:.5rem">
+          ✅ Submit My Shift Log
+        </button>
+      </div>
+    </div>
+
+    <!-- RIGHT: LIVE PREVIEW -->
+    <div>
+      <div class="card" style="position:sticky;top:70px">
+        <div class="card-title">📊 Live Score Preview</div>
+        <p style="font-size:.78rem;color:var(--slate);margin-bottom:1rem">Updates as you fill in the form above</p>
+        <div id="live-score-preview">
+          <div style="text-align:center;padding:2rem;color:var(--slate)">
+            <div style="font-size:2rem;margin-bottom:.5rem">📋</div>
+            <div style="font-size:.83rem">Fill in your shift details to<br>see your live score preview</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAST LOGS -->
+      <div class="card" style="margin-top:0">
+        <div class="card-title">📅 Recent Logs</div>
+        <table class="log-table" id="recent-logs-table">
+          <thead>
+            <tr><th>Date</th><th>Barista</th><th>Punctuality</th><th>Waste</th><th>Cleanliness</th></tr>
+          </thead>
+          <tbody id="recent-logs-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     VIEW: JOB DESCRIPTIONS
+════════════════════════════════════════ -->
+<div id="view-jobs" class="view">
+  <div class="page-header">
+    <div>
+      <h1>Role <span>Definitions</span></h1>
+      <p>Official Coffee Beats job descriptions with measurable KPI-linked outcomes</p>
+    </div>
+    <span class="tag tag-charcoal">📍 Maadi Branch · Specialty Coffee for Creatives</span>
+  </div>
+
+  <div class="inner-tabs">
+    <button class="inner-tab active" onclick="showInnerTab('jd-head','jd-tabs')">Head Barista</button>
+    <button class="inner-tab" onclick="showInnerTab('jd-bar','jd-tabs')">Barista</button>
+  </div>
+
+  <!-- HEAD BARISTA JD -->
+  <div id="inner-jd-head" class="inner-content">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">🎯 Role Overview</div>
+        <h2>Head Barista</h2>
+        <p>The creative and technical leader of the bar. At Coffee Beats, the Head Barista is not just a coffee maker — they are a cultural curator who sets the standard for every cup, every interaction, and every atmosphere behind the counter. They own the craft, coach the team, and safeguard the brand's commitment to consistency, quality, and warmth.</p>
+        <div style="margin-top:1rem">
+          <span class="tag tag-peach">Leadership</span>
+          <span class="tag tag-green" style="margin-left:.3rem">Operations</span>
+          <span class="tag tag-charcoal" style="margin-left:.3rem">Full-Time</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">📊 Reports To / Manages</div>
+        <div style="display:flex;flex-direction:column;gap:.75rem">
+          <div>
+            <div style="font-size:.72rem;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.07em">Reports to</div>
+            <div style="font-weight:600;font-size:.9rem;margin-top:.2rem">Branch Manager · Founder</div>
+          </div>
+          <div>
+            <div style="font-size:.72rem;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.07em">Manages</div>
+            <div style="font-weight:600;font-size:.9rem;margin-top:.2rem">All Baristas on shift</div>
+          </div>
+          <div>
+            <div style="font-size:.72rem;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.07em">KPI Target</div>
+            <div style="font-weight:700;font-size:1.1rem;color:var(--peach-dark);margin-top:.2rem">≥ 85 / 100</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">✅ Key Responsibilities & Measurable Outcomes</div>
+
+      <div class="jd-section">
+        <h3>⭐ Coffee Quality & Consistency</h3>
+        <ul class="jd-list">
+          <li>Maintain espresso extraction parameters (18–21g dose, 25–32s pull, 1:2 ratio) on every shift <span class="kpi-badge">KPI: Consistency Score ≥ 90%</span></li>
+          <li>Conduct morning calibration before opening — dial in grinder, check milk temperatures, taste each brew method of the day</li>
+          <li>Perform weekly blind consistency checks across the team (taste test, compare against standard recipe card)</li>
+          <li>Zero tolerance for serving out-of-spec drinks — empower team to remake without hesitation <span class="kpi-badge">KPI: Drink Remake Rate ≤ 2%</span></li>
+          <li>Introduce one new seasonal drink or technique per quarter</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>👥 Team Leadership & Coaching</h3>
+        <ul class="jd-list">
+          <li>Coach baristas through daily side-by-side feedback, not written reports <span class="kpi-badge">KPI: Team Avg Score ≥ 75</span></li>
+          <li>Complete one structured coaching session per barista per month (documented on scorecard)</li>
+          <li>Onboard every new hire in their first 2 weeks using the Coffee Beats training protocol</li>
+          <li>Identify top performers each month and nominate them for the reward system</li>
+          <li>Run a 10-minute team huddle at the start of every opening shift (menu, events, goals)</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>⏱️ Punctuality & Attendance</h3>
+        <ul class="jd-list">
+          <li>Arrive 15 minutes before shift start for equipment warm-up and team handover <span class="kpi-badge">KPI: Late Arrivals ≤ 1/month</span></li>
+          <li>Maintain ≥ 95% attendance — covers are arranged proactively, not last-minute <span class="kpi-badge">KPI: Attendance ≥ 95%</span></li>
+          <li>Complete and submit daily shift log before end of shift</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>♻️ Waste & Cost Control</h3>
+        <ul class="jd-list">
+          <li>Own waste tracking for the bar — log all waste daily in this ops system <span class="kpi-badge">KPI: Waste ≤ target/month</span></li>
+          <li>Brief team on waste targets at start of every shift</li>
+          <li>Monitor milk, bean, and syrup par levels daily; escalate supply issues proactively <span class="kpi-badge">KPI: Zero stockouts caused by failure to escalate</span></li>
+          <li>Monthly waste analysis — present trends and action plan to management</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>🧹 Cleanliness & Station Standards</h3>
+        <ul class="jd-list">
+          <li>Complete opening and closing cleanliness checklists — verified daily <span class="kpi-badge">KPI: Cleanliness ≥ 90%</span></li>
+          <li>Enforce FIFO on all perishables — no expired product ever serves a customer</li>
+          <li>Ensure espresso machine, grinder, steam wands are cleaned to standard each shift</li>
+          <li>Conduct monthly deep-clean drill with the team</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>📈 Upselling & Revenue Contribution</h3>
+        <ul class="jd-list">
+          <li>Achieve average ticket size target as set per month <span class="kpi-badge">KPI: Avg Ticket ≥ EGP target</span></li>
+          <li>Lead by example in recommending add-ons, seasonal items, and experience upgrades</li>
+          <li>Review own and team upsell metrics from sales reports uploaded monthly</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>😊 Customer Experience</h3>
+        <ul class="jd-list">
+          <li>Ensure every customer interaction reflects Coffee Beats' warmth and cultural identity <span class="kpi-badge">KPI: Customer Score ≥ 4.3/5</span></li>
+          <li>Personally resolve any escalated complaints within 5 minutes, with a solution — not an apology alone</li>
+          <li>Curate the bar's sensory experience (music, aroma, layout) for each session type</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🧠 What Success Looks Like After 3 Months</div>
+      <div class="grid-3">
+        <div style="text-align:center;padding:.75rem">
+          <div style="font-size:2.2rem;font-weight:800;color:var(--peach-dark)">85+</div>
+          <div style="font-size:.75rem;font-weight:600;color:var(--slate);text-transform:uppercase;letter-spacing:.07em;margin-top:.25rem">Monthly KPI Score</div>
+        </div>
+        <div style="text-align:center;padding:.75rem">
+          <div style="font-size:2.2rem;font-weight:800;color:var(--green)">4.5★</div>
+          <div style="font-size:.75rem;font-weight:600;color:var(--slate);text-transform:uppercase;letter-spacing:.07em;margin-top:.25rem">Customer Score</div>
+        </div>
+        <div style="text-align:center;padding:.75rem">
+          <div style="font-size:2.2rem;font-weight:800;color:var(--gold)">0</div>
+          <div style="font-size:.75rem;font-weight:600;color:var(--slate);text-transform:uppercase;letter-spacing:.07em;margin-top:.25rem">Team Complaints</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BARISTA JD -->
+  <div id="inner-jd-bar" class="inner-content" style="display:none">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">🎯 Role Overview</div>
+        <h2>Barista</h2>
+        <p>The soul of the bar. At Coffee Beats, every barista is a creative professional who happens to make incredible coffee. You're making drinks for filmmakers, musicians, and artists — your consistency, warmth, and craft are part of the experience they came for. You own your station, your craft, and your customer relationship.</p>
+        <div style="margin-top:1rem">
+          <span class="tag tag-peach">Craft</span>
+          <span class="tag tag-green" style="margin-left:.3rem">Customer</span>
+          <span class="tag tag-charcoal" style="margin-left:.3rem">Full-Time / Part-Time</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">📊 Reports To / Collaborates</div>
+        <div style="display:flex;flex-direction:column;gap:.75rem">
+          <div>
+            <div style="font-size:.72rem;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.07em">Reports to</div>
+            <div style="font-weight:600;font-size:.9rem;margin-top:.2rem">Head Barista · Branch Manager</div>
+          </div>
+          <div>
+            <div style="font-size:.72rem;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.07em">Collaborates with</div>
+            <div style="font-weight:600;font-size:.9rem;margin-top:.2rem">All team members on shift</div>
+          </div>
+          <div>
+            <div style="font-size:.72rem;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.07em">KPI Target</div>
+            <div style="font-weight:700;font-size:1.1rem;color:var(--peach-dark);margin-top:.2rem">≥ 75 / 100</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">✅ Key Responsibilities & Measurable Outcomes</div>
+
+      <div class="jd-section">
+        <h3>☕ Coffee Craft</h3>
+        <ul class="jd-list">
+          <li>Prepare all drinks according to Coffee Beats recipe cards — every time, not most times <span class="kpi-badge">KPI: Consistency ≥ 85%</span></li>
+          <li>Follow calibration set by Head Barista at shift start — no freelancing on ratios</li>
+          <li>Complete milk texturing, latte art, and pour technique training milestones on schedule</li>
+          <li>Remake any drink that doesn't meet standard without being asked <span class="kpi-badge">KPI: Remake Rate ≤ 3%</span></li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>⏱️ Punctuality & Attendance</h3>
+        <ul class="jd-list">
+          <li>Arrive on time or early — late arrivals directly impact team prep and customer experience <span class="kpi-badge">KPI: Late Arrivals ≤ 2/month</span></li>
+          <li>Maintain ≥ 90% attendance, arrange cover proactively with Head Barista when unavoidable</li>
+          <li>Complete daily shift log before clocking out <span class="kpi-badge">KPI: Log Completion ≥ 90%</span></li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>♻️ Waste Control</h3>
+        <ul class="jd-list">
+          <li>Self-report all waste honestly at end of every shift — honesty is rewarded, hiding is not <span class="kpi-badge">KPI: Shots ≤ 3/shift, Milk ≤ 100ml/shift</span></li>
+          <li>Improve waste numbers month-over-month as a growth goal</li>
+          <li>Suggest waste reduction techniques in team huddles</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>🧹 Station & Cleanliness</h3>
+        <ul class="jd-list">
+          <li>Complete daily cleanliness checklist — opening and/or closing <span class="kpi-badge">KPI: Cleanliness ≥ 85%</span></li>
+          <li>Steam wand wiped and purged after every single use — non-negotiable</li>
+          <li>Keep bar counter clear and visually attractive during service at all times</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>📈 Upselling & Menu Knowledge</h3>
+        <ul class="jd-list">
+          <li>Know the full menu — ingredients, allergens, and the story behind each drink <span class="kpi-badge">KPI: Menu Quiz ≥ 80%</span></li>
+          <li>Naturally recommend add-ons and seasonal specials to every customer <span class="kpi-badge">KPI: Avg Ticket growth</span></li>
+          <li>Mention at least one pairing suggestion per order during activation events</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>😊 Customer Interaction</h3>
+        <ul class="jd-list">
+          <li>Greet every customer with warmth and eye contact — no heads-down bar culture here <span class="kpi-badge">KPI: Customer Score ≥ 4.0/5</span></li>
+          <li>Remember regulars' names and orders — this is the Coffee Beats difference</li>
+          <li>Escalate complaints to Head Barista immediately — never dismiss or minimize</li>
+        </ul>
+      </div>
+
+      <div class="jd-section">
+        <h3>🌱 Growth & Learning</h3>
+        <ul class="jd-list">
+          <li>Complete one training module or technique per month <span class="kpi-badge">KPI: Training Progress</span></li>
+          <li>Participate in monthly team tastings and calibration sessions</li>
+          <li>Set one personal growth goal each month and review it with Head Barista</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     VIEW: REWARDS
+════════════════════════════════════════ -->
+<div id="view-rewards" class="view">
+  <div class="page-header">
+    <div>
+      <h1>Rewards & <span>Achievements</span></h1>
+      <p>A rewarding culture — earned recognition, not empty praise</p>
+    </div>
+    <span class="badge">🌱 Rewarding, Not Penalizing</span>
+  </div>
+
+  <div class="callout success">
+    <span class="callout-icon">💡</span>
+    <div>
+      <p><strong>Philosophy:</strong> At Coffee Beats, we track what people do right — not just what they do wrong. Every achievement unlocks a real reward. Scores are transparent, targets are clear, and every barista has an equal path to recognition.</p>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:1.5rem">
+    <!-- BARISTA SELECTOR FOR REWARDS -->
+    <div>
+      <div class="card">
+        <div class="card-title">🎖️ Your Achievements — Sara K.</div>
+        <div class="achievement-grid" id="achievement-grid"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🏆 Monthly Reward Tiers</div>
+        <div style="display:flex;flex-direction:column;gap:.75rem">
+          <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem;background:var(--cream);border-radius:8px">
+            <span style="font-size:1.4rem">🥇</span>
+            <div>
+              <div style="font-weight:700;font-size:.88rem">Gold — 90–100 pts</div>
+              <div style="font-size:.77rem;color:var(--slate);margin-top:.15rem">Bonus day off · Gift voucher · Feature on brand social · Priority schedule pick</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem;background:var(--cream);border-radius:8px">
+            <span style="font-size:1.4rem">🥈</span>
+            <div>
+              <div style="font-weight:700;font-size:.88rem">Silver — 80–89 pts</div>
+              <div style="font-size:.77rem;color:var(--slate);margin-top:.15rem">Meal voucher · Skill training of choice · Shoutout in team channel</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem;background:var(--cream);border-radius:8px">
+            <span style="font-size:1.4rem">🥉</span>
+            <div>
+              <div style="font-weight:700;font-size:.88rem">Bronze — 70–79 pts</div>
+              <div style="font-size:.77rem;color:var(--slate);margin-top:.15rem">Recognition letter · Preference on scheduling · Coffee gear voucher</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem;background:var(--cream);border-radius:8px">
+            <span style="font-size:1.4rem">📈</span>
+            <div>
+              <div style="font-weight:700;font-size:.88rem">Rising — Most Improved</div>
+              <div style="font-size:.77rem;color:var(--slate);margin-top:.15rem">Special award for biggest month-over-month score improvement regardless of absolute score</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROADMAP -->
+    <div>
+      <div class="card">
+        <div class="card-title">🗺️ Culture Roadmap</div>
+        <div style="display:flex;flex-direction:column;gap:1rem">
+          <div style="border-left:3px solid var(--peach);padding-left:1rem">
+            <div style="font-weight:700;font-size:.88rem;text-transform:uppercase;letter-spacing:.05em">Phase 1 — Now ✅</div>
+            <div style="font-size:.8rem;color:var(--slate-mid);margin-top:.3rem">KPI scorecard live · Self-reporting daily logs · Achievers leaderboard visible to team · Monthly reward tiers defined</div>
+          </div>
+          <div style="border-left:3px solid var(--amber);padding-left:1rem">
+            <div style="font-weight:700;font-size:.88rem;text-transform:uppercase;letter-spacing:.05em">Phase 2 — Next Month</div>
+            <div style="font-size:.8rem;color:var(--slate-mid);margin-top:.3rem">Sales CSV upload → auto ticket size · Customer feedback widget on coffeebeats.art → auto Customer Score · Peer shoutout system</div>
+          </div>
+          <div style="border-left:3px solid var(--slate);padding-left:1rem">
+            <div style="font-weight:700;font-size:.88rem;text-transform:uppercase;letter-spacing:.05em">Phase 3 — Q3 2026</div>
+            <div style="font-size:.8rem;color:var(--slate-mid);margin-top:.3rem">Quarterly barista showcase · "Artist of the Quarter" event feature · Training curriculum with certifications · Career path tracks (Barista → Head Barista → Ops Lead)</div>
+          </div>
+          <div style="border-left:3px solid var(--green);padding-left:1rem">
+            <div style="font-weight:700;font-size:.88rem;text-transform:uppercase;letter-spacing:.05em">Phase 4 — End of Year</div>
+            <div style="font-size:.8rem;color:var(--slate-mid);margin-top:.3rem">Annual Coffee Beats Awards night · Profit-sharing pilot for top performers · Multi-branch leaderboard · Alumni program for former team</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📊 Upcoming Automation Features</div>
+        <div style="font-size:.83rem;color:var(--slate-mid);line-height:1.7">
+          <div style="display:flex;gap:.5rem;margin-bottom:.5rem"><span>📤</span><div><strong style="color:var(--charcoal)">Upload Sales Report</strong> — paste or upload your sales-by-barista CSV below and the system auto-calculates avg ticket size per barista.</div></div>
+          <div style="display:flex;gap:.5rem;margin-bottom:.5rem"><span>⭐</span><div><strong style="color:var(--charcoal)">Customer Reviews</strong> — a review widget on coffeebeats.art will feed directly into Customer Score here. No manager rating required.</div></div>
+          <div style="display:flex;gap:.5rem"><span>☕</span><div><strong style="color:var(--charcoal)">Drink Consistency</strong> — weekly blind tasting logs entered by Head Barista will auto-score consistency for each team member.</div></div>
+        </div>
+
+        <hr class="divider">
+        <div class="card-title">📤 Upload Sales CSV (coming soon)</div>
+        <div class="upload-zone" onclick="alert('Sales CSV upload will be live in Phase 2. For now, the Head Barista can manually enter avg ticket values in the scorecard.')">
+          <div class="upload-icon">📊</div>
+          <p><strong>Drop sales report CSV here</strong></p>
+          <p>Columns needed: barista_name, items_sold, total_revenue, date</p>
+          <p style="margin-top:.5rem;font-size:.72rem;color:var(--peach-dark);font-weight:600">PHASE 2 FEATURE — coming soon</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     VIEW: SETTINGS / SETUP
+════════════════════════════════════════ -->
+<div id="view-settings" class="view">
+  <div class="page-header">
+    <div>
+      <h1>Scorecard <span>Setup</span></h1>
+      <p>Configure KPI weights, targets, and team roster</p>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">⚖️ KPI Category Weights</div>
+      <p style="font-size:.8rem;color:var(--slate);margin-bottom:1rem">Adjust how much each category contributes to the total score. Must add up to 100%.</p>
+      <div id="weight-form"></div>
+      <button class="btn btn-primary" onclick="saveWeights()" style="margin-top:1rem">Save Weights</button>
+    </div>
+    <div class="card">
+      <div class="card-title">👥 Team Roster</div>
+      <div id="roster-list"></div>
+      <hr class="divider">
+      <div class="card-title">➕ Add Team Member</div>
+      <div class="form-group"><label>Name</label><input type="text" id="new-name" placeholder="Full name"></div>
+      <div class="form-group">
+        <label>Role</label>
+        <select id="new-role">
+          <option value="head">Head Barista</option>
+          <option value="barista" selected>Barista</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary" onclick="addTeamMember()">Add to Roster</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"><span class="t-icon">✅</span><span id="toast-msg">Saved!</span></div>
+
+<!-- ════════════════════════════
+     JAVASCRIPT
+════════════════════════════ -->
+<script>
+// ── DATA STORE ──────────────────────────────────────────────────────────────
+const DB = {
+  team: [
+    { id:'sara', name:'Sara K.', role:'head', initials:'SK' },
+    { id:'mo', name:'Mo A.', role:'barista', initials:'MA' },
+    { id:'lina', name:'Lina M.', role:'barista', initials:'LM' },
+    { id:'karim', name:'Karim T.', role:'barista', initials:'KT' },
+  ],
+  weights: {
+    punctuality: 15,
+    waste: 15,
+    cleanliness: 15,
+    craft: 20,
+    upselling: 10,
+    customer: 15,
+    teamwork: 5,
+    training: 5,
+  },
+  // Sample KPI scores per barista (0-100 per category)
+  scores: {
+    sara:  { punctuality:92, waste:88, cleanliness:95, craft:90, upselling:78, customer:94, teamwork:96, training:80 },
+    mo:    { punctuality:78, waste:72, cleanliness:82, craft:85, upselling:80, customer:82, teamwork:88, training:75 },
+    lina:  { punctuality:96, waste:90, cleanliness:94, craft:79, upselling:74, customer:88, teamwork:92, training:85 },
+    karim: { punctuality:65, waste:78, cleanliness:80, craft:83, upselling:72, customer:79, teamwork:84, training:70 },
+  },
+  logs: [
+    { date:'2026-04-29', barista:'sara', punctuality:95, waste:90, cleanliness:100 },
+    { date:'2026-04-29', barista:'lina', punctuality:100, waste:85, cleanliness:90 },
+    { date:'2026-04-28', barista:'mo', punctuality:80, waste:75, cleanliness:80 },
+    { date:'2026-04-28', barista:'karim', punctuality:70, waste:80, cleanliness:85 },
+  ]
+};
+
+const KPI_LABELS = {
+  punctuality:'Punctuality',
+  waste:'Waste Control',
+  cleanliness:'Cleanliness',
+  craft:'Coffee Craft',
+  upselling:'Upselling',
+  customer:'Customer Score',
+  teamwork:'Teamwork',
+  training:'Training',
+};
+
+const KPI_ICONS = {
+  punctuality:'⏱️', waste:'♻️', cleanliness:'🧹',
+  craft:'☕', upselling:'📈', customer:'😊',
+  teamwork:'👥', training:'🌱',
+};
+
+const KPI_SOURCE = {
+  punctuality:'self', waste:'self', cleanliness:'self',
+  craft:'auto', upselling:'auto', customer:'auto',
+  teamwork:'peer', training:'mgr',
+};
+
+const SOURCE_LABELS = {
+  self:'Self-report', auto:'Auto-calc', peer:'Peer input', mgr:'Manager',
+};
+
+const CLEAN_ITEMS = [
+  'Espresso machine group heads cleaned & flushed',
+  'Steam wands wiped & purged after every use ✓',
+  'Portafilters cleaned & dried',
+  'Bar counter cleared and wiped down',
+  'Milk fridge organized with FIFO dates',
+  'Drip tray emptied and cleaned',
+  'Grinder doser and burrs brushed',
+  'Back bar organized and sanitized',
+  'Floor swept / wet mopped',
+  'Cups and glasses restocked and polished',
+];
+
+const ACHIEVEMENTS_DEF = [
+  { id:'perfect-week', icon:'💯', name:'Perfect Week', desc:'7 days of 100% checklist completion', criteria: s => s.cleanliness >= 99 },
+  { id:'zero-waste', icon:'🌿', name:'Zero Waste Hero', desc:'< 1 shot wasted for a full month', criteria: s => s.waste >= 95 },
+  { id:'gold-tier', icon:'🥇', name:'Gold Barista', desc:'Monthly score ≥ 90', criteria: s => calcTotal(s) >= 90 },
+  { id:'5-star', icon:'⭐', name:'5-Star Maker', desc:'Customer score ≥ 95', criteria: s => s.customer >= 95 },
+  { id:'early-bird', icon:'🌅', name:'Early Bird', desc:'No late arrivals all month', criteria: s => s.punctuality >= 98 },
+  { id:'coach', icon:'🎓', name:'Team Coach', desc:'Teamwork ≥ 90', criteria: s => s.teamwork >= 90 },
+  { id:'upsell-champ', icon:'🚀', name:'Upsell Champ', desc:'Upselling score ≥ 85', criteria: s => s.upselling >= 85 },
+  { id:'consistent', icon:'🎯', name:'Consistent Craft', desc:'Craft score ≥ 90', criteria: s => s.craft >= 90 },
+];
+
+// ── HELPERS ──────────────────────────────────────────────────────────────────
+function calcTotal(scores) {
+  const w = DB.weights;
+  return Object.keys(w).reduce((sum, k) => sum + (scores[k]||0) * w[k] / 100, 0);
+}
+
+function scoreColor(n) {
+  if (n >= 85) return 'g';
+  if (n >= 70) return 'a';
+  return 'r';
+}
+
+function scoreColorClass(n) {
+  if (n >= 85) return 'green';
+  if (n >= 70) return 'amber';
+  return 'red';
+}
+
+function initials(name) {
+  return name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ── NAVIGATION ───────────────────────────────────────────────────────────────
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + id).classList.add('active');
+  document.querySelectorAll('.topbar-nav button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.topbar-nav button').forEach(b => {
+    if (b.textContent.toLowerCase().replace(' ','').includes(id.slice(0,4))) b.classList.add('active');
+  });
+}
+
+function showInnerTab(tabId, groupId) {
+  document.querySelectorAll('.inner-content').forEach(c => c.style.display='none');
+  document.getElementById('inner-' + tabId).style.display = 'block';
+  document.querySelectorAll('.inner-tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+// ── LEADERBOARD ───────────────────────────────────────────────────────────────
+function renderLeaderboard() {
+  const el = document.getElementById('leaderboard-list');
+  const sorted = DB.team.map(m => ({...m, total: calcTotal(DB.scores[m.id])}))
+    .sort((a,b) => b.total - a.total);
+  const rankClass = ['gold','silver','bronze',''];
+  const rankEmoji = ['🥇','🥈','🥉','4'];
+  el.innerHTML = sorted.map((m,i) => `
+    <div class="leaderboard-row">
+      <div class="lb-rank ${rankClass[i] || ''}">${rankEmoji[i]}</div>
+      <div class="lb-avatar">${m.initials}</div>
+      <div class="lb-name-wrap">
+        <div class="lb-name">${m.name}</div>
+        <div class="lb-role">${m.role === 'head' ? '⭐ Head Barista' : 'Barista'}</div>
+      </div>
+      <div class="lb-bar">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar ${scoreColorClass(m.total)}" style="width:${m.total}%"></div>
+        </div>
+      </div>
+      <div class="lb-score ${m.total >= 85 ? 'top' : ''}">${m.total.toFixed(0)}</div>
+    </div>
+  `).join('');
+}
+
+// ── HEATMAP ───────────────────────────────────────────────────────────────────
+function renderHeatmap() {
+  const cats = Object.keys(DB.weights);
+  const header = `<tr style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:var(--slate);font-weight:700">
+    <th style="padding:.4rem .75rem;text-align:left;border-bottom:1px solid var(--soft-gray)">Barista</th>
+    ${cats.map(c=>`<th style="padding:.4rem .5rem;text-align:center;border-bottom:1px solid var(--soft-gray)">${KPI_ICONS[c]}<br>${KPI_LABELS[c]}</th>`).join('')}
+    <th style="padding:.4rem .75rem;text-align:center;border-bottom:1px solid var(--soft-gray)">Total</th>
+  </tr>`;
+
+  const rows = DB.team.map(m => {
+    const s = DB.scores[m.id];
+    const total = calcTotal(s);
+    return `<tr>
+      <td style="padding:.6rem .75rem;font-weight:600;font-size:.85rem;white-space:nowrap">
+        ${m.initials} · ${m.name.split(' ')[0]}
+        ${m.role==='head' ? '<span style="font-size:.65rem;color:var(--gold);margin-left:.3rem">★ HEAD</span>' : ''}
+      </td>
+      ${cats.map(c => {
+        const v = s[c]; const cl = scoreColor(v);
+        const bg = cl==='g'?'var(--green-light)':cl==='a'?'var(--amber-light)':'var(--red-light)';
+        const co = cl==='g'?'var(--green)':cl==='a'?'var(--amber)':'var(--red)';
+        return `<td style="text-align:center;padding:.4rem .3rem"><span style="display:inline-block;background:${bg};color:${co};border-radius:6px;padding:.15rem .5rem;font-size:.78rem;font-weight:700;min-width:36px">${v}</span></td>`;
+      }).join('')}
+      <td style="text-align:center;padding:.6rem .75rem"><strong style="font-size:.95rem;color:${total>=85?'var(--green)':total>=70?'var(--amber)':'var(--red)'}">${total.toFixed(0)}</strong></td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('heatmap-table').innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:.82rem"><thead>${header}</thead><tbody>${rows}</tbody></table>`;
+}
+
+// ── SCORECARD ────────────────────────────────────────────────────────────────
+let activeBarista = 'sara';
+
+function renderBaristaSelector() {
+  const el = document.getElementById('barista-tabs');
+  el.innerHTML = DB.team.map(m => `
+    <div class="barista-tab ${m.id===activeBarista?'active':''}" onclick="selectBarista('${m.id}')">
+      <div class="avatar">${m.initials}</div>
+      ${m.name}
+      <div class="role-dot ${m.role==='head'?'head':''}"></div>
+    </div>
+  `).join('');
+}
+
+function selectBarista(id) {
+  activeBarista = id;
+  renderBaristaSelector();
+  renderScorecardContent();
+}
+
+function renderScorecardContent() {
+  const m = DB.team.find(x=>x.id===activeBarista);
+  const s = DB.scores[activeBarista];
+  const total = calcTotal(s);
+  const tc = scoreColorClass(total);
+
+  // Score ring
+  const pct = total; const r = 36; const circ = 2*Math.PI*r;
+  const dash = (pct/100)*circ;
+
+  const html = `
+    <div class="card">
+      <div class="flex-between">
+        <div class="score-ring-wrap">
+          <div class="score-ring">
+            <svg width="88" height="88" viewBox="0 0 88 88">
+              <circle cx="44" cy="44" r="${r}" fill="none" stroke="var(--soft-gray)" stroke-width="8"/>
+              <circle cx="44" cy="44" r="${r}" fill="none"
+                stroke="${tc==='green'?'var(--green)':tc==='amber'?'var(--amber)':'var(--red)'}"
+                stroke-width="8" stroke-dasharray="${dash} ${circ}"
+                stroke-linecap="round"/>
+            </svg>
+            <div class="ring-val">${total.toFixed(0)}<small>/ 100</small></div>
+          </div>
+          <div>
+            <div style="font-size:1.15rem;font-weight:800;color:var(--charcoal)">${m.name}</div>
+            <div style="font-size:.75rem;color:var(--slate);text-transform:uppercase;letter-spacing:.07em;margin-top:.2rem">
+              ${m.role==='head'?'⭐ Head Barista':'Barista'}
+            </div>
+            <div style="margin-top:.6rem">
+              <span class="score-pill ${scoreColor(total)}" style="font-size:.85rem;padding:.3rem .9rem">
+                ${total>=90?'🥇 Gold':total>=80?'🥈 Silver':total>=70?'🥉 Bronze':'📈 Rising'}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.7rem;color:var(--slate);text-transform:uppercase;letter-spacing:.08em">Target</div>
+          <div style="font-size:1.5rem;font-weight:800;color:var(--charcoal)">${m.role==='head'?'85':'75'}</div>
+          <div style="font-size:.7rem;margin-top:.4rem">
+            <span class="score-pill ${total>=(m.role==='head'?85:75)?'g':'r'}">
+              ${total>=(m.role==='head'?85:75)?'✅ On Target':'⚠️ Below Target'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="kpi-rows">
+        <div class="kpi-row header-row">
+          <div>Category</div><div>Weight</div><div>Score</div><div>vs Target</div><div>Source</div>
+        </div>
+        ${Object.keys(DB.weights).map(k => {
+          const v = s[k]; const w = DB.weights[k];
+          const src = KPI_SOURCE[k];
+          return `<div class="kpi-row">
+            <div class="metric-name">${KPI_ICONS[k]} ${KPI_LABELS[k]}</div>
+            <div class="metric-target">${w}%</div>
+            <div>
+              <span class="score-pill ${scoreColor(v)}">${v}</span>
+              <div class="progress-bar-wrap" style="margin-top:.35rem;width:80px">
+                <div class="progress-bar ${scoreColorClass(v)}" style="width:${v}%"></div>
+              </div>
+            </div>
+            <div style="font-size:.78rem;font-weight:600;color:${v>=80?'var(--green)':v>=65?'var(--amber)':'var(--red)'}">
+              ${v>=80?'▲ Good':v>=65?'→ OK':'▼ Needs work'}
+            </div>
+            <div><span class="auto-tag ${src}">${SOURCE_LABELS[src]}</span></div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  document.getElementById('scorecard-content').innerHTML = html;
+}
+
+// ── CLEANLINESS CHECKLIST ────────────────────────────────────────────────────
+function renderCleanChecklist() {
+  const el = document.getElementById('cleanliness-checklist');
+  el.innerHTML = CLEAN_ITEMS.map((item,i) => `
+    <label class="check-item">
+      <input type="checkbox" id="clean-${i}" onchange="updateCleanScore()">
+      ${item}
+    </label>
+  `).join('');
+}
+
+function updateCleanScore() {
+  const boxes = document.querySelectorAll('#cleanliness-checklist input');
+  const checked = Array.from(boxes).filter(b=>b.checked).length;
+  const score = Math.round((checked/boxes.length)*100);
+  document.getElementById('clean-score-val').textContent = `${score}/100`;
+  updateLivePreview();
+}
+
+// ── PUNCTUALITY CALC ─────────────────────────────────────────────────────────
+function calcPunctuality() {
+  const sched = document.getElementById('log-sched').value;
+  const actual = document.getElementById('log-actual').value;
+  if (!sched || !actual) return;
+  const schedMin = toMin(sched), actualMin = toMin(actual);
+  const diff = actualMin - schedMin;
+  let score, msg;
+  if (diff <= 0) { score=100; msg='🎉 On time! +5 min early — full marks'; }
+  else if (diff <= 5) { score=90; msg='✅ Within 5 min grace — 90 pts'; }
+  else if (diff <= 15) { score=70; msg='⚠️ 6–15 min late — 70 pts'; }
+  else if (diff <= 30) { score=50; msg='⚠️ 16–30 min late — 50 pts'; }
+  else { score=20; msg='❌ Over 30 min late — 20 pts'; }
+  document.getElementById('punct-result').textContent = msg;
+  document.getElementById('punct-result').style.color = score>=90?'var(--green)':score>=70?'var(--amber)':'var(--red)';
+  updateLivePreview();
+}
+
+function toMin(t) { const [h,m]=t.split(':').map(Number); return h*60+m; }
+
+// ── WASTE SCORE ───────────────────────────────────────────────────────────────
+function calcWasteScore() {
+  const shots = parseInt(document.getElementById('log-shots-waste').value)||0;
+  const milk = parseInt(document.getElementById('log-milk-waste').value)||0;
+  let score = 100;
+  if (shots > 3) score -= (shots-3)*10;
+  if (milk > 100) score -= Math.floor((milk-100)/50)*10;
+  score = Math.max(score, 10);
+  const disp = document.getElementById('waste-score-display');
+  const txt = document.getElementById('waste-score-text');
+  disp.style.display = 'flex';
+  disp.className = `callout ${score>=80?'success':score>=60?'warn':''}`;
+  if (score<60) disp.style.background='var(--red-light)', disp.style.borderLeftColor='var(--red)';
+  txt.textContent = `Waste score: ${score}/100 — ${shots} shots wasted, ${milk}ml milk wasted`;
+  updateLivePreview();
+}
+
+// ── LIVE PREVIEW ──────────────────────────────────────────────────────────────
+function updateLivePreview() {
+  const barista = document.getElementById('log-barista').value;
+  if (!barista) return;
+  const sched = document.getElementById('log-sched').value;
+  const actual = document.getElementById('log-actual').value;
+  const shots = parseInt(document.getElementById('log-shots-waste').value)||0;
+  const milk = parseInt(document.getElementById('log-milk-waste').value)||0;
+  const boxes = document.querySelectorAll('#cleanliness-checklist input');
+  const cleanPct = boxes.length ? Math.round(Array.from(boxes).filter(b=>b.checked).length/boxes.length*100) : 0;
+
+  let pScore = 50;
+  if (sched && actual) {
+    const diff = toMin(actual)-toMin(sched);
+    pScore = diff<=0?100:diff<=5?90:diff<=15?70:diff<=30?50:20;
+  }
+  let wScore = 100;
+  if (shots>3) wScore -= (shots-3)*10;
+  if (milk>100) wScore -= Math.floor((milk-100)/50)*10;
+  wScore = Math.max(wScore, 10);
+
+  const cats = [
+    {label:'⏱️ Punctuality', score:pScore},
+    {label:'♻️ Waste', score:wScore},
+    {label:'🧹 Cleanliness', score:cleanPct},
+  ];
+
+  document.getElementById('live-score-preview').innerHTML = cats.map(c => `
+    <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem">
+      <div style="font-size:.82rem;font-weight:600;color:var(--charcoal);width:120px">${c.label}</div>
+      <div style="flex:1">
+        <div class="progress-bar-wrap"><div class="progress-bar ${scoreColorClass(c.score)}" style="width:${c.score}%"></div></div>
+      </div>
+      <div style="font-weight:800;font-size:.88rem;color:${c.score>=80?'var(--green)':c.score>=65?'var(--amber)':'var(--red)'};min-width:32px;text-align:right">${c.score}</div>
+    </div>
+  `).join('') + `<div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--soft-gray);font-size:.8rem;color:var(--slate)">
+    Craft, Upselling & Customer Score calculated automatically from other data sources.
+  </div>`;
+}
+
+// ── SUBMIT LOG ────────────────────────────────────────────────────────────────
+function submitLog() {
+  const barista = document.getElementById('log-barista').value;
+  const date = document.getElementById('log-date').value;
+  if (!barista || !date) { showToast('❗ Please select your name and date first'); return; }
+  const sched = document.getElementById('log-sched').value;
+  const actual = document.getElementById('log-actual').value;
+  const diff = (sched&&actual) ? toMin(actual)-toMin(sched) : 0;
+  const pScore = diff<=0?100:diff<=5?90:diff<=15?70:diff<=30?50:20;
+  const shots = parseInt(document.getElementById('log-shots-waste').value)||0;
+  const milk = parseInt(document.getElementById('log-milk-waste').value)||0;
+  let wScore = 100;
+  if (shots>3) wScore -= (shots-3)*10;
+  if (milk>100) wScore -= Math.floor((milk-100)/50)*10;
+  wScore = Math.max(wScore, 10);
+  const boxes = document.querySelectorAll('#cleanliness-checklist input');
+  const cleanScore = boxes.length ? Math.round(Array.from(boxes).filter(b=>b.checked).length/boxes.length*100) : 0;
+
+  DB.logs.unshift({ date, barista, punctuality:pScore, waste:wScore, cleanliness:cleanScore });
+  // Update running scores
+  const s = DB.scores[barista];
+  s.punctuality = Math.round((s.punctuality * 0.7) + (pScore * 0.3));
+  s.waste = Math.round((s.waste * 0.7) + (wScore * 0.3));
+  s.cleanliness = Math.round((s.cleanliness * 0.7) + (cleanScore * 0.3));
+
+  renderRecentLogs();
+  renderLeaderboard();
+  renderHeatmap();
+  showToast('✅ Shift log submitted! Scores updated.');
+}
+
+// ── RECENT LOGS ───────────────────────────────────────────────────────────────
+function renderRecentLogs() {
+  const tbody = document.getElementById('recent-logs-body');
+  tbody.innerHTML = DB.logs.slice(0,8).map(l => {
+    const m = DB.team.find(x=>x.id===l.barista);
+    return `<tr>
+      <td>${l.date}</td>
+      <td>${m?m.name:l.barista}</td>
+      <td><span class="score-pill ${scoreColor(l.punctuality)}">${l.punctuality}</span></td>
+      <td><span class="score-pill ${scoreColor(l.waste)}">${l.waste}</span></td>
+      <td><span class="score-pill ${scoreColor(l.cleanliness)}">${l.cleanliness}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── ACHIEVEMENTS ──────────────────────────────────────────────────────────────
+function renderAchievements() {
+  const s = DB.scores[activeBarista] || DB.scores.sara;
+  const el = document.getElementById('achievement-grid');
+  el.innerHTML = ACHIEVEMENTS_DEF.map(a => {
+    const unlocked = a.criteria(s);
+    return `<div class="achievement ${unlocked?'unlocked':'locked'}">
+      <span class="ach-icon">${a.icon}</span>
+      <div class="ach-info">
+        <div class="name">${a.name}</div>
+        <div class="desc">${a.desc}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── WEIGHT FORM ───────────────────────────────────────────────────────────────
+function renderWeightForm() {
+  const el = document.getElementById('weight-form');
+  el.innerHTML = Object.keys(DB.weights).map(k => `
+    <div class="form-group">
+      <div class="flex-between">
+        <label>${KPI_ICONS[k]} ${KPI_LABELS[k]}</label>
+        <span id="wt-val-${k}" style="font-weight:700;color:var(--peach-dark)">${DB.weights[k]}%</span>
+      </div>
+      <input type="range" min="0" max="40" value="${DB.weights[k]}" id="wt-${k}"
+        oninput="DB.weights['${k}']=parseInt(this.value);document.getElementById('wt-val-${k}').textContent=this.value+'%'">
+    </div>
+  `).join('');
+}
+
+function saveWeights() {
+  renderHeatmap();
+  renderLeaderboard();
+  if (document.getElementById('scorecard-content').innerHTML) renderScorecardContent();
+  showToast('⚖️ Weights saved and scores recalculated!');
+}
+
+// ── ROSTER ────────────────────────────────────────────────────────────────────
+function renderRoster() {
+  const el = document.getElementById('roster-list');
+  el.innerHTML = DB.team.map(m => `
+    <div style="display:flex;align-items:center;gap:.75rem;padding:.5rem;border-radius:7px;margin-bottom:.4rem;background:var(--cream)">
+      <div class="lb-avatar" style="width:32px;height:32px;font-size:.75rem">${m.initials}</div>
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:.87rem">${m.name}</div>
+        <div style="font-size:.7rem;color:var(--slate);text-transform:uppercase;letter-spacing:.06em">${m.role==='head'?'⭐ Head Barista':'Barista'}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function addTeamMember() {
+  const name = document.getElementById('new-name').value.trim();
+  const role = document.getElementById('new-role').value;
+  if (!name) { showToast('❗ Enter a name first'); return; }
+  const id = name.toLowerCase().replace(/\s+/g,'');
+  DB.team.push({ id, name, role, initials: initials(name) });
+  DB.scores[id] = { punctuality:80, waste:80, cleanliness:80, craft:80, upselling:75, customer:80, teamwork:80, training:75 };
+  const sel = document.getElementById('log-barista');
+  sel.innerHTML += `<option value="${id}">${name} · ${role==='head'?'Head Barista':'Barista'}</option>`;
+  renderRoster();
+  renderBaristaSelector();
+  renderLeaderboard();
+  renderHeatmap();
+  document.getElementById('new-name').value = '';
+  showToast(`✅ ${name} added to roster!`);
+}
+
+function refreshDashboard() {
+  renderLeaderboard();
+  renderHeatmap();
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+function init() {
+  // Set today's date
+  document.getElementById('log-date').value = new Date().toISOString().slice(0,10);
+  renderLeaderboard();
+  renderHeatmap();
+  renderBaristaSelector();
+  renderScorecardContent();
+  renderCleanChecklist();
+  renderRecentLogs();
+  renderAchievements();
+  renderWeightForm();
+  renderRoster();
+  // Dash stats
+  const totals = DB.team.map(m => calcTotal(DB.scores[m.id]));
+  document.getElementById('dash-team-score').textContent = Math.round(totals.reduce((a,b)=>a+b,0)/totals.length);
+}
+
+window.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

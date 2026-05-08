@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn()  { return request.auth != null; }
+    function userRole()  { return request.auth.token.role; }
+    function isOwner()   { return signedIn() && userRole() == 'owner'; }
+    function isStaff()   {
+      return signedIn() && userRole() in
+        ['owner', 'accountant', 'head_barista', 'barista'];
+    }
+
+    // Operational state — all signed-in staff can read/write
+    match /state/{doc} {
+      allow read:  if isStaff();
+      allow write: if isStaff();
+    }
+
+    // Staff profiles — private, contains pin_hash and access overrides
+    // All writes go through Cloud Functions (Admin SDK bypasses these rules)
+    match /staff/{uid} {
+      allow read:  if signedIn() && (request.auth.uid == uid || isOwner());
+      allow write: if false;
+    }
+
+    // Public staff directory — name/role/branches only, used by the login screen
+    // No PIN hashes or sensitive data here
+    match /staff_public/{uid} {
+      allow read:  if true;
+      allow write: if false; // managed exclusively via Cloud Functions
+    }
+
+    // Customer reviews from coffeebeats.art — public write, staff read
+    match /reviews/{docId} {
+      allow create: if true;
+      allow read:   if isStaff();
+      allow update, delete: if false;
+    }
+
+    // Email subscribers from coffeebeats.art — public write only
+    match /email_subscribers/{docId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
+    // Deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
