@@ -2,18 +2,12 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin  = require("firebase-admin");
 const bcrypt = require("bcryptjs");
 
-// Lazy initialization — Admin SDK is only initialized when a function executes,
-// not at module load time. This lets the Firebase CLI analyze the exports without
-// needing local credentials.
-function getDb() {
-  if (!admin.apps.length) admin.initializeApp();
-  return admin.firestore();
-}
+// Initialize Admin SDK at module load time (correct pattern for Gen2 functions)
+admin.initializeApp();
 
-function getAuth() {
-  if (!admin.apps.length) admin.initializeApp();
-  return admin.auth();
-}
+function getDb()   { return admin.firestore(); }
+function getAuth() { return admin.auth(); }
+
 
 // ─── verifyPin ────────────────────────────────────────────────────────────────
 exports.verifyPin = onCall(async (request) => {
