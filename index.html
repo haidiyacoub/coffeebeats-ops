@@ -11127,7 +11127,18 @@ state = loadState();
 
 // Firebase Auth drives the entire session lifecycle.
 // onAuthStateChanged fires on every page load and after signIn/signOut.
+// Initialize render with a timeout fallback for local development
+let authInitialized = false;
+const renderTimeout = setTimeout(() => {
+  if (!authInitialized) {
+    console.warn("Firebase auth timeout - rendering with offline mode");
+    render();
+  }
+}, 3000);
+
 auth.onAuthStateChanged(async fbUser => {
+  authInitialized = true;
+  clearTimeout(renderTimeout);
   await _resolveAuth(fbUser);
   render();
   if (state._auth) {
