@@ -405,7 +405,7 @@ const staffDir = (() => {
       uid,
       name:       d.name       || "",
       role:       d.role       || "barista",
-      branches:   d.branches   || [],
+      branches:   (d.branches || []).map(b => b.toLowerCase()),
       active:     d.active     !== false,
       legacy_id:  d.legacy_id  || null,
       // non-sensitive extras (populated after auth from staff collection)
@@ -2621,7 +2621,7 @@ routes.waste_new = function (u) {
     bottom.appendChild(stepper);
 
     bottom.appendChild(el("label", {}, "Reason"));
-    const reasonSel = el("select", {}, ["Spilled","Expired","Returned by customer","Staff drink (comp)","Quality issue","Training / calibration","Other"].map(r => el("option", { value: r, selected: r===reason ? "true" : null }, r)));
+    const reasonSel = el("select", {}, ["سكب","منتهي الصلاحية","مرجوع من العميل","تدريب / معايرة","أخرى"].map(r => el("option", { value: r, selected: r===reason ? "true" : null }, r)));
     reasonSel.addEventListener("change", () => reason = reasonSel.value);
     bottom.appendChild(reasonSel);
 
@@ -2724,7 +2724,8 @@ routes.shift_close_new = function (u) {
   // Barista allowance drinks — dynamic rows [{who, drink}]
   // Returns all active baristas/head-baristas/managers/helpers assigned to the current branch.
   function getBaristaList() {
-    return staffDir.shiftStaff(branch).map(x => x.name);
+    const list = staffDir.shiftStaff(branch);
+    return (list.length ? list : staffDir.shiftStaff()).map(x => x.name);
   }
   let baristaAllowanceDrinks = [{ who: "", drink: "" }];
 
@@ -4130,7 +4131,12 @@ routes.purchase_new = function (u) {
           ]));
         }
 
-        card.appendChild(el("label", {}, "Note (batch, expiry, ref)"));
+        card.appendChild(el("label", {}, "Expiry date (leave blank for non-perishables)"));
+        const expInput = el("input", { type: "date", value: ln.expiry_date || "" });
+        expInput.addEventListener("input", () => ln.expiry_date = expInput.value);
+        card.appendChild(expInput);
+
+        card.appendChild(el("label", {}, "Note (batch, ref)"));
         const nInput = el("input", { type: "text", value: ln.note||"", placeholder: "optional" });
         nInput.addEventListener("input", () => ln.note = nInput.value);
         card.appendChild(nInput);
@@ -4161,7 +4167,7 @@ routes.purchase_new = function (u) {
       el("button", {
         class: "btn secondary",
         onClick: () => {
-          lines.push({ kind: "inventory", inv_item_id: null, purchase_unit: "", pack_size: 0, purchase_qty: 1, unit_price: 0, note: "" });
+          lines.push({ kind: "inventory", inv_item_id: null, purchase_unit: "", pack_size: 0, purchase_qty: 1, unit_price: 0, expiry_date: "", note: "" });
           draw();
         }
       }, "+ Inventory line"),
@@ -6562,6 +6568,96 @@ routes.roster = function (u) {
     }
   }
   wrap.appendChild(otCard);
+  // ────────────────────────────────────────────────────────────
+
+  // ── Google Calendars ────────────────────────────────────────
+  const GCAL_TABS = [
+    { key: "big_studio",    label: "🎭 Big Studio",    icon: "🎭", color: "#6c47ff",
+      src: "https://calendar.google.com/calendar/embed?src=theactorsinstrument%40gmail.com&ctz=Africa%2FCairo" },
+    { key: "small_studio",  label: "🎬 Small Studio",  icon: "🎬", color: "#0ea5e9",
+      src: "https://calendar.google.com/calendar/embed?src=36tgil07g61tskionpia7d0tuc%40group.calendar.google.com&ctz=Africa%2FCairo" },
+    { key: "zawya",         label: "🎞 Zawya Cinema",  icon: "🎞", color: "#f59e0b",
+      src: "https://calendar.google.com/calendar/embed?src=37f8d281d892c7428e34906c5d4e42e716af83092630654898f9cf5035836fde%40group.calendar.google.com&ctz=Africa%2FCairo" },
+  ];
+
+  const gcCard = el("div", { class: "card", style: { marginTop: "12px", padding: "0", overflow: "hidden" } });
+
+  // Header bar
+  const gcHeaderBar = el("div", { style: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "14px 16px", borderBottom: "1px solid var(--border)",
+    background: "linear-gradient(135deg, rgba(108,71,255,0.08) 0%, rgba(14,165,233,0.06) 100%)",
+  }});
+  const gcTitle = el("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, [
+    el("span", { style: { fontSize: "18px" } }, "📆"),
+    el("div", {}, [
+      el("div", { style: { fontWeight: "700", fontSize: "14px" } }, "Live Calendars"),
+      el("div", { class: "muted small" }, "Big Studio · Small Studio · Zawya Cinema"),
+    ]),
+  ]);
+
+  let gcExpanded = true;
+  const gcToggleBtn = el("button", { class: "btn ghost", style: { fontSize: "12px", padding: "4px 10px", borderRadius: "20px" } }, "Hide");
+  gcToggleBtn.addEventListener("click", () => {
+    gcExpanded = !gcExpanded;
+    gcBodyWrap.style.display = gcExpanded ? "block" : "none";
+    gcToggleBtn.textContent = gcExpanded ? "Hide" : "Show";
+  });
+  gcHeaderBar.appendChild(gcTitle);
+  gcHeaderBar.appendChild(gcToggleBtn);
+  gcCard.appendChild(gcHeaderBar);
+
+  const gcBodyWrap = el("div", { style: { display: "block" } });
+
+  // Tab bar
+  let activeGcTab = 0;
+  const gcTabBar = el("div", { style: {
+    display: "flex", borderBottom: "1px solid var(--border)", background: "var(--surface2, #f7f7f7)",
+  }});
+
+  const gcIframeSlot = el("div", { style: { padding: "0" } });
+
+  function switchGcTab(idx) {
+    activeGcTab = idx;
+    gcTabBar.querySelectorAll(".gc-tab").forEach((t, i) => {
+      const active = i === idx;
+      t.style.borderBottom = active ? `3px solid ${GCAL_TABS[i].color}` : "3px solid transparent";
+      t.style.color = active ? GCAL_TABS[i].color : "var(--text-muted, #888)";
+      t.style.fontWeight = active ? "700" : "400";
+      t.style.background = active ? "var(--bg, #fff)" : "transparent";
+    });
+    gcIframeSlot.innerHTML = "";
+    const tab = GCAL_TABS[idx];
+    const frame = document.createElement("iframe");
+    frame.src = tab.src;
+    frame.style.cssText = "width:100%;height:480px;border:none;display:block;";
+    frame.setAttribute("frameborder", "0");
+    frame.setAttribute("scrolling", "no");
+    gcIframeSlot.appendChild(frame);
+  }
+
+  GCAL_TABS.forEach((tab, idx) => {
+    const tabEl = el("div", {
+      class: "gc-tab",
+      style: {
+        flex: "1", textAlign: "center", padding: "10px 4px", cursor: "pointer",
+        fontSize: "13px", transition: "all 0.15s", borderBottom: "3px solid transparent",
+        color: "var(--text-muted, #888)", userSelect: "none",
+      },
+    }, [
+      el("div", { style: { fontSize: "18px", marginBottom: "2px" } }, tab.icon),
+      el("div", {}, tab.label.replace(/^[^ ]+ /, "")),
+    ]);
+    tabEl.addEventListener("click", () => switchGcTab(idx));
+    gcTabBar.appendChild(tabEl);
+  });
+
+  gcBodyWrap.appendChild(gcTabBar);
+  gcBodyWrap.appendChild(gcIframeSlot);
+  gcCard.appendChild(gcBodyWrap);
+  wrap.appendChild(gcCard);
+
+  switchGcTab(0);
   // ────────────────────────────────────────────────────────────
 
   // ── Special Dates & Events ──────────────────────────────────
