@@ -10,6 +10,7 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="format-detection" content="telephone=no" />
 <title>Coffee Beats — Operations</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <link rel="manifest" href='data:application/manifest+json;charset=utf-8,{"name":"Coffee%20Beats%20Operations","short_name":"CB%20Ops","start_url":".","display":"standalone","background_color":"%232b1810","theme_color":"%232b1810","icons":[{"src":"data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20192%20192%22%3E%3Crect%20width%3D%22192%22%20height%3D%22192%22%20rx%3D%2232%22%20fill%3D%22%232b1810%22%2F%3E%3Ctext%20x%3D%2296%22%20y%3D%22120%22%20text-anchor%3D%22middle%22%20font-size%3D%2290%22%20fill%3D%22%23f5e6d0%22%3E%E2%98%95%3C%2Ftext%3E%3C%2Fsvg%3E","sizes":"192x192","type":"image/svg+xml"}]}' />
 <style>
   :root {
@@ -251,6 +252,35 @@
     .tab { min-height: 44px; }
     .pin-key { min-height: 72px; font-size: 24px; border-radius: 16px; }
   }
+  /* ── Inventory Engine ─────────────────────────────────────── */
+  .inv-engine-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .inv-engine-table th { background:var(--surface-2); padding:6px 8px; text-align:left; white-space:nowrap; position:sticky; top:0; z-index:2; border-bottom:2px solid var(--border); }
+  .inv-engine-table td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:middle; }
+  .inv-engine-table tr.risk-critical td { background:#fff0f0; }
+  .inv-engine-table tr.risk-high td    { background:#fffbf0; }
+  .inv-engine-table tr.risk-dead td   { background:#f8f8f8; color:var(--ink-dim); }
+  .inv-engine-table tr:hover td { filter:brightness(0.97); }
+  .risk-badge { display:inline-block; font-size:10px; padding:2px 7px; border-radius:999px; font-weight:700; white-space:nowrap; }
+  .risk-badge.critical { background:#fee2e2; color:#991b1b; }
+  .risk-badge.high     { background:#fef3c7; color:#92400e; }
+  .risk-badge.medium   { background:#fde68a; color:#78350f; }
+  .risk-badge.ok       { background:#d1fae5; color:#065f46; }
+  .risk-badge.dead     { background:#f3f4f6; color:#6b7280; }
+  .risk-badge.low      { background:#e0f2fe; color:#0369a1; }
+  .inv-engine-scroll   { overflow-x:auto; border-radius:10px; border:1px solid var(--border); }
+  .inv-summary-cards   { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }
+  @media (max-width:640px) { .inv-summary-cards { grid-template-columns:repeat(2,1fr); } }
+  .inv-summary-card    { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
+  .inv-summary-card .num { font-size:26px; font-weight:800; line-height:1; }
+  .inv-summary-card .lbl { font-size:11px; color:var(--ink-dim); margin-top:4px; }
+  .inv-alert-row { display:flex; align-items:flex-start; gap:10px; padding:9px 12px; border-bottom:1px solid var(--border); }
+  .inv-alert-row:last-child { border-bottom:none; }
+  .inv-alert-type { font-size:10px; font-weight:700; padding:2px 7px; border-radius:999px; white-space:nowrap; flex-shrink:0; }
+  .inv-alert-type.low_stock    { background:#fef3c7; color:#92400e; }
+  .inv-alert-type.critical_stock { background:#fee2e2; color:#991b1b; }
+  .inv-alert-type.dead_inventory { background:#f3f4f6; color:#6b7280; }
+  .inv-alert-type.supplier_delay { background:#e0f2fe; color:#0369a1; }
+  .inv-alert-type.spike         { background:#fde68a; color:#78350f; }
   .banner-arch { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--ink-dim); font-size: 12px; margin-bottom: 10px; }
   .toast-wrap { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 50; display: flex; flex-direction: column; gap: 6px; }
   .toast { background: var(--surface); border: 1px solid var(--accent); color: var(--ink); padding: 10px 14px; border-radius: 10px; box-shadow: var(--shadow); }
@@ -598,6 +628,15 @@ const ZAWYA_EXCLUDED_ITEM_PATTERNS = [
   // Merchandise / retail
   "tote","socks","t-shirt","tshirt",
 ];
+async function readFileAsCSV(file) {
+  if (/\.(xlsx|xls)$/i.test(file.name)) {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    return XLSX.utils.sheet_to_csv(ws);
+  }
+  return file.text();
+}
 function isZawyaExcluded(category, item) {
   const c = String(category || "").trim().toLowerCase();
   const n = String(item || "").trim().toLowerCase();
@@ -989,9 +1028,30 @@ function migrateState(s) {
   s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
   s.staff_ids           = s.staff_ids     || {}; // { [userId]: [{ id, url, at, name }] }
   s.leaves              = s.leaves        || []; // leave requests (annual / sick)
+  s.special_dates       = s.special_dates || []; // custom events: Zawya screenings, Maadi events, etc.
+  s.order_items         = s.order_items   || []; // File 2: per-line items from "Branch order items Month Year"
+  s.orders              = s.orders        || []; // File 3: per-order barista attribution from "Branch orders Month Year"
   s.settings.team_code           = s.settings.team_code           || "coffeeteam2026";
   s.settings.head_barista_email  = s.settings.head_barista_email  || "";
   s.settings.owner_email         = s.settings.owner_email         || "coffeebeats@haidiyacoub.com";
+
+  // Inventory Intelligence Engine state
+  s.inv_engine = s.inv_engine || {
+    thresholds: {},
+    engine_alerts: [],
+    settings: {
+      default_lead_time_days: 3,
+      default_safety_buffer: 3,
+      spike_multiplier: 1.5,
+      dead_stock_days: 30,
+      ma_window_days: 7,
+    },
+  };
+  s.inv_engine_sales_data = s.inv_engine_sales_data || [];
+  s.inv_engine_recipes    = s.inv_engine_recipes    || [];
+  if (Object.keys(s.inv_engine.thresholds).length === 0 && Array.isArray(s.items) && s.items.length > 0) {
+    _seedInvEngineThresholds(s);
+  }
 
   // Strip items that were removed from the menu (per Haïdi, April 2026):
   // Coffee Type 4 and Spiced Turkish Coffee should no longer appear anywhere.
@@ -1033,14 +1093,17 @@ const STATE_CHUNKS = {
   users_items: ["items", "menu", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
   waste:       ["waste"],
   purchases:   ["purchases", "petty_cash", "bank_ledger"],
-  sales:       ["sales", "shifts"],
+  sales:       ["sales", "shifts", "order_items", "orders"],
   operations:  ["shift_closes", "cleaning_logs", "signin_stamps"],
-  roster:      ["rosters", "roaster_schedules", "maadi_deposits"],
+  roster:      ["rosters", "roaster_schedules", "maadi_deposits", "special_dates"],
   hr:          ["salaries", "salary_loans", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
   overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:       ["photo_log", "assets"],
   kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
   meta:        ["_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
+  inv_engine:       ["inv_engine"],
+  inv_engine_sales: ["inv_engine_sales_data"],
+  inv_engine_bom:   ["inv_engine_recipes"],
 };
 
 function markDirty() {
@@ -1486,6 +1549,535 @@ function scanCashDepositPenalties() {
   );
 }
 
+// ==============================================================
+// INVENTORY INTELLIGENCE ENGINE
+// ==============================================================
+
+function _seedInvEngineThresholds(s) {
+  // 23 items from Coffee_Beats_Final_Thresholds_Liters.xlsx
+  // Keys: seedName (normalized), avgDaily, protectionDays, reorderThreshold, unit, priority, categoryRule
+  const SEEDS = [
+    { seedName: "milk",                   avgDaily: 2.44,    protDays: 4,  reorder: 9.8,   unit: "L",      priority: "Critical", cat: "critical"   },
+    { seedName: "full cream milk",        avgDaily: 0.62,    protDays: 10, reorder: 6.2,   unit: "L",      priority: "High",     cat: "specialty"  },
+    { seedName: "skimmed milk",           avgDaily: 0.12,    protDays: 10, reorder: 1.2,   unit: "L",      priority: "Medium",   cat: "specialty"  },
+    { seedName: "oat milk",               avgDaily: 0.04,    protDays: 10, reorder: 0.6,   unit: "L",      priority: "Medium",   cat: "specialty"  },
+    { seedName: "almond milk",            avgDaily: 0.03,    protDays: 10, reorder: 0.4,   unit: "L",      priority: "Medium",   cat: "specialty"  },
+    { seedName: "coconut milk",           avgDaily: 0.09,    protDays: 10, reorder: 1.0,   unit: "L",      priority: "Medium",   cat: "specialty"  },
+    { seedName: "coffee type 2",          avgDaily: 0.154,   protDays: 10, reorder: 1.54,  unit: "kg",     priority: "Critical", cat: "critical"   },
+    { seedName: "coffee type 1",          avgDaily: 0.115,   protDays: 10, reorder: 1.15,  unit: "kg",     priority: "Critical", cat: "critical"   },
+    { seedName: "turkish coffee",         avgDaily: 0.0418,  protDays: 10, reorder: 0.42,  unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "coffee powder",          avgDaily: 0.0055,  protDays: 10, reorder: 0.055, unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "coffee type 3",          avgDaily: 0.0047,  protDays: 10, reorder: 0.047, unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "chocolate powder",       avgDaily: 0.0402,  protDays: 10, reorder: 0.4,   unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "condensed milk",         avgDaily: 0.058,   protDays: 10, reorder: 0.58,  unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "white chocolate sauce",  avgDaily: 0.0203,  protDays: 10, reorder: 0.2,   unit: "kg",     priority: "Standard", cat: "specialty"  },
+    { seedName: "salted caramel sauce",   avgDaily: 0.019,   protDays: 10, reorder: 0.19,  unit: "kg",     priority: "Standard", cat: "specialty"  },
+    { seedName: "chocolate sauce",        avgDaily: 0.0144,  protDays: 10, reorder: 0.14,  unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "vanilla syrup",          avgDaily: 0.04,    protDays: 10, reorder: 1.0,   unit: "bottle", priority: "Low",      cat: "standard"   },
+    { seedName: "caramel sauce",          avgDaily: 0.02,    protDays: 10, reorder: 1.0,   unit: "bottle", priority: "Low",      cat: "standard"   },
+    { seedName: "vanilla powder",         avgDaily: 0.0071,  protDays: 10, reorder: 0.07,  unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "passion puree",          avgDaily: 0.007,   protDays: 10, reorder: 0.07,  unit: "kg",     priority: "Standard", cat: "specialty"  },
+    { seedName: "honey",                  avgDaily: 0.006,   protDays: 10, reorder: 0.06,  unit: "kg",     priority: "Standard", cat: "standard"   },
+    { seedName: "matcha",                 avgDaily: 0.00145, protDays: 10, reorder: 0.015, unit: "kg",     priority: "Standard", cat: "specialty"  },
+    { seedName: "sugar syrup",            avgDaily: 0.002,   protDays: 10, reorder: 0.02,  unit: "L",      priority: "Standard", cat: "standard"   },
+  ];
+
+  const norm = str => String(str || "").toLowerCase().trim().replace(/\s+/g, " ");
+
+  for (const seed of SEEDS) {
+    // Find matching item by normalized name
+    const item = s.items.find(it => norm(it.name) === seed.seedName);
+    if (!item) continue;
+    s.inv_engine.thresholds[item.id] = {
+      avg_daily_usage:   seed.avgDaily,
+      protection_days:   seed.protDays,
+      reorder_threshold: seed.reorder,
+      safety_buffer_days: 3,
+      lead_time_days:     seed.protDays - 3 > 0 ? seed.protDays - 3 : 1,
+      priority:          seed.priority,
+      unit:              seed.unit,
+      category_rule:     seed.cat,
+      expiry_days:       null,
+    };
+  }
+}
+
+// ----- unit conversion -----
+function invCanonicalizeQty(qty, fromUnit, toUnit) {
+  const q = Number(qty) || 0;
+  const f = String(fromUnit || "").toLowerCase().trim();
+  const t = String(toUnit  || "").toLowerCase().trim();
+  if (f === t) return q;
+  if ((f === "ml" || f === "milliliter" || f === "milliliters") &&
+      (t === "l"  || t === "liter"     || t === "liters"      || t === "litre" || t === "litres")) return q / 1000;
+  if ((f === "l"  || f === "liter"     || f === "liters")      &&
+      (t === "ml" || t === "milliliter"|| t === "milliliters")) return q * 1000;
+  if ((f === "g"  || f === "gram"      || f === "grams"       || f === "gr") &&
+      (t === "kg" || t === "kilogram"  || t === "kilograms")) return q / 1000;
+  if ((f === "kg" || f === "kilogram"  || f === "kilograms")   &&
+      (t === "g"  || t === "gram"      || t === "grams"       || t === "gr")) return q * 1000;
+  return q; // same unit family or unknown — return as-is
+}
+
+// ----- core consumption calculations -----
+
+// totalIngredientUsage: sum of (recipe_qty × products_sold) for ingredientId
+// dateRange: { from: "YYYY-MM-DD", to: "YYYY-MM-DD" } — optional filter
+function invTotalIngredientUsage(ingredientId, branch, dateRange, salesData, recipes) {
+  // find all recipes that use this ingredient
+  const relRecipes = recipes.filter(r => r.inv_item_id === ingredientId);
+  if (!relRecipes.length) return 0;
+
+  // collect all rows for this branch in range
+  const rows = [];
+  for (const batch of salesData) {
+    if (branch && batch.branch !== branch) continue;
+    for (const r of (batch.rows || [])) {
+      if (dateRange && r.date < dateRange.from) continue;
+      if (dateRange && r.date > dateRange.to)   continue;
+      rows.push(r);
+    }
+  }
+  if (!rows.length) return 0;
+
+  // build product name → qty map
+  const qtyByProduct = {};
+  for (const r of rows) {
+    const key = String(r.product_name || "").toLowerCase().trim();
+    qtyByProduct[key] = (qtyByProduct[key] || 0) + (Number(r.qty) || 0);
+  }
+
+  // get ingredient unit to canonicalize into
+  const item = (state.items || []).find(it => it.id === ingredientId);
+  const itemUnit = item ? String(item.unit || "").toLowerCase().trim() : "";
+
+  let total = 0;
+  for (const rec of relRecipes) {
+    const productKey = String(rec.menu_item_name || "").toLowerCase().trim();
+    const sold = qtyByProduct[productKey] || 0;
+    if (!sold) continue;
+    const recipeUnit = String(rec.unit || "").toLowerCase().trim();
+    const qtyCanon = invCanonicalizeQty(rec.qty_per_serving, recipeUnit, itemUnit);
+    total += qtyCanon * sold;
+  }
+  return total;
+}
+
+// avgDailyConsumption: returns units/day; falls back to seed if < MIN_DAYS data
+function invAvgDailyConsumption(ingredientId, branch, days, salesData, recipes) {
+  const MIN_DAYS = 14;
+  const today = localISODate(new Date());
+  const fromDate = localISODate(new Date(Date.now() - days * 86400000));
+  const dateRange = { from: fromDate, to: today };
+
+  // count distinct operational days in the window for this branch
+  const daySet = new Set();
+  for (const batch of salesData) {
+    if (branch && batch.branch !== branch) continue;
+    for (const r of (batch.rows || [])) {
+      if (r.date >= fromDate && r.date <= today) daySet.add(r.date);
+    }
+  }
+  const opDays = daySet.size;
+
+  if (opDays >= MIN_DAYS) {
+    const total = invTotalIngredientUsage(ingredientId, branch, dateRange, salesData, recipes);
+    return opDays > 0 ? total / opDays : 0;
+  }
+
+  // fallback: use Excel seed
+  const cfg = (state.inv_engine.thresholds || {})[ingredientId];
+  return cfg ? cfg.avg_daily_usage : 0;
+}
+
+// stockLongevity: days remaining at current consumption rate
+function invStockLongevity(ingredientId, branch, salesData, recipes) {
+  const stock = (computeStock(branch) || {})[ingredientId] || 0;
+  const consumption = invAvgDailyConsumption(ingredientId, branch, 30, salesData, recipes);
+  if (consumption <= 0) return Infinity;
+  return stock / consumption;
+}
+
+// dynamicReorderThreshold: stock level at which to reorder
+function invDynamicReorderThreshold(ingredientId, branch, salesData, recipes) {
+  const cfg = (state.inv_engine.thresholds || {})[ingredientId] || {};
+  const consumption = invAvgDailyConsumption(ingredientId, branch, 30, salesData, recipes);
+  const lead   = cfg.lead_time_days     ?? state.inv_engine.settings.default_lead_time_days;
+  const buffer = cfg.safety_buffer_days ?? state.inv_engine.settings.default_safety_buffer;
+  return consumption * (lead + buffer);
+}
+
+// dailyUsageSeries: [{date, usage}] for the last N days
+function invDailyUsageSeries(ingredientId, branch, salesData, recipes, days) {
+  const today = localISODate(new Date());
+  const fromDate = localISODate(new Date(Date.now() - (days || 60) * 86400000));
+  const relRecipes = recipes.filter(r => r.inv_item_id === ingredientId);
+  if (!relRecipes.length) return [];
+
+  const item = (state.items || []).find(it => it.id === ingredientId);
+  const itemUnit = item ? String(item.unit || "").toLowerCase().trim() : "";
+
+  // group rows by date
+  const byDate = {};
+  for (const batch of salesData) {
+    if (branch && batch.branch !== branch) continue;
+    for (const r of (batch.rows || [])) {
+      if (r.date < fromDate || r.date > today) continue;
+      if (!byDate[r.date]) byDate[r.date] = {};
+      const key = String(r.product_name || "").toLowerCase().trim();
+      byDate[r.date][key] = (byDate[r.date][key] || 0) + (Number(r.qty) || 0);
+    }
+  }
+
+  return Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0])).map(([date, qtyByProd]) => {
+    let usage = 0;
+    for (const rec of relRecipes) {
+      const sold = qtyByProd[String(rec.menu_item_name || "").toLowerCase().trim()] || 0;
+      const recipeUnit = String(rec.unit || "").toLowerCase().trim();
+      usage += invCanonicalizeQty(rec.qty_per_serving, recipeUnit, itemUnit) * sold;
+    }
+    return { date, usage };
+  });
+}
+
+// movingAverage: [{date, ma}] with windowDays rolling average
+function invMovingAverage(series, windowDays) {
+  return series.map((pt, i) => {
+    const start = Math.max(0, i - windowDays + 1);
+    const window = series.slice(start, i + 1);
+    const ma = window.reduce((s, p) => s + p.usage, 0) / window.length;
+    return { date: pt.date, ma };
+  });
+}
+
+// weekdayVsWeekend: avg daily consumption split
+function invWeekdayVsWeekend(ingredientId, branch, salesData, recipes) {
+  const series = invDailyUsageSeries(ingredientId, branch, salesData, recipes, 60);
+  const weekday = series.filter(p => { const d = new Date(p.date).getDay(); return d >= 1 && d <= 4; });
+  const weekend = series.filter(p => { const d = new Date(p.date).getDay(); return d === 5 || d === 6 || d === 0; });
+  const avg = arr => arr.length ? arr.reduce((s, p) => s + p.usage, 0) / arr.length : 0;
+  return { weekday: avg(weekday), weekend: avg(weekend) };
+}
+
+// salesVolatility: coefficient of variation (stddev / mean)
+function invSalesVolatility(ingredientId, branch, salesData, recipes) {
+  const series = invDailyUsageSeries(ingredientId, branch, salesData, recipes, 30);
+  if (series.length < 3) return 0;
+  const mean = series.reduce((s, p) => s + p.usage, 0) / series.length;
+  if (mean <= 0) return 0;
+  const variance = series.reduce((s, p) => s + Math.pow(p.usage - mean, 2), 0) / series.length;
+  return Math.sqrt(variance) / mean;
+}
+
+// estimatedStockoutDate
+function invEstimatedStockoutDate(ingredientId, branch, salesData, recipes) {
+  const days = invStockLongevity(ingredientId, branch, salesData, recipes);
+  if (!isFinite(days) || days <= 0) return null;
+  return new Date(Date.now() + days * 86400000);
+}
+
+// volatility-adjusted reorder threshold
+function invAdjustedReorderThreshold(ingredientId, branch, salesData, recipes) {
+  const base = invDynamicReorderThreshold(ingredientId, branch, salesData, recipes);
+  const cv = invSalesVolatility(ingredientId, branch, salesData, recipes);
+  return base * (1 + Math.min(cv, 1.0));
+}
+
+// ----- alert detectors -----
+function _invNewAlert(type, itemId, itemName, branch, detail) {
+  return { id: uuid(), type, item_id: itemId, item_name: itemName, branch, fired_at: now(), detail, dismissed: false };
+}
+
+function invDetectLowStockAlerts(branch, salesData, recipes) {
+  const out = [];
+  const stocks = computeStock(branch);
+  for (const it of (state.items || [])) {
+    if (!it.active) continue;
+    const threshold = invAdjustedReorderThreshold(it.id, branch, salesData, recipes);
+    if (threshold <= 0) continue;
+    const stock = stocks[it.id] || 0;
+    const days  = invStockLongevity(it.id, branch, salesData, recipes);
+    if (stock <= threshold) {
+      const cfg = (state.inv_engine.thresholds || {})[it.id] || {};
+      out.push(_invNewAlert("low_stock", it.id, it.name, branch, {
+        stock, threshold, days_remaining: isFinite(days) ? days : null,
+        priority: cfg.priority || "Standard",
+      }));
+    }
+  }
+  return out;
+}
+
+function invDetectCriticalStockAlerts(branch, salesData, recipes) {
+  const out = [];
+  const stocks = computeStock(branch);
+  for (const it of (state.items || [])) {
+    if (!it.active) continue;
+    const cfg = (state.inv_engine.thresholds || {})[it.id] || {};
+    if (cfg.priority !== "Critical") continue;
+    const days = invStockLongevity(it.id, branch, salesData, recipes);
+    if (isFinite(days) && days < 3) {
+      out.push(_invNewAlert("critical_stock", it.id, it.name, branch, {
+        days_remaining: days, stock: stocks[it.id] || 0, priority: "Critical",
+      }));
+    }
+  }
+  return out;
+}
+
+function invDetectDeadInventoryAlerts(branch, salesData, recipes) {
+  const out = [];
+  const stocks = computeStock(branch);
+  const deadDays = (state.inv_engine.settings || {}).dead_stock_days || 30;
+  const cutoff = localISODate(new Date(Date.now() - deadDays * 86400000));
+  for (const it of (state.items || [])) {
+    if (!it.active) continue;
+    const stock = stocks[it.id] || 0;
+    if (stock <= 0) continue;
+    // check if any consumption in the window
+    const usage = invTotalIngredientUsage(it.id, branch, { from: cutoff, to: localISODate(new Date()) }, salesData, recipes);
+    if (usage <= 0) {
+      out.push(_invNewAlert("dead_inventory", it.id, it.name, branch, { stock, dead_since_days: deadDays }));
+    }
+  }
+  return out;
+}
+
+function invDetectSupplierDelayRisk(branch, salesData, recipes) {
+  const out = [];
+  for (const it of (state.items || [])) {
+    if (!it.active) continue;
+    const cfg = (state.inv_engine.thresholds || {})[it.id] || {};
+    const leadTime = cfg.lead_time_days ?? (state.inv_engine.settings || {}).default_lead_time_days ?? 3;
+    const days = invStockLongevity(it.id, branch, salesData, recipes);
+    if (isFinite(days) && days < leadTime * 1.5) {
+      out.push(_invNewAlert("supplier_delay", it.id, it.name, branch, {
+        days_remaining: days, lead_time_days: leadTime,
+      }));
+    }
+  }
+  return out;
+}
+
+function invDetectConsumptionSpike(branch, salesData, recipes) {
+  const out = [];
+  const spikeMultiplier = (state.inv_engine.settings || {}).spike_multiplier || 1.5;
+  const maWindow = (state.inv_engine.settings || {}).ma_window_days || 7;
+  for (const it of (state.items || [])) {
+    if (!it.active) continue;
+    const series = invDailyUsageSeries(it.id, branch, salesData, recipes, 37);
+    if (series.length < maWindow + 7) continue;
+    const historicalAvg = series.slice(0, series.length - maWindow).reduce((s, p) => s + p.usage, 0) / (series.length - maWindow);
+    if (historicalAvg <= 0) continue;
+    const recent = series.slice(-maWindow);
+    const recentAvg = recent.reduce((s, p) => s + p.usage, 0) / recent.length;
+    if (recentAvg > historicalAvg * spikeMultiplier) {
+      out.push(_invNewAlert("spike", it.id, it.name, branch, {
+        recent_avg: recentAvg, historical_avg: historicalAvg,
+        spike_ratio: recentAvg / historicalAvg,
+      }));
+    }
+  }
+  return out;
+}
+
+// runEngineAlertScan: runs all detectors, deduplicates, auto-dismisses resolved alerts
+function runEngineAlertScan() {
+  const sd = state.inv_engine_sales_data || [];
+  const rc = state.inv_engine_recipes    || [];
+  const today = localISODate(new Date());
+  let dirty = false;
+
+  // Auto-dismiss resolved low-stock/critical alerts when a purchase covers the item
+  for (const alert of (state.inv_engine.engine_alerts || [])) {
+    if (alert.dismissed) continue;
+    if (alert.type === "low_stock" || alert.type === "critical_stock" || alert.type === "supplier_delay") {
+      const alertDate = alert.fired_at ? alert.fired_at.slice(0, 10) : today;
+      if (isReorderResolved(alert.item_id, alertDate)) {
+        alert.dismissed = true;
+        dirty = true;
+      }
+    }
+  }
+
+  const branches = ["maadi", "zawya"];
+  const newAlerts = [];
+  for (const b of branches) {
+    newAlerts.push(...invDetectLowStockAlerts(b, sd, rc));
+    newAlerts.push(...invDetectCriticalStockAlerts(b, sd, rc));
+    newAlerts.push(...invDetectDeadInventoryAlerts(b, sd, rc));
+    newAlerts.push(...invDetectSupplierDelayRisk(b, sd, rc));
+    newAlerts.push(...invDetectConsumptionSpike(b, sd, rc));
+  }
+
+  // Deduplicate: don't add if same type+item+branch already fired today and not dismissed
+  for (const a of newAlerts) {
+    const exists = (state.inv_engine.engine_alerts || []).some(e =>
+      !e.dismissed && e.type === a.type && e.item_id === a.item_id &&
+      e.branch === a.branch && (e.fired_at || "").slice(0, 10) === today
+    );
+    if (!exists) {
+      state.inv_engine.engine_alerts = state.inv_engine.engine_alerts || [];
+      state.inv_engine.engine_alerts.push(a);
+      dirty = true;
+      // Fire push notifications for critical alerts
+      if (a.type === "critical_stock") {
+        const d = a.detail || {};
+        notifyHaidi(`CRITICAL stock — ${a.item_name} (${a.branch})`,
+          `Only ${(d.days_remaining || 0).toFixed(1)}d of cover left. Reorder immediately.`);
+        notifyLeadershipRole("inventory_management",
+          `CRITICAL stock — ${a.item_name} (${a.branch})`,
+          `${(d.days_remaining || 0).toFixed(1)} days remaining. Immediate reorder required.`);
+      }
+    }
+  }
+  if (dirty) saveState();
+}
+
+// ----- fuzzy ingredient name matcher -----
+function invFuzzyMatchIngredient(name, items) {
+  const norm = s => String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
+  const target = norm(name);
+  // exact match first
+  let match = items.find(it => norm(it.name) === target);
+  if (match) return { item: match, confidence: 1.0 };
+  // prefix match
+  match = items.find(it => norm(it.name).startsWith(target) || target.startsWith(norm(it.name)));
+  if (match) return { item: match, confidence: 0.85 };
+  // contains match
+  match = items.find(it => norm(it.name).includes(target) || target.includes(norm(it.name)));
+  if (match) return { item: match, confidence: 0.7 };
+  // token overlap match
+  const targetTokens = target.split(" ");
+  let bestScore = 0, bestItem = null;
+  for (const it of items) {
+    const tokens = norm(it.name).split(" ");
+    const overlap = targetTokens.filter(t => tokens.includes(t)).length;
+    const score = overlap / Math.max(targetTokens.length, tokens.length);
+    if (score > bestScore) { bestScore = score; bestItem = it; }
+  }
+  if (bestScore >= 0.5) return { item: bestItem, confidence: bestScore };
+  return { item: null, confidence: 0 };
+}
+
+// ----- POS order items parser for the engine -----
+// Accepts SheetJS workbook parsed from monthly "Branch order items Month Year" XLSX/CSV
+function invParsePOSOrderItems(wb, branch, isoMonth) {
+  const rows = [];
+  const sheetName = wb.SheetNames[0];
+  const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null });
+
+  // Normalize column names to find product and quantity columns
+  const norm = s => String(s || "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+  const dateFormats = [
+    v => { if (!v) return null; const s = String(v); if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10); return null; },
+    v => { if (!v) return null; const d = new Date(v); return isNaN(d) ? null : localISODate(d); },
+  ];
+
+  for (const row of raw) {
+    const keys = Object.keys(row);
+    const normKeys = keys.map(norm);
+
+    // find product name
+    const nameKey = keys[normKeys.findIndex(k =>
+      k.includes("item") || k.includes("product") || k.includes("name") || k.includes("modifier")
+    )];
+    // find quantity
+    const qtyKey = keys[normKeys.findIndex(k =>
+      k.includes("qty") || k.includes("quantity") || k.includes("sold") || k.includes("count") || k === "total"
+    )];
+    // find date
+    const dateKey = keys[normKeys.findIndex(k =>
+      k.includes("date") || k.includes("day") || k.includes("time") || k.includes("created")
+    )];
+
+    if (!nameKey || !qtyKey) continue;
+    const productName = String(row[nameKey] || "").trim();
+    const qty = Number(row[qtyKey]) || 0;
+    if (!productName || qty <= 0) continue;
+
+    let date = null;
+    if (dateKey) {
+      for (const fmt of dateFormats) { date = fmt(row[dateKey]); if (date) break; }
+    }
+    if (!date) date = isoMonth + "-01"; // fallback to first of month
+
+    rows.push({ date, product_name: productName, qty });
+  }
+
+  return { id: uuid(), branch, month: isoMonth, uploaded_at: now(), uploaded_by: (currentUser()||{}).id || "anon", rows };
+}
+
+// ----- Recipe BOM parser — reads "Receipe" tab (wide matrix format) -----
+function invParseRecipeBOM(wb) {
+  // Find the recipe sheet (name may be misspelled)
+  const sheetName = wb.SheetNames.find(n =>
+    /rec[ei]+pe?/i.test(n)
+  ) || wb.SheetNames[0];
+
+  const ws = wb.Sheets[sheetName];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  if (!raw.length) return [];
+
+  // Row 0 = headers: ["Product", "WATER (ML)", "Coffee Type 1 (gr)", ...]
+  const headers = (raw[0] || []).map(h => String(h || "").trim());
+  const recipes = [];
+  const now_ = now();
+
+  // Parse unit from header like "Coffee Type 1 (gr)" → { name: "Coffee Type 1", unit: "gr" }
+  function parseHeader(h) {
+    const m = h.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+    if (m) return { name: m[1].trim(), unit: m[2].trim().toLowerCase() };
+    return { name: h, unit: "" };
+  }
+
+  // Columns 1+ are ingredients (column 0 is "Product")
+  const ingredientCols = [];
+  for (let c = 1; c < headers.length; c++) {
+    if (!headers[c]) continue;
+    const { name, unit } = parseHeader(headers[c]);
+    if (!name) continue;
+    // Resolve to inventory item
+    const match = invFuzzyMatchIngredient(name, state.items || []);
+    ingredientCols.push({ colIdx: c, name, unit, match });
+  }
+
+  // Rows 1+ are products (skip category header rows that have no qty values)
+  for (let r = 1; r < raw.length; r++) {
+    const row = raw[r];
+    if (!row) continue;
+    const productName = String(row[0] || "").trim();
+    if (!productName) continue;
+    // Skip category header rows (all qty columns are null)
+    const hasQty = ingredientCols.some(ic => row[ic.colIdx] != null && Number(row[ic.colIdx]) > 0);
+    if (!hasQty) continue;
+
+    for (const ic of ingredientCols) {
+      const qty = Number(row[ic.colIdx]);
+      if (!qty || qty <= 0) continue;
+      // Apply modifier milk serving→L conversion: if ingredient is milk type and unit is ml
+      let finalQty = qty;
+      let finalUnit = ic.unit;
+      const isModifierMilk = /oat|almond|coconut|skimmed|full.?cream/.test(ic.name.toLowerCase());
+      if (isModifierMilk && (ic.unit === "ml" || ic.unit === "milliliter")) {
+        // Already in ml — will be canonicalized to L when calculating; keep as-is
+      }
+
+      recipes.push({
+        id: uuid(),
+        menu_item_name: productName,
+        ingredient_name: ic.name,
+        inv_item_id: ic.match.item ? ic.match.item.id : null,
+        qty_per_serving: finalQty,
+        unit: finalUnit,
+        uploaded_at: now_,
+        _confidence: ic.match.confidence || 0,
+      });
+    }
+  }
+  return recipes;
+}
+
 function pettyCashBalance(branch) {
   const rows = state.petty_cash.filter(p => p.branch === branch)
     .sort((a,b) => a.at.localeCompare(b.at));
@@ -1523,23 +2115,31 @@ const ROLE_ACCESS = {
                  "leave_new","leave_list",
                  "scorecard","my_scorecard","my_jd",
                  "reorder_action_new","reorder_action_list","supplier_list","items_list",
-                 "my_hr","staff_hr"],
+                 "inventory_engine",
+                 "my_hr","staff_hr","leaderboard"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr"],
+  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr","leaderboard"],
   // Zawya-only support roles — minimal access: home screen + own profile
-  manager: ["home","my_id","users","leave_new","leave_list","my_hr"],
-  helper:  ["home","my_id","users"],
+  manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook"],
+  helper:  ["home","my_id","users","handbook"],
 
 };
 function canAccess(routeName, u) {
   if (!u) return false;
   if (routeName === "login" || routeName === "home") return true;
-  // Per-user denylist (revokes default role access) — edited by the owner
-  // in the Users screen. Lets Haïdi take something away from a specific person
-  // even if their role normally has it.
+  // Per-user denylist (revokes default role access)
   if (Array.isArray(u.deny_access) && u.deny_access.includes(routeName)) return false;
   // Per-user allowlist adds to role grants
   if (Array.isArray(u.extra_access) && u.extra_access.includes(routeName)) return true;
+  // Leadership role grants — auto-expire when a new month's assignment is set.
+  const _laMonth = new Date().toISOString().slice(0, 7);
+  const _laAssign = getLeadershipAssignment(_laMonth);
+  if (routeName === "inventory_engine") {
+    if (_laAssign && _laAssign.inventory_management === u.id) return true;
+  }
+  if (routeName === "petty_cash" || routeName === "maadi_deposits") {
+    if (_laAssign && _laAssign.cash_status === u.id) return true;
+  }
   const allow = ROLE_ACCESS[u.role];
   if (allow === "*") return true;
   if (!Array.isArray(allow)) return false;
@@ -1706,7 +2306,10 @@ routes.home = function (u) {
 
   // ── Regular barista: 6 tiles only ──
   if (u.role === "barista") {
-    tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · read only", () => go("roster")));
+    const _baristaSchedMonth = new Date().toISOString().slice(0, 7);
+    const _baristaSchedAssign = getLeadershipAssignment(_baristaSchedMonth);
+    const _isSchedMgr = _baristaSchedAssign && _baristaSchedAssign.weekly_schedule === u.id;
+    tiles.appendChild(tile("📅", "Weekly Schedule", _isSchedMgr ? "Schedule Manager · edit enabled" : "Shifts by day · read only", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
     tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
@@ -1716,6 +2319,20 @@ routes.home = function (u) {
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("📦", "Reorder Actions", "Log supplier actions", () => go("reorder_action_new")));
+    // Leadership role tiles — shown only to the assigned barista for this month
+    const _bLeadMonth  = new Date().toISOString().slice(0, 7);
+    const _bLeadAssign = getLeadershipAssignment(_bLeadMonth);
+    if (_bLeadAssign && _bLeadAssign.inventory_management === u.id) {
+      tiles.appendChild(sectionHeader("Inventory Manager"));
+      tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
+    }
+    if (_bLeadAssign && _bLeadAssign.cash_status === u.id) {
+      tiles.appendChild(sectionHeader("Cash Manager"));
+      tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
+      if (u.branches.includes("maadi")) {
+        tiles.appendChild(tile("🏧", "ATM Deposit", "Weekly cash → bank", () => go("maadi_deposits")));
+      }
+    }
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
     tiles.appendChild(sectionHeader("HR"));
     const _selfUsr = state.users.find(x => x.id === u.id);
@@ -1748,7 +2365,8 @@ routes.home = function (u) {
     if (u.branches.includes("maadi")) {
       tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
     }
-    tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
+    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & reorder actions", () => go("reorder_action_list")));
+    tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
     tiles.appendChild(sectionHeader("HR"));
@@ -1766,15 +2384,17 @@ routes.home = function (u) {
     tiles.appendChild(tile("📋", "مهامي ومسؤولياتي", "الوصف الوظيفي", () => go("my_jd")));
   }
 
-  // ── Manager / Helper (Zawya only): no app tiles — drink allowance tracking only ──
+  // ── Manager / Helper (Zawya only): handbook only ──
   if (u.role === "manager" || u.role === "helper") {
+    tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
     tiles.appendChild(el("div", {
-      style: { gridColumn: "1 / -1", textAlign: "center", padding: "32px 16px", color: "var(--ink-dim)", fontSize: "14px" },
-    }, "No app access — contact the owner if you need assistance."));
+      style: { gridColumn: "1 / -1", textAlign: "center", padding: "16px 16px 32px", color: "var(--ink-dim)", fontSize: "14px" },
+    }, "No other app access — contact the owner if you need assistance."));
   }
 
   // ── Owner + Accountant: full operational visibility ──
   if (u.role === "owner" || u.role === "accountant") {
+    tiles.appendChild(sectionHeader("Operation"));
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
     tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
@@ -1787,26 +2407,27 @@ routes.home = function (u) {
     tiles.appendChild(tile("🔒", "Shift Closes", "End-of-shift log", () => go("shift_close_list")));
     tiles.appendChild(tile("🧹", "Cleaning Logs", "Checklist photos", () => go("cleaning_log_list")));
     tiles.appendChild(tile("🕐", "Sign-In Stamps", "Clock-in photos", () => go("signin_stamp_list")));
+    tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
+    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
+    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & reorder actions", () => go("reorder_action_list")));
+    tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
+    tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
+    tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
+    tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
+    tiles.appendChild(sectionHeader("Finance"));
     tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
-    tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
+    tiles.appendChild(tile("🏧", "ATM Deposit", "Weekly cash → bank", () => go("maadi_deposits")));
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
+    tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
+    tiles.appendChild(sectionHeader("HR"));
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
     tiles.appendChild(tile("👥", "Staff HR", "Monthly payroll · deductions · leaves", () => go("staff_hr")));
-    tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
-    tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
-    tiles.appendChild(tile("📦", "Inventory Items", "Add, edit or remove tracked items", () => go("items_list")));
-    tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
-    tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
-    tiles.appendChild(tile("📦", "Supplier Orders", "Reorder actions & alerts", () => go("reorder_action_list")));
-    tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("👑", "Leadership Roles", "Monthly accountability assignments", () => go("leadership_roles")));
     const _ownerUsr = state.users.find(x => x.id === u.id);
     const _ownerHasId = (_ownerUsr?.id_photo_urls || []).length > 0;
     tiles.appendChild(tile("🪪", "My ID", _ownerHasId ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
-    tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
-    tiles.appendChild(sectionHeader("HR"));
     tiles.appendChild(tile("💰", "Staff Payroll", "Monthly payroll · deductions · leaves", () => go("staff_payroll")));
     tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
     tiles.appendChild(tile("⚖️", "Penalties", "Half/full day deductions", () => go("penalties")));
@@ -1824,6 +2445,7 @@ routes.home = function (u) {
   try { scanReorderFollowUps(); } catch (e) { console.warn(e); }
   try { scanCashDepositReminders(); } catch (e) { console.warn(e); }
   try { scanCashDepositPenalties(); } catch (e) { console.warn(e); }
+  try { runEngineAlertScan(); } catch (e) { console.warn(e); }
   const lowBoth = [
     ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
     ...lowStockItems("zawya").map(r => ({...r, _b: "zawya"})),
@@ -2372,6 +2994,46 @@ routes.snapshot_new = function (u) {
   wrap.appendChild(el("div", { class: "search" }, [search]));
   search.addEventListener("input", draw);
 
+  // ── Add Item button (owner + accountant only) ─────────────────
+  if (u.role === "owner" || u.role === "accountant") {
+    const INV_CATEGORIES_ADD = [
+      { value: "coffee-beans", label: "Coffee Beans" }, { value: "milk", label: "Milk" },
+      { value: "tea", label: "Tea" }, { value: "powder", label: "Powder" },
+      { value: "spices", label: "Spices" }, { value: "sugar", label: "Sugar" },
+      { value: "puree", label: "Puree" }, { value: "syrup", label: "Syrup" },
+      { value: "sauce", label: "Sauce" }, { value: "dairy-extras", label: "Dairy Extras" },
+      { value: "halo-snacks", label: "Halo Snacks" }, { value: "beverages", label: "Beverages" },
+      { value: "packaging", label: "Packaging" },
+    ];
+    const addItemBtn = el("button", { class: "btn ghost", style: { marginBottom: "10px", fontSize: "13px" } }, "＋ Add Item");
+    addItemBtn.addEventListener("click", () => {
+      openPrompt({
+        title: "Add new inventory item",
+        fields: [
+          { key: "name",     label: "Name",     type: "text",   value: "" },
+          { key: "unit",     label: "Unit",     type: "select", value: "g",
+            options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+          { key: "category", label: "Category", type: "select", value: "coffee-beans", options: INV_CATEGORIES_ADD },
+        ],
+        onSubmit: (v) => {
+          if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+          if (state.items.some(i => i.name.toLowerCase() === v.name.trim().toLowerCase()))
+            return toast("An item with that name already exists.", "error");
+          state.items.push({
+            id: "inv_" + String(Date.now()),
+            name: v.name.trim(), unit: v.unit, category: v.category,
+            active: true,
+            added_by: currentUser() ? currentUser().name : "—",
+            added_at: now(),
+          });
+          saveState(); draw();
+          toast(`"${v.name.trim()}" added ✓`);
+        }
+      });
+    });
+    wrap.appendChild(addItemBtn);
+  }
+
   const inputs = {}; // item_id -> input el
   const list = el("div", { class: "list" });
   wrap.appendChild(list);
@@ -2444,6 +3106,17 @@ routes.snapshot_new = function (u) {
           });
         });
         titleRow.appendChild(editItemBtn);
+        const delItemBtn = el("button", { class: "btn ghost", style: { padding: "2px 7px", fontSize: "11px", color: "var(--bad)" } }, "🗑️");
+        delItemBtn.title = "Delete item";
+        delItemBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (!confirm(`Permanently delete "${it.name}"? This cannot be undone.`)) return;
+          state.items = state.items.filter(i => i.id !== it.id);
+          delete inputs[it.id];
+          saveState(); draw();
+          toast(`"${it.name}" deleted`);
+        });
+        titleRow.appendChild(delItemBtn);
       }
       list.appendChild(el("div", { class: "row" }, [
         el("div", { class: "grow" }, [
@@ -2821,10 +3494,31 @@ routes.reorder_action_new = function (u, params) {
 
 routes.reorder_action_list = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Supplier Orders", "Reorder actions logged by baristas."));
+  wrap.appendChild(header("Inventory Status", "Low-stock alerts · reorder actions logged by baristas."));
 
   state.alert_log = state.alert_log || [];
   state.reorder_actions = state.reorder_actions || [];
+
+  // ── Low-stock summary card ──────────────────────────────────────
+  const lowBothIS = [
+    ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
+    ...lowStockItems("zawya").map(r => ({...r, _b: "zawya"})),
+  ];
+  if (lowBothIS.length) {
+    const lsCard = el("div", { class: "card", style: { borderColor: "var(--bad)", marginBottom: "16px" } });
+    lsCard.appendChild(el("div", { style: { color: "var(--bad)", fontWeight: "700", marginBottom: "8px" } },
+      `⚠ Low stock — ${lowBothIS.length} item${lowBothIS.length > 1 ? "s" : ""} need re-ordering`));
+    for (const r of lowBothIS) {
+      lsCard.appendChild(el("div", { class: "kv" }, [
+        el("div", { class: "k" }, `${r.item.name} · ${r._b}`),
+        el("div", { class: "v" }, `${fmtQty(r.stock, r.item.unit)} · ~${r.days_of_cover.toFixed(1)}d cover`),
+      ]));
+    }
+    wrap.appendChild(lsCard);
+  } else {
+    wrap.appendChild(el("div", { class: "card", style: { borderColor: "var(--ok)", marginBottom: "16px", color: "var(--ok)", fontWeight: "600" } },
+      "✅ All items well stocked"));
+  }
 
   const now = Date.now();
 
@@ -5134,7 +5828,7 @@ routes.sales_import = function (u) {
     ]),
   ]));
 
-  const fInput = el("input", { type: "file", accept: ".csv,text/csv,.txt" });
+  const fInput = el("input", { type: "file", accept: ".csv,.xlsx,.xls,text/csv" });
   wrap.appendChild(fInput);
 
   // Running state-of-the-world card — always visible so the owner can see what's loaded right now
@@ -5175,6 +5869,109 @@ routes.sales_import = function (u) {
     }
   }
 
+  // ---- File 2: order items ----
+  wrap.appendChild(el("div", { class: "muted small", style: { marginTop: "14px", textTransform: "uppercase", letterSpacing: "1px" } }, "File 2 — Order Items (optional)"));
+  wrap.appendChild(el("div", { class: "banner-arch" }, 'Named "{Branch} order items {Month} {Year}.xlsx" — provides actual quantities, ticket size, COGS, and margin per item.'));
+  const fInput2 = el("input", { type: "file", accept: ".xlsx,.xls" });
+  wrap.appendChild(fInput2);
+  const preview2 = el("div", { class: "card", style: { marginTop: "10px", display: "none" } });
+  wrap.appendChild(preview2);
+  let parsedOrderItems = null;
+
+  fInput2.addEventListener("change", async e => {
+    const f = e.target.files[0]; if (!f) return;
+    const detected = detectOrderItemsFilename(f.name);
+    if (!detected) { toast("Filename must be: Branch order items Month Year.xlsx", "error"); return; }
+    const buf = await f.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    parsedOrderItems = { rows: parseOrderItemsSheet(wb, detected.branch, detected.isoMonth), branch: detected.branch, month: detected.isoMonth };
+    preview2.style.display = "block";
+    preview2.innerHTML = "";
+    preview2.appendChild(el("div", { class: "banner-arch" },
+      `✓ ${detected.branch} · ${detected.isoMonth} — ${parsedOrderItems.rows.length} product lines (modifiers excluded)`));
+    // Qty per item summary
+    const qtyMap = new Map();
+    for (const r of parsedOrderItems.rows) qtyMap.set(r.name, (qtyMap.get(r.name)||0) + (r.qty||1));
+    const topItems = [...qtyMap.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10);
+    // COGS preview using menu
+    const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
+    const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
+    const tbl2 = el("table", {}, [
+      el("thead", {}, el("tr", {}, ["Item","Qty Sold","Unit Price","COGS%","Margin%"].map(h=>el("th",{},h)))),
+      el("tbody", {}, topItems.map(([name, qty]) => {
+        const m = menuByName.get(normName(name));
+        const price = m?.price_egp || (parsedOrderItems.rows.find(r=>r.name===name)?.unit_price) || 0;
+        const cost  = m?.cost_egp || 0;
+        const cogsPct   = (price && cost) ? (cost/price*100) : null;
+        const marginPct = (price && cost) ? ((price-cost)/price*100) : null;
+        return el("tr", {}, [
+          el("td", {}, name),
+          el("td", { class:"num" }, String(qty)),
+          el("td", { class:"num" }, price ? money(price) : "—"),
+          el("td", { class:"num", style:{color: cogsPct!=null?(cogsPct>35?"var(--bad)":cogsPct>28?"var(--warn)":"var(--ok)"):"inherit"} }, cogsPct!=null ? cogsPct.toFixed(1)+"%" : "—"),
+          el("td", { class:"num", style:{color: marginPct!=null?(marginPct>60?"var(--ok)":marginPct>40?"var(--warn)":"var(--bad)"):"inherit"} }, marginPct!=null ? marginPct.toFixed(1)+"%" : "—"),
+        ]);
+      })),
+    ]);
+    preview2.appendChild(tbl2);
+  });
+
+  // ---- File 3: orders (barista attribution) ----
+  wrap.appendChild(el("div", { class: "muted small", style: { marginTop: "14px", textTransform: "uppercase", letterSpacing: "1px" } }, "File 3 — Orders (barista attribution, optional)"));
+  wrap.appendChild(el("div", { class: "banner-arch" }, 'Named "{Branch} orders {Month} {Year}.xlsx" — links each order to the barista who created it. Feeds Upselling KPI automatically.'));
+  const fInput3 = el("input", { type: "file", accept: ".xlsx,.xls" });
+  wrap.appendChild(fInput3);
+  const preview3 = el("div", { class: "card", style: { marginTop: "10px", display: "none" } });
+  wrap.appendChild(preview3);
+  let parsedOrders = null;
+
+  fInput3.addEventListener("change", async e => {
+    const f = e.target.files[0]; if (!f) return;
+    const detected = detectOrdersFilename(f.name);
+    if (!detected) { toast("Filename must be: Branch orders Month Year.xlsx", "error"); return; }
+    const buf = await f.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    parsedOrders = { rows: parseOrdersSheet(wb, detected.branch, detected.isoMonth), branch: detected.branch, month: detected.isoMonth };
+    preview3.style.display = "block";
+    preview3.innerHTML = "";
+    preview3.appendChild(el("div", { class: "banner-arch" },
+      `✓ ${detected.branch} · ${detected.isoMonth} — ${parsedOrders.rows.length} orders attributed`));
+    // Ticket size preview per barista (if File 2 also loaded for same branch/month)
+    const matchingItems = (state.order_items||[]).concat(parsedOrderItems?.branch===detected.branch && parsedOrderItems?.month===detected.isoMonth ? parsedOrderItems.rows : []);
+    const orderQty = new Map();
+    for (const i of matchingItems) orderQty.set(i.order_ref, (orderQty.get(i.order_ref)||0)+(Number(i.qty)||1));
+    const byBarista = new Map();
+    for (const o of parsedOrders.rows) {
+      const qty = orderQty.get(o.order_ref) || 1;
+      const cur = byBarista.get(o.barista_name) || { orders:0, totalItems:0 };
+      cur.orders++; cur.totalItems += qty;
+      byBarista.set(o.barista_name, cur);
+    }
+    if (byBarista.size > 0) {
+      const tbl3 = el("table", {}, [
+        el("thead", {}, el("tr", {}, ["Barista","Orders","Total Items","Avg Ticket","Upselling Score"].map(h=>el("th",{},h)))),
+        el("tbody", {}, [...byBarista.entries()].sort((a,b)=>b[1].totalItems/b[1].orders - a[1].totalItems/a[1].orders).map(([name,d]) => {
+          const avg = d.orders>0 ? d.totalItems/d.orders : 1;
+          const score = Math.round(Math.max(0, Math.min(100, (avg-1.0)/2.0*100)));
+          return el("tr", {}, [
+            el("td",{},name),
+            el("td",{class:"num"},String(d.orders)),
+            el("td",{class:"num"},String(d.totalItems)),
+            el("td",{class:"num"},avg.toFixed(2)),
+            el("td",{class:"num",style:{color:score>=70?"var(--ok)":score>=40?"var(--warn)":"var(--bad)"}},score+"/100"),
+          ]);
+        })),
+      ]);
+      preview3.appendChild(tbl3);
+    } else {
+      preview3.appendChild(el("div", { class: "muted small" }, "Upload File 2 first to see ticket size breakdown."));
+    }
+  });
+
+  // ---- Import all button ----
+  const importAllBtn = el("button", { class: "btn", style: { marginTop: "16px", width: "100%" }, onClick: () => commitAll() }, "Import All Uploaded Files");
+  wrap.appendChild(importAllBtn);
+
   const preview = el("div", { class: "card", style: { marginTop: "14px", display: "none" } });
   wrap.appendChild(preview);
   let parsed = null;
@@ -5182,10 +5979,23 @@ routes.sales_import = function (u) {
 
   fInput.addEventListener("change", async e => {
     const f = e.target.files[0]; if (!f) return;
-    const text = await f.text();
-    const forceMonth = $("#_salesForceMonth")?.checked || false;
-    parsed = parseSalesCSV(text, branchDefault, monthFallback.value, forceMonth);
-    parseContext = { filename: f.name, forceMonth, fallback: monthFallback.value };
+    const detected = detectBranchSalesFilename(f.name);
+    if (detected && /\.(xlsx|xls)$/i.test(f.name)) {
+      const buf = await f.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      parsed = parseBranchSalesSheet(wb, detected.branch, detected.isoMonth);
+      branchDefault = detected.branch;
+      branchPicker.querySelectorAll(".tab").forEach(tab => {
+        tab.classList.toggle("on", tab.textContent.toLowerCase() === detected.branch);
+      });
+      monthFallback.value = detected.isoMonth;
+      parseContext = { filename: f.name, mode: "fixed-column", branch: detected.branch, month: detected.isoMonth };
+    } else {
+      const text = await readFileAsCSV(f);
+      const forceMonth = $("#_salesForceMonth")?.checked || false;
+      parsed = parseSalesCSV(text, branchDefault, monthFallback.value, forceMonth);
+      parseContext = { filename: f.name, forceMonth, fallback: monthFallback.value };
+    }
     renderPreview();
   });
 
@@ -5194,7 +6004,13 @@ routes.sales_import = function (u) {
     preview.innerHTML = "";
     preview.appendChild(el("h2", {}, `Preview — ${parsed.rows.length} rows`));
 
-    // --- Column mapping diagnostic (so you can see what auto-detect found) ---
+    if (parseContext?.mode === "fixed-column") {
+      preview.appendChild(el("div", { class: "banner-arch" },
+        `✓ Detected format: ${parseContext.branch} · ${parseContext.month} — reading fixed columns A (item), C (category), G (net sales), I (discount)`));
+    }
+
+    // --- Column mapping diagnostic (hidden in fixed-column mode) ---
+    if (parseContext?.mode !== "fixed-column") {
     const mapCard = el("div", { class: "card" });
     mapCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "Column mapping"));
     const mapList = el("div", {});
@@ -5210,9 +6026,10 @@ routes.sales_import = function (u) {
     mapCard.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } },
       `Headers seen: ${parsed.headerRaw.slice(0, 14).map(h => `"${h}"`).join(", ")}${parsed.headerRaw.length > 14 ? ` … (+${parsed.headerRaw.length - 14} more)` : ""}`));
     preview.appendChild(mapCard);
+    } // end non-fixed-column
 
     // Optional manual override ui for critical columns
-    if (parsed.mapping.date < 0 || parsed.mapping.item < 0 || parsed.mapping.qty < 0) {
+    if (parseContext?.mode !== "fixed-column" && (parsed.mapping.date < 0 || parsed.mapping.item < 0 || parsed.mapping.qty < 0)) {
       const override = el("div", { class: "card", style: { borderColor: "var(--bad)" } });
       override.appendChild(el("div", { class: "muted small" }, "Pick the right column if auto-detect missed one:"));
       const pickers = {};
@@ -5239,7 +6056,7 @@ routes.sales_import = function (u) {
     if (parsed.droppedZawya)    info.push(`${parsed.droppedZawya} Zawya exclusions removed`);
     if (parsed.droppedModifier) info.push(`${parsed.droppedModifier} modifier option rows skipped`);
     if (parsed.droppedNoItem)   info.push(`${parsed.droppedNoItem} rows had no item`);
-    if (parsed.usedFallbackDate) info.push(`${parsed.usedFallbackDate} rows used the fallback month (no parseable date)`);
+    if (parsed.usedFallbackDate) info.push(parseContext?.mode === "fixed-column" ? `${parsed.usedFallbackDate} rows dated to ${parseContext.month}` : `${parsed.usedFallbackDate} rows used the fallback month (no parseable date)`);
     if (parsed.warnings.length) info.push(parsed.warnings.join(" · "));
     preview.appendChild(el("div", { class: "muted small" }, info.join(" · ")));
 
@@ -5274,7 +6091,6 @@ routes.sales_import = function (u) {
     const importedBranches = new Set();
     const importedMonths = new Set();
     for (const r of parsed.rows) {
-      // Canonicalize branch at write time so dashboard filters always match
       const br = (String(r.branch || branchDefault).toLowerCase().includes("zawya")) ? "zawya"
                : (String(r.branch || branchDefault).toLowerCase().includes("maadi")) ? "maadi"
                : String(r.branch || branchDefault).toLowerCase();
@@ -5292,9 +6108,68 @@ routes.sales_import = function (u) {
     const branchList = [...importedBranches].join(", ") || branchDefault;
     const monthList = [...importedMonths].sort().join(", ") || "—";
     toast(`✓ Imported ${parsed.rows.length} rows · branches: ${branchList} · months: ${monthList}`);
-    // Jump to dashboard focused on the first imported combo so the data is visible immediately.
     const targetMonth = [...importedMonths].sort().pop() || monthFallback.value;
     const targetBranch = importedBranches.has(branchDefault) ? branchDefault : ([...importedBranches][0] || branchDefault);
+    go("dashboard", { month: targetMonth, branch: targetBranch });
+  }
+
+  function commitAll() {
+    const s = stamp();
+    const parts = [];
+
+    // File 1 — sales rows
+    if (parsed && parsed.rows.length > 0) {
+      const batch = uuid();
+      const importedBranches = new Set();
+      const importedMonths = new Set();
+      for (const r of parsed.rows) {
+        const br = (String(r.branch || branchDefault).toLowerCase().includes("zawya")) ? "zawya"
+                 : (String(r.branch || branchDefault).toLowerCase().includes("maadi")) ? "maadi"
+                 : String(r.branch || branchDefault).toLowerCase();
+        state.sales.push({
+          id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, device: s.device,
+          branch: br, date: r.date, item: r.item, sku: r.sku, qty: r.qty,
+          gross_sales: r.gross, net_sales: r.net, discount: r.discount, discount_name: r.discount_name || "",
+          category: r.category,
+        });
+        importedBranches.add(br);
+        if (r.date && r.date.length >= 7) importedMonths.add(r.date.slice(0,7));
+      }
+      parts.push(`File 1: ${parsed.rows.length} sales rows`);
+    }
+
+    // File 2 — order items
+    if (parsedOrderItems && parsedOrderItems.rows.length > 0) {
+      // Remove existing order_items for this branch+month before re-importing
+      state.order_items = (state.order_items || []).filter(
+        i => !(i.branch === parsedOrderItems.branch && i.month === parsedOrderItems.month));
+      const batch = uuid();
+      for (const r of parsedOrderItems.rows) {
+        state.order_items.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
+          branch: r.branch, month: r.month, order_ref: r.order_ref,
+          name: r.name, unit_price: r.unit_price, qty: r.qty,
+          discount: r.discount, disc_name: r.disc_name });
+      }
+      parts.push(`File 2: ${parsedOrderItems.rows.length} order lines`);
+    }
+
+    // File 3 — orders / barista attribution
+    if (parsedOrders && parsedOrders.rows.length > 0) {
+      state.orders = (state.orders || []).filter(
+        o => !(o.branch === parsedOrders.branch && o.month === parsedOrders.month));
+      const batch = uuid();
+      for (const r of parsedOrders.rows) {
+        state.orders.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
+          branch: r.branch, month: r.month, order_ref: r.order_ref, barista_name: r.barista_name });
+      }
+      parts.push(`File 3: ${parsedOrders.rows.length} orders`);
+    }
+
+    if (parts.length === 0) return toast("No files loaded yet", "error");
+    saveState();
+    toast("✓ Imported — " + parts.join(" · "));
+    const targetMonth = parsedOrderItems?.month || parsedOrders?.month || monthFallback.value;
+    const targetBranch = parsedOrderItems?.branch || parsedOrders?.branch || branchDefault;
     go("dashboard", { month: targetMonth, branch: targetBranch });
   }
 
@@ -5303,6 +6178,105 @@ routes.sales_import = function (u) {
 };
 
 // ---- CSV helpers (shared) ----
+
+function detectBranchSalesFilename(filename) {
+  const MONTHS = { january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12" };
+  const base = filename.replace(/\.[^.]+$/, "").toLowerCase().trim();
+  const m = base.match(/^(.+?)\s+sales\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})$/);
+  if (!m) return null;
+  const rawBranch = m[1].trim();
+  const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
+  const isoMonth = `${m[3]}-${MONTHS[m[2]]}`;
+  return { branch, isoMonth };
+}
+
+function parseBranchSalesSheet(wb, branch, isoMonth) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  const dataRows = raw.slice(6); // rows 0–4 preamble, row 5 header, data at row 6+
+  const fbDate = isoMonth + "-15";
+  const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
+  const rows = [];
+  let droppedNoItem = 0, droppedZawya = 0;
+  for (const r of dataRows) {
+    const item     = String(r[0] || "").trim();   // Col A — product name
+    const category = String(r[2] || "").trim();   // Col C — category
+    const net      = toNum(r[6]);                 // Col G — net sales with tax
+    const discount = toNum(r[8]);                 // Col I — discount amount
+    if (!item) { droppedNoItem++; continue; }
+    if (branch === "zawya" && isZawyaExcluded(category, item)) { droppedZawya++; continue; }
+    rows.push({ date: fbDate, item, sku: "", qty: 1, net, gross: net + discount, discount, discount_name: "", category, branch });
+  }
+  return { rows, warnings: [], droppedZawya, droppedNoItem, droppedModifier: 0, usedFallbackDate: rows.length, mapping: {}, headerRaw: [], rawLines: [], detectedBranch: branch, detectedMonth: isoMonth };
+}
+
+// Returns { branch, isoMonth } if filename matches "{Branch} order items {Month} {Year}"
+function detectOrderItemsFilename(filename) {
+  const MONTHS = { january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12" };
+  const base = filename.replace(/\.[^.]+$/, "").toLowerCase().trim();
+  const m = base.match(/^(.+?)\s+order\s+items\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})$/);
+  if (!m) return null;
+  const rawBranch = m[1].trim();
+  const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
+  return { branch, isoMonth: `${m[3]}-${MONTHS[m[2]]}` };
+}
+
+// Returns { branch, isoMonth } if filename matches "{Branch} orders {Month} {Year}"
+function detectOrdersFilename(filename) {
+  const MONTHS = { january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12" };
+  const base = filename.replace(/\.[^.]+$/, "").toLowerCase().trim();
+  const m = base.match(/^(.+?)\s+orders\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})$/);
+  if (!m) return null;
+  const rawBranch = m[1].trim();
+  const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
+  return { branch, isoMonth: `${m[3]}-${MONTHS[m[2]]}` };
+}
+
+// Parses "{Branch} order items {Month} {Year}" Excel format.
+// Rows 0–4 preamble, row 5 header, data at row 6+.
+// A(0)=order_reference, D(3)=order_type, H(7)=name, J(9)=unit_price, L(11)=qty, O(14)=discount, P(15)=discount_name
+function parseOrderItemsSheet(wb, branch, isoMonth) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  const dataRows = raw.slice(6);
+  const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
+  const rows = [];
+  for (const r of dataRows) {
+    const order_ref  = String(r[0]  || "").trim();
+    const order_type = String(r[3]  || "").trim().toLowerCase();
+    const name       = String(r[7]  || "").trim();
+    const unit_price = toNum(r[9]);
+    const qty        = toNum(r[11]) || 1;
+    const discount   = toNum(r[14]);
+    const disc_name  = String(r[15] || "").trim();
+    if (!order_ref || !name) continue;
+    if (order_type === "modifier" || order_type === "modifier option") continue;
+    if (branch === "zawya" && isZawyaExcluded("", name)) continue;
+    rows.push({ order_ref, name, unit_price, qty, discount, disc_name, branch, month: isoMonth });
+  }
+  return rows;
+}
+
+// Parses "{Branch} orders {Month} {Year}" Excel format.
+// Rows 0–4 preamble, row 5 header, data at row 6+.
+// A(0)=order_reference, X(23)=barista_name
+function parseOrdersSheet(wb, branch, isoMonth) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  const dataRows = raw.slice(6);
+  const rows = [];
+  for (const r of dataRows) {
+    const order_ref   = String(r[0]  || "").trim();
+    const barista_name = String(r[23] || "").trim();
+    if (!order_ref || !barista_name) continue;
+    rows.push({ order_ref, barista_name, branch, month: isoMonth });
+  }
+  return rows;
+}
+
 function _csvParseLine(ln) {
   const out = []; let cur = ""; let q = false;
   for (let i=0; i<ln.length; i++) {
@@ -5463,12 +6437,90 @@ const ROSTER_DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
 const ROSTER_DAY_LABELS = { mon:"Mon", tue:"Tue", wed:"Wed", thu:"Thu", fri:"Fri", sat:"Sat", sun:"Sun" };
 const ROSTER_SHIFTS = ["morning","night"];
 
+// Egyptian public holidays — fixed Gregorian dates (MM-DD repeats every year)
+const EG_FIXED_HOLIDAYS = [
+  { monthDay: "01-07", label: "Coptic Christmas",     emoji: "✝️",  type: "public_holiday" },
+  { monthDay: "01-25", label: "Police Day",            emoji: "🇪🇬", type: "public_holiday" },
+  { monthDay: "04-25", label: "Sinai Liberation Day",  emoji: "🇪🇬", type: "public_holiday" },
+  { monthDay: "05-01", label: "Labor Day",             emoji: "🛠️",  type: "public_holiday" },
+  { monthDay: "06-30", label: "June 30 Revolution",    emoji: "🇪🇬", type: "public_holiday" },
+  { monthDay: "07-23", label: "July 23 Revolution",    emoji: "🇪🇬", type: "public_holiday" },
+  { monthDay: "10-06", label: "Armed Forces Day",      emoji: "🇪🇬", type: "public_holiday" },
+];
+
+// Islamic dates by year — approximate, subject to moon sighting confirmation by Dar Al-Iftaa
+const ISLAMIC_DATES = {
+  2025: {
+    ramadan:       { start: "2025-03-01", end: "2025-03-29" },
+    eid_fitr:      ["2025-03-30", "2025-03-31", "2025-04-01"],
+    eid_adha:      ["2025-06-06", "2025-06-07", "2025-06-08", "2025-06-09"],
+    islamic_new_year: "2025-06-27",
+    mawlid:        "2025-09-04",
+  },
+  2026: {
+    ramadan:       { start: "2026-02-18", end: "2026-03-19" },
+    eid_fitr:      ["2026-03-20", "2026-03-21", "2026-03-22"],
+    eid_adha:      ["2026-05-27", "2026-05-28", "2026-05-29", "2026-05-30"],
+    islamic_new_year: "2026-06-17",
+    mawlid:        "2026-08-24",
+  },
+  2027: {
+    ramadan:       { start: "2027-02-08", end: "2027-03-09" },
+    eid_fitr:      ["2027-03-10", "2027-03-11", "2027-03-12"],
+    eid_adha:      ["2027-05-17", "2027-05-18", "2027-05-19", "2027-05-20"],
+    islamic_new_year: "2027-06-07",
+    mawlid:        "2027-08-13",
+  },
+  2028: {
+    ramadan:       { start: "2028-01-28", end: "2028-02-26" },
+    eid_fitr:      ["2028-02-27", "2028-02-28", "2028-02-29"],
+    eid_adha:      ["2028-05-05", "2028-05-06", "2028-05-07", "2028-05-08"],
+    islamic_new_year: "2028-05-26",
+    mawlid:        "2028-08-01",
+  },
+};
+
+// Returns { holidays: [{label, emoji, type}], inRamadan: bool } for a given YYYY-MM-DD
+function getCalendarContext(dateStr) {
+  const holidays = [];
+  const monthDay = dateStr.slice(5); // MM-DD
+  const year = parseInt(dateStr.slice(0, 4), 10);
+
+  // Fixed Gregorian holidays
+  for (const h of EG_FIXED_HOLIDAYS) {
+    if (h.monthDay === monthDay) holidays.push(h);
+  }
+
+  // Islamic holidays
+  const islamic = ISLAMIC_DATES[year];
+  if (islamic) {
+    if (islamic.eid_fitr.includes(dateStr))
+      holidays.push({ label: "Eid Al-Fitr", emoji: "🌙", type: "eid_fitr" });
+    if (islamic.eid_adha.includes(dateStr))
+      holidays.push({ label: "Eid Al-Adha", emoji: "🐑", type: "eid_adha" });
+    if (islamic.islamic_new_year === dateStr)
+      holidays.push({ label: "Islamic New Year", emoji: "🌙", type: "public_holiday" });
+    if (islamic.mawlid === dateStr)
+      holidays.push({ label: "Mawlid Al-Nabi", emoji: "🕌", type: "public_holiday" });
+  }
+
+  const inRamadan = !!(islamic &&
+    dateStr >= islamic.ramadan.start &&
+    dateStr <= islamic.ramadan.end &&
+    !holidays.find(h => h.type === "eid_fitr"));
+
+  return { holidays, inRamadan };
+}
+
 routes.roster = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Weekly schedule", "Morning & night shifts for Maadi and Zawya."));
 
   state.rosters = state.rosters || [];
-  const canEdit = (u.role === "owner" || u.role === "head_barista");
+  const _rosterMonth = new Date().toISOString().slice(0, 7);
+  const _rosterAssign = getLeadershipAssignment(_rosterMonth);
+  const canEdit = u.role === "owner" || u.role === "head_barista" ||
+    (_rosterAssign && _rosterAssign.weekly_schedule === u.id);
 
   let weekOf = mondayOf(new Date().toISOString().slice(0,10));
 
@@ -5510,6 +6562,142 @@ routes.roster = function (u) {
     }
   }
   wrap.appendChild(otCard);
+  // ────────────────────────────────────────────────────────────
+
+  // ── Special Dates & Events ──────────────────────────────────
+  state.special_dates = state.special_dates || [];
+  const today = localISODate(new Date());
+  const upcoming = (state.special_dates)
+    .filter(e => e.date >= today)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const sdCard = el("div", { class: "card", style: { marginTop: "12px" } });
+  let sdExpanded = upcoming.length > 0;
+
+  const sdToggleBtn = el("button", { class: "btn ghost", style: { fontSize: "12px", padding: "2px 8px" } },
+    sdExpanded ? "Hide" : "Show");
+
+  const sdHeaderRow = el("div", { style: { display: "flex", alignItems: "center", gap: "8px" } });
+  sdHeaderRow.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", flex: "1" } },
+    "📅 Special Dates & Events"));
+  if (upcoming.length) {
+    sdHeaderRow.appendChild(el("span", { class: "pill", style: { background: "rgba(139,92,246,0.18)", fontSize: "11px" } },
+      `${upcoming.length} upcoming`));
+  }
+  sdHeaderRow.appendChild(sdToggleBtn);
+  sdCard.appendChild(sdHeaderRow);
+
+  sdCard.appendChild(el("div", { class: "muted small", style: { marginTop: "4px", marginBottom: "8px" } },
+    "Special screenings at Zawya, events in Maadi, or any date that affects demand. These appear as badges on day cards in the schedule below."));
+
+  const sdBody = el("div", { style: { display: sdExpanded ? "block" : "none" } });
+  sdToggleBtn.addEventListener("click", () => {
+    sdExpanded = !sdExpanded;
+    sdBody.style.display = sdExpanded ? "block" : "none";
+    sdToggleBtn.textContent = sdExpanded ? "Hide" : "Show";
+  });
+
+  function drawSpecialDates() {
+    sdBody.innerHTML = "";
+    const todayStr = localISODate(new Date());
+    const sorted = (state.special_dates || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+    const upcomingItems = sorted.filter(e => e.date >= todayStr);
+    const pastItems = sorted.filter(e => e.date < todayStr);
+
+    if (!upcomingItems.length && !pastItems.length) {
+      sdBody.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } }, "No special dates added yet."));
+    }
+
+    for (const ev of upcomingItems) {
+      const branchLabel = ev.branch === "all" ? "All branches" : ev.branch[0].toUpperCase() + ev.branch.slice(1);
+      const emoji = ev.branch === "zawya" ? "🎬" : ev.branch === "maadi" ? "⭐" : "📅";
+      const row = el("div", { class: "kv", style: { alignItems: "flex-start", marginBottom: "6px", paddingBottom: "6px", borderBottom: "1px solid var(--border)" } });
+      const kDiv = el("div", { class: "k", style: { minWidth: "110px", flexShrink: "0" } });
+      kDiv.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px" } }, ev.date));
+      kDiv.appendChild(el("div", { class: "muted small" }, branchLabel));
+      row.appendChild(kDiv);
+      const vDiv = el("div", { class: "v" });
+      vDiv.appendChild(el("div", { style: { fontWeight: "500" } }, `${emoji} ${ev.title}`));
+      if (ev.note) vDiv.appendChild(el("div", { class: "muted small" }, ev.note));
+      row.appendChild(vDiv);
+      if (canEdit) {
+        const delBtn = el("button", { class: "btn ghost", style: { fontSize: "12px", color: "var(--bad)", padding: "2px 6px", flexShrink: "0" } }, "🗑");
+        delBtn.addEventListener("click", () => {
+          if (!confirm(`Delete event "${ev.title}" on ${ev.date}?`)) return;
+          state.special_dates = state.special_dates.filter(x => x.id !== ev.id);
+          saveState(); toast("Event deleted"); drawSpecialDates(); draw();
+        });
+        row.appendChild(delBtn);
+      }
+      sdBody.appendChild(row);
+    }
+
+    if (pastItems.length) {
+      const pastToggle = el("div", { class: "muted small", style: { cursor: "pointer", marginTop: "8px", marginBottom: "4px" } },
+        `▸ ${pastItems.length} past event${pastItems.length > 1 ? "s" : ""}`);
+      const pastList = el("div", { style: { display: "none" } });
+      pastToggle.addEventListener("click", () => {
+        const open = pastList.style.display === "block";
+        pastList.style.display = open ? "none" : "block";
+        pastToggle.textContent = (open ? "▸" : "▾") + ` ${pastItems.length} past event${pastItems.length > 1 ? "s" : ""}`;
+      });
+      for (const ev of pastItems) {
+        const branchLabel = ev.branch === "all" ? "All branches" : ev.branch[0].toUpperCase() + ev.branch.slice(1);
+        const emoji = ev.branch === "zawya" ? "🎬" : ev.branch === "maadi" ? "⭐" : "📅";
+        const row = el("div", { class: "kv", style: { alignItems: "flex-start", marginBottom: "4px", opacity: "0.6" } });
+        const kDiv = el("div", { class: "k", style: { minWidth: "110px", flexShrink: "0" } });
+        kDiv.appendChild(el("div", { style: { fontSize: "12px" } }, ev.date));
+        kDiv.appendChild(el("div", { class: "muted small" }, branchLabel));
+        row.appendChild(kDiv);
+        const vDiv = el("div", { class: "v" });
+        vDiv.appendChild(el("div", { style: { fontSize: "12px" } }, `${emoji} ${ev.title}`));
+        row.appendChild(vDiv);
+        if (canEdit) {
+          const delBtn = el("button", { class: "btn ghost", style: { fontSize: "11px", color: "var(--bad)", padding: "2px 6px", flexShrink: "0" } }, "🗑");
+          delBtn.addEventListener("click", () => {
+            state.special_dates = state.special_dates.filter(x => x.id !== ev.id);
+            saveState(); toast("Event deleted"); drawSpecialDates(); draw();
+          });
+          row.appendChild(delBtn);
+        }
+        pastList.appendChild(row);
+      }
+      sdBody.appendChild(pastToggle);
+      sdBody.appendChild(pastList);
+    }
+
+    if (canEdit) {
+      sdBody.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginTop: "14px", marginBottom: "6px" } }, "Add event"));
+      const addForm = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "flex-end" } });
+      const dateInp  = el("input",    { type: "date",   placeholder: "Date",   style: { maxWidth: "150px" } });
+      const branchSel = el("select",  { style: { maxWidth: "150px" } });
+      for (const [v, l] of [["all","All branches"],["maadi","Maadi"],["zawya","Zawya"]]) {
+        branchSel.appendChild(el("option", { value: v }, l));
+      }
+      const titleInp = el("input",    { type: "text",   placeholder: "Title (e.g. Zawya Film Night)", style: { minWidth: "200px", flex: "1" } });
+      const noteInp  = el("input",    { type: "text",   placeholder: "Note (optional)", style: { minWidth: "160px", flex: "1" } });
+      const addBtn   = el("button",   { class: "btn", style: { flexShrink: "0" } }, "＋ Add");
+      addBtn.addEventListener("click", () => {
+        if (!dateInp.value) return toast("Please pick a date", "error");
+        if (!titleInp.value.trim()) return toast("Please enter a title", "error");
+        const s = stamp();
+        state.special_dates.push({
+          id: uuid(), date: dateInp.value, branch: branchSel.value,
+          title: titleInp.value.trim(), note: noteInp.value.trim(),
+          by: s.by, by_name: s.by_name, at: s.at,
+        });
+        saveState();
+        toast(`Event added: ${titleInp.value.trim()}`);
+        dateInp.value = ""; titleInp.value = ""; noteInp.value = "";
+        drawSpecialDates(); draw();
+      });
+      addForm.append(dateInp, branchSel, titleInp, noteInp, addBtn);
+      sdBody.appendChild(addForm);
+    }
+  }
+  drawSpecialDates();
+  sdCard.appendChild(sdBody);
+  wrap.appendChild(sdCard);
   // ────────────────────────────────────────────────────────────
 
   const body = el("div", { class: "stack" });
@@ -5568,14 +6756,41 @@ routes.roster = function (u) {
       dayDate.setDate(dayDate.getDate() + di);
       const dayDateStr = localISODate(dayDate); // local, not UTC
       const onLeave = onLeaveIds(dayDateStr);
+      const { holidays, inRamadan } = getCalendarContext(dayDateStr);
+      const daySpecialDates = (state.special_dates || []).filter(e =>
+        e.date === dayDateStr && (e.branch === "all" || e.branch === "maadi" || e.branch === "zawya")
+      );
 
-      const card = el("div", { class: "card", style: { marginTop: "10px" } });
-      const dayHdr = el("h2", { style: { display: "flex", alignItems: "center", gap: "8px" } });
+      // Choose card tint based on calendar context
+      let cardBg = "";
+      const hasEid = holidays.find(h => h.type === "eid_fitr" || h.type === "eid_adha");
+      const hasPublicHol = holidays.find(h => h.type === "public_holiday");
+      if (hasEid)                     cardBg = "rgba(212,175,55,0.09)";
+      else if (inRamadan)             cardBg = "rgba(139,90,43,0.06)";
+      else if (hasPublicHol)          cardBg = "rgba(59,130,246,0.06)";
+      else if (daySpecialDates.length) cardBg = "rgba(139,92,246,0.06)";
+
+      const card = el("div", { class: "card", style: { marginTop: "10px", ...(cardBg ? { background: cardBg } : {}) } });
+      const dayHdr = el("h2", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px" } });
       dayHdr.appendChild(document.createTextNode(ROSTER_DAY_LABELS[day]));
       dayHdr.appendChild(el("span", { class: "muted small", style: { fontWeight: "400" } }, dayDateStr));
       if (onLeave.length) {
         const names = onLeave.map(id => { const s = staff.find(x => x.id === id); return s ? s.name : id; });
         dayHdr.appendChild(el("span", { class: "pill warn", style: { color: "var(--warn)", fontSize: "11px" } }, `🌴 On leave: ${names.join(", ")}`));
+      }
+      // Holiday badges
+      for (const h of holidays) {
+        const bg = (h.type === "eid_fitr" || h.type === "eid_adha")
+          ? "rgba(212,175,55,0.2)" : "rgba(59,130,246,0.12)";
+        dayHdr.appendChild(el("span", { class: "pill", style: { background: bg, fontSize: "11px" } }, `${h.emoji} ${h.label}`));
+      }
+      if (inRamadan) {
+        dayHdr.appendChild(el("span", { class: "pill", style: { background: "rgba(139,90,43,0.18)", fontSize: "11px" } }, "🌙 Ramadan"));
+      }
+      // Special event badges
+      for (const ev of daySpecialDates) {
+        const emoji = ev.branch === "zawya" ? "🎬" : ev.branch === "maadi" ? "⭐" : "📅";
+        dayHdr.appendChild(el("span", { class: "pill", style: { background: "rgba(139,92,246,0.18)", fontSize: "11px" } }, `${emoji} ${ev.title}`));
       }
       card.appendChild(dayHdr);
 
@@ -5838,65 +7053,13 @@ routes.menu = function (u) {
     " (optional — renames matched item). Uppercase section rows, trailing spaces, accents and parentheticals are all normalised; re-uploading always overwrites prior cost / price."
   ]));
 
-  const up = el("input", { type: "file", accept: ".csv" });
-  wrap.appendChild(el("label", {}, "Upload cost CSV"));
+  const up = el("input", { type: "file", accept: ".csv,.xlsx,.xls" });
+  wrap.appendChild(el("label", {}, "Upload cost CSV or Excel"));
   wrap.appendChild(up);
   up.addEventListener("change", async e => {
     const f = e.target.files[0]; if (!f) return;
-    let text = await f.text();
-    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-    const parseLine = (ln) => {
-      const out = []; let cur = ""; let q = false;
-      for (let i=0; i<ln.length; i++) {
-        const c = ln[i];
-        if (q) { if (c === '"' && ln[i+1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
-        else { if (c === '"') q = true; else if (c === ',') { out.push(cur); cur = ""; } else cur += c; }
-      }
-      out.push(cur); return out;
-    };
-    const lines = text.split(/\r?\n/).filter(s => s.trim() !== "");
-    if (lines.length === 0) { toast("Empty CSV", "error"); return; }
-    const h = parseLine(lines[0]).map(s => s.trim().toLowerCase());
-    const findCol = (...aliases) => { for (const a of aliases) { const i = h.indexOf(a); if (i !== -1) return i; } return -1; };
-    const iName    = findCol("name","item","item name","product","product name","menu item","bg");
-    const iCost    = findCol("cost_egp","cost","bf","cost with cup and lid","cost_with_cup_and_lid","item cost");
-    const iPrice   = findCol("price_egp","price","bi","menu price","selling price");
-    const iCat     = findCol("category","cat","type");
-    const iSku     = findCol("sku","pos_sku","pos sku","item id","product sku");
-    const iNewName = findCol("new_name","rename","new name","renamed","rename to");
-    if (iName < 0 || (iCost < 0 && iPrice < 0)) {
-      toast("CSV needs a name column + at least one of cost/price", "error");
-      return;
-    }
-    // Aggressive normalization — strips parens content, diacritics, punctuation, collapses whitespace.
-    // This is what fixes "match by name" failures: the menu uses names like
-    // "Original Beats (Espresso)" or "Pistacchio Latte" and CSVs often have
-    // slightly different spacing/accents/parens.
     const normFull = (s) => String(s||"").replace(/\s+/g," ").trim();
-    const normKey = (s) => String(s||"")
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")   // strip accents
-      .toLowerCase()
-      .replace(/\([^)]*\)/g, " ")                         // drop parenthetical
-      .replace(/[^a-z0-9]+/g, " ")                        // keep alnum only
-      .replace(/\s+/g, " ")
-      .trim();
     const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? null : n; };
-    // Build lookup maps once. IMPORTANT: the seed menu contains duplicates
-    // (e.g. "Original Beats" and "Original Beats (Espresso)" both normalize to
-    // "original beats"). We keep ALL entries per key in an array and update
-    // every single one, otherwise the visible duplicate shows an empty cost.
-    const byNameKey = new Map(); // key -> array of menu items
-    const bySkuKey = new Map();
-    for (const m of state.menu) {
-      const k = normKey(m.name);
-      if (!byNameKey.has(k)) byNameKey.set(k, []);
-      byNameKey.get(k).push(m);
-      if (m.pos_sku) bySkuKey.set(String(m.pos_sku).trim().toLowerCase(), m);
-    }
-    let updated = 0, added = 0, skipped = 0, renamed = 0, dupsTouched = 0;
-    const unmatchedNames = [];
-    // Heuristic: a row is a "section header" if it's all uppercase (like "HOT BEATS"),
-    // or if both cost and price are missing/zero. We never want to add those to the menu.
     const looksLikeSectionHeader = (name, cost, price) => {
       const hasNumbers = (cost != null && cost > 0) || (price != null && price > 0);
       if (hasNumbers) return false;
@@ -5904,68 +7067,83 @@ routes.menu = function (u) {
       if (!letters) return true;
       return letters === letters.toUpperCase() && letters.length > 1;
     };
-    for (let i=1; i<lines.length; i++) {
-      const parts = parseLine(lines[i]);
-      const name = normFull(parts[iName]);
-      if (!name) { skipped++; continue; }
-      const cost  = iCost  >= 0 ? toNum(parts[iCost])  : null;
-      const price = iPrice >= 0 ? toNum(parts[iPrice]) : null;
-      const category = iCat >= 0 ? normFull(parts[iCat]) : "";
-      const sku = iSku >= 0 ? normFull(parts[iSku]) : "";
-      const newName = iNewName >= 0 ? normFull(parts[iNewName]) : "";
-      if (looksLikeSectionHeader(name, cost, price)) { skipped++; continue; }
-      if ((cost == null || cost === 0) && (price == null || price === 0) && !newName) { skipped++; continue; }
-      // Try SKU first, then normalized name key (returns ALL matches).
-      let foundArr = null;
-      if (sku) {
-        const skuMatch = bySkuKey.get(sku.toLowerCase());
-        if (skuMatch) foundArr = [skuMatch];
+    // itemRows: [{name, cost, price, category, sku}]
+    let itemRows = [];
+    if (/\.(xlsx|xls)$/i.test(f.name)) {
+      // For xlsx: always read cost tab, columns by fixed index — A(0)=name, BF(57)=cost, BI(60)=price.
+      const COL_NAME = 0, COL_COST = 57, COL_PRICE = 60;
+      const buf = await f.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      const costSheetName = wb.SheetNames.find(n => n.trim().toLowerCase() === "cost") || wb.SheetNames[0];
+      const ws = wb.Sheets[costSheetName];
+      if (!ws || !ws['!ref']) { toast("Empty cost sheet", "error"); return; }
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      const cv = (r, c) => { const cell = ws[XLSX.utils.encode_cell({r, c})]; return cell != null ? cell.v : null; };
+      for (let r = 1; r <= range.e.r; r++) {
+        const name = normFull(String(cv(r, COL_NAME) ?? ""));
+        const rawCost  = cv(r, COL_COST);
+        const rawPrice = cv(r, COL_PRICE);
+        const cost  = rawCost  != null ? Number(rawCost)  : null;
+        const price = rawPrice != null ? Number(rawPrice) : null;
+        itemRows.push({ name, cost: isNaN(cost) ? null : cost, price: isNaN(price) ? null : price, category: "", sku: "" });
       }
-      if (!foundArr) foundArr = byNameKey.get(normKey(name)) || null;
-      // As a last resort, fall back to fuzzy contains match so "Pistacchio Latte"
-      // still matches "Pistachio Latte" even with typos. Returns ALL matching items.
-      if (!foundArr) {
-        const key = normKey(name);
-        const fuzzy = [];
-        for (const m of state.menu) {
-          const mk = normKey(m.name);
-          if (!mk) continue;
-          if (mk === key || mk.includes(key) || key.includes(mk)) fuzzy.push(m);
+    } else {
+      // CSV fallback: detect columns by header name.
+      let text = await f.text();
+      if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+      const parseLine = (ln) => {
+        const out = []; let cur = ""; let q = false;
+        for (let i=0; i<ln.length; i++) {
+          const c = ln[i];
+          if (q) { if (c === '"' && ln[i+1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+          else { if (c === '"') q = true; else if (c === ',') { out.push(cur); cur = ""; } else cur += c; }
         }
-        if (fuzzy.length) foundArr = fuzzy;
+        out.push(cur); return out;
+      };
+      const lines = text.split(/\r?\n/).filter(s => s.trim() !== "");
+      if (lines.length === 0) { toast("Empty CSV", "error"); return; }
+      const h = parseLine(lines[0]).map(s => s.trim().toLowerCase());
+      const findCol = (...aliases) => { for (const a of aliases) { const i = h.indexOf(a); if (i !== -1) return i; } return -1; };
+      const iName  = findCol("name","item","item name","product","product name","menu item","bg");
+      const iCost  = findCol("cost_egp","cost","bf","cost with cup and lid","cost_with_cup_and_lid","item cost");
+      const iPrice = findCol("price_egp","price","bi","menu price","selling price");
+      const iCat   = findCol("category","cat","type");
+      const iSku   = findCol("sku","pos_sku","pos sku","item id","product sku");
+      if (iName < 0 || (iCost < 0 && iPrice < 0)) {
+        toast("CSV needs a name column + at least one of cost/price", "error"); return;
       }
-      if (foundArr && foundArr.length) {
-        // Apply cost/price to EVERY matching item. Fixes the common case where
-        // the seed menu has duplicates with the same normalized name — uploading
-        // once should zero out "cost: —" everywhere for that item.
-        for (const found of foundArr) {
-          if (cost  != null) found.cost_egp  = cost;
-          if (price != null) found.price_egp = price;
-          if (category) found.category = category;
-          if (newName && newName.toLowerCase() !== found.name.toLowerCase()) {
-            byNameKey.delete(normKey(found.name));
-            found.name = newName;
-            const nk = normKey(newName);
-            if (!byNameKey.has(nk)) byNameKey.set(nk, []);
-            byNameKey.get(nk).push(found);
-            renamed++;
-          }
-        }
-        if (foundArr.length > 1) dupsTouched += foundArr.length - 1;
-        updated++;
-      } else {
-        unmatchedNames.push(name);
-        state.menu.push({ id: "menu_" + uuid().slice(0,6), name: newName || name, price_egp: price||0, cost_egp: cost||0, category, branches: ["maadi","zawya"] });
-        added++;
+      for (let i = 1; i < lines.length; i++) {
+        const parts = parseLine(lines[i]);
+        itemRows.push({
+          name:     normFull(parts[iName]),
+          cost:     iCost  >= 0 ? toNum(parts[iCost])  : null,
+          price:    iPrice >= 0 ? toNum(parts[iPrice]) : null,
+          category: iCat   >= 0 ? normFull(parts[iCat]) : "",
+          sku:      iSku   >= 0 ? normFull(parts[iSku]) : ""
+        });
       }
     }
+    // Sheet is authoritative — wipe existing menu and rebuild from itemRows.
+    const newMenu = [];
+    let added = 0, skipped = 0;
+    for (const { name, cost, price, category, sku } of itemRows) {
+      if (!name) { skipped++; continue; }
+      if (looksLikeSectionHeader(name, cost, price)) { skipped++; continue; }
+      if (cost == null && price == null) { skipped++; continue; }
+      newMenu.push({
+        id: "menu_" + uuid().slice(0,6),
+        name,
+        price_egp: price ?? 0,
+        cost_egp:  cost  ?? 0,
+        category,
+        pos_sku: sku || null,
+        branches: ["maadi","zawya"]
+      });
+      added++;
+    }
+    state.menu = newMenu;
     saveState();
-    const extra = unmatchedNames.length
-      ? ` · New (no menu match): ${unmatchedNames.slice(0,5).join(", ")}${unmatchedNames.length > 5 ? "…" : ""}`
-      : "";
-    const renameNote = renamed ? `, ${renamed} renamed` : "";
-    const dupNote = dupsTouched ? `, ${dupsTouched} duplicates also updated` : "";
-    toast(`Menu updated: ${updated} matched${dupNote}${renameNote}, ${added} added${skipped?`, ${skipped} skipped`:""}${extra}`);
+    toast(`Menu replaced: ${added} items loaded${skipped ? `, ${skipped} skipped` : ""}`);
     render();
   });
 
@@ -6132,7 +7310,6 @@ routes.users = function (u) {
     weekly_schedule:      "\ud83d\udcc5 Schedule",
     inventory_management: "\ud83d\udce6 Inventory",
     cash_status:          "\ud83d\udcb5 Cash",
-    barista_hygiene:      "\ud83e\uddf9 Hygiene",
   };
 
   const allStaff = staffDir.all().sort((a,b) => a.name.localeCompare(b.name));
@@ -6556,11 +7733,24 @@ routes.dashboard = function (u, params) {
     // COGS from sales × menu cost (normalized name match)
     const normName = (s) => String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
+
+    // Use actual quantities from order_items (File 2) when available — more accurate than qty=1 default
+    const orderItemsInRange = (state.order_items || []).filter(i =>
+      i.branch === branch && i.month >= monthFrom && i.month <= monthTo);
+    const qtyByItem = new Map();
+    for (const i of orderItemsInRange) {
+      const k = normName(i.name);
+      qtyByItem.set(k, (qtyByItem.get(k)||0) + (Number(i.qty)||1));
+    }
+    const hasOrderItems = qtyByItem.size > 0;
+
     let cogsSales = 0, matched = 0, unmatched = 0;
     for (const r of sales) {
-      const m = menuByName.get(normName(r.item));
-      if (m && m.cost_egp) { cogsSales += (Number(r.qty)||0) * (Number(m.cost_egp)||0); matched += Number(r.qty)||0; }
-      else unmatched += Number(r.qty)||0;
+      const key = normName(r.item);
+      const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
+      const m = menuByName.get(key);
+      if (m && m.cost_egp) { cogsSales += qty * (Number(m.cost_egp)||0); matched += qty; }
+      else unmatched += qty;
     }
 
     function lastUnitCost(inv_item_id) {
@@ -6701,10 +7891,11 @@ routes.dashboard = function (u, params) {
     for (const r of sales) {
       const k = r.item || "—";
       const cur = byItem.get(k) || { qty: 0, net: 0, cogs: 0 };
-      cur.qty += Number(r.qty)||0;
+      const itemQty = hasOrderItems ? (qtyByItem.get(normName(k)) || 0) : (Number(r.qty)||0);
+      cur.qty += itemQty;
       cur.net += Number(r.net_sales)||0;
       const m = menuByName.get(normName(k));
-      if (m && m.cost_egp) cur.cogs += (Number(r.qty)||0) * (Number(m.cost_egp)||0);
+      if (m && m.cost_egp) cur.cogs += itemQty * (Number(m.cost_egp)||0);
       byItem.set(k, cur);
     }
     const top = [...byItem.entries()].map(([name, v]) => ({ name, ...v, margin: v.net ? ((v.net - v.cogs)/v.net)*100 : 0 }))
@@ -7945,15 +9136,40 @@ routes.handbook = function (u) {
   const canEdit = (u.role === "owner" || u.role === "head_barista");
   const CATEGORIES = [...new Set(state.handbook_recipes.map(r => r.category))];
 
+  let lang = "en";
+
   const wrap = el("div", {});
   wrap.appendChild(header("Barista Handbook", "Recipes & drink preparation guide."));
+
+  // ── Language toggle ──
+  const langRow = el("div", { style: { display: "flex", gap: "8px", marginBottom: "18px" } });
+  const btnLangEn = el("button", { class: "btn", style: { flex: "1", background: "var(--ink)", color: "var(--accent)" } }, "🇬🇧 English");
+  const btnLangAr = el("button", { class: "btn secondary", style: { flex: "1" } }, "🇪🇬 العربية");
+  langRow.appendChild(btnLangEn);
+  langRow.appendChild(btnLangAr);
+  wrap.appendChild(langRow);
+
+  btnLangEn.addEventListener("click", () => {
+    lang = "en";
+    btnLangEn.style.background = "var(--ink)"; btnLangEn.style.color = "var(--accent)";
+    btnLangAr.style.background = ""; btnLangAr.style.color = "";
+    buildTopTabs(); buildTabs(); updateSearchPlaceholder(); renderRecipes(); buildOMSection();
+  });
+  btnLangAr.addEventListener("click", () => {
+    lang = "ar";
+    btnLangAr.style.background = "var(--ink)"; btnLangAr.style.color = "var(--accent)";
+    btnLangEn.style.background = ""; btnLangEn.style.color = "";
+    buildTopTabs(); buildTabs(); updateSearchPlaceholder(); renderRecipes(); buildOMSection();
+  });
 
   // ── Top-level section tabs ──
   let activeTab = "recipes";
   const topTabBar = el("div", { class: "tabs" });
   function buildTopTabs() {
     topTabBar.innerHTML = "";
-    [["recipes", "Drinks Recipe"], ["operating_model", "Operating Model"]].forEach(([tab, label]) => {
+    const tabDefs = [["recipes", "Drinks Recipe", "وصفات المشروبات"], ["operating_model", "Operating Model", "النموذج التشغيلي"]];
+    tabDefs.forEach(([tab, enLabel, arLabel]) => {
+      const label = lang === "ar" ? arLabel : enLabel;
       const btn = el("button", { class: "tab" + (activeTab === tab ? " on" : "") }, label);
       btn.addEventListener("click", () => { activeTab = tab; buildTopTabs(); renderSections(); });
       topTabBar.appendChild(btn);
@@ -7968,6 +9184,20 @@ routes.handbook = function (u) {
   let activeCategory = "all";
   const tabBar = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "14px" } });
 
+  const CAT_AR = {
+    "all": "كل المشروبات",
+    "Hot Espresso": "إسبريسو ساخن",
+    "Iced Coffee": "قهوة مثلجة",
+    "Signature Drinks": "مشروبات مميزة",
+    "Blended": "مثلوج",
+    "Matcha": "ماتشا",
+    "Hot Chocolate": "شوكولاتة ساخنة",
+    "Non-Coffee & Tea": "بدون قهوة وشاي",
+    "Mojitos": "موهيتو",
+    "Flavoured Espresso": "إسبريسو بالنكهات",
+  };
+  function catLabel(cat) { return lang === "ar" ? (CAT_AR[cat] || cat) : (cat === "all" ? "All Drinks" : cat); }
+
   function buildTabs() {
     tabBar.innerHTML = "";
     const allCats = ["all", ...([...new Set(state.handbook_recipes.map(r => r.category))])];
@@ -7976,7 +9206,7 @@ routes.handbook = function (u) {
       const tab = el("button", {
         class: active ? "chip ok" : "chip",
         style: { cursor: "pointer", fontWeight: active ? "700" : "400" },
-      }, cat === "all" ? "All Drinks" : cat);
+      }, catLabel(cat));
       tab.addEventListener("click", () => { activeCategory = cat; renderRecipes(); buildTabs(); });
       tabBar.appendChild(tab);
     });
@@ -7992,6 +9222,11 @@ routes.handbook = function (u) {
   searchRow.appendChild(searchIn);
   recipesSection.appendChild(searchRow);
 
+  function updateSearchPlaceholder() {
+    searchIn.placeholder = lang === "ar" ? "ابحث عن وصفة…" : "Search recipes…";
+    searchIn.style.direction = lang === "ar" ? "rtl" : "ltr";
+  }
+
   // ── Recipe list ──
   const recipeBody = el("div", {});
   recipesSection.appendChild(recipeBody);
@@ -8005,7 +9240,7 @@ routes.handbook = function (u) {
     });
 
     if (filtered.length === 0) {
-      recipeBody.appendChild(el("div", { class: "muted", style: { padding: "20px 0", textAlign: "center" } }, "No recipes found."));
+      recipeBody.appendChild(el("div", { class: "muted", style: { padding: "20px 0", textAlign: "center" } }, lang === "ar" ? "لا توجد وصفات." : "No recipes found."));
       return;
     }
 
@@ -8033,14 +9268,20 @@ routes.handbook = function (u) {
         // ── Two-column spec row: Cup Size | Prep Time ──
         const specRow = el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: "1px solid var(--border)" } });
         const specLeft = el("div", { style: { padding: "7px 14px", fontSize: "12px", color: "var(--ink)", borderRight: "1px solid var(--border)" } });
-        specLeft.appendChild(el("span", { style: { fontWeight: "600" } }, "Cup Size: "));
+        specLeft.appendChild(el("span", { style: { fontWeight: "600" } }, lang === "ar" ? "حجم الكوب: " : "Cup Size: "));
         specLeft.appendChild(document.createTextNode(recipe.size || "—"));
         const specRight = el("div", { style: { padding: "7px 14px", fontSize: "12px", color: "var(--ink)" } });
-        specRight.appendChild(el("span", { style: { fontWeight: "600" } }, "Preparation Time: "));
+        specRight.appendChild(el("span", { style: { fontWeight: "600" } }, lang === "ar" ? "وقت التحضير: " : "Preparation Time: "));
         specRight.appendChild(document.createTextNode(recipe.time || "—"));
         specRow.appendChild(specLeft);
         specRow.appendChild(specRight);
         card.appendChild(specRow);
+
+        // ── Description row ──
+        const descRow = el("div", { style: { padding: "10px 14px", borderBottom: "1px solid var(--border)", background: "var(--surface)" } });
+        descRow.appendChild(el("span", { style: { fontWeight: "600", fontSize: "10px", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", display: "block", marginBottom: "4px" } }, lang === "ar" ? "الوصف" : "Description"));
+        descRow.appendChild(el("div", { style: { fontSize: "13px", color: recipe.description ? "var(--ink)" : "var(--ink-dim)", fontStyle: recipe.description ? "normal" : "italic", lineHeight: "1.5" } }, recipe.description || (canEdit ? (lang === "ar" ? "لا يوجد وصف — اضغط تعديل لإضافة واحد." : "No description — click Edit to add one.") : "—")));
+        card.appendChild(descRow);
 
         // ── Coffee notes banner (optional) ──
         if (recipe.coffee_notes) {
@@ -8052,7 +9293,7 @@ routes.handbook = function (u) {
         const body = el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0" } });
 
         const ingCol = el("div", { style: { padding: "12px 14px", borderRight: "1px solid var(--border)" } });
-        ingCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", marginBottom: "8px" } }, "Ingredients"));
+        ingCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", marginBottom: "8px" } }, lang === "ar" ? "المكونات" : "Ingredients"));
         (recipe.ingredients || []).forEach(ing => {
           const row = el("div", { style: { fontSize: "12.5px", padding: "3px 0", borderBottom: "1px solid var(--border)", color: "var(--ink)", display: "flex", gap: "6px" } });
           row.appendChild(el("span", { style: { color: "#3b2314", flexShrink: "0" } }, "•"));
@@ -8061,7 +9302,7 @@ routes.handbook = function (u) {
         });
 
         const stepsCol = el("div", { style: { padding: "12px 14px" } });
-        stepsCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", marginBottom: "8px" } }, "Preparation Steps"));
+        stepsCol.appendChild(el("div", { style: { fontSize: "10px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)", marginBottom: "8px" } }, lang === "ar" ? "خطوات التحضير" : "Preparation Steps"));
         (recipe.steps || []).forEach((step, i) => {
           const row = el("div", { style: { fontSize: "12.5px", padding: "3px 0", borderBottom: "1px solid var(--border)", color: "var(--ink)", display: "flex", gap: "6px" } });
           row.appendChild(el("span", { style: { color: "#3b2314", fontWeight: "600", flexShrink: "0" } }, `${i+1}.`));
@@ -8092,47 +9333,72 @@ routes.handbook = function (u) {
   // ── Operating Model ──
   const OM_SECTIONS = [
     {
-      number: "1", title: "Service Standards",
+      number: "1", title: "Service Standards", ar_title: "معايير الخدمة",
       content: [
         { type: "para", text: "Service at Coffee Beats should reflect warmth and professionalism. Every interaction is part of the Coffee Beats creative experience." },
         { type: "subheader", text: "Standards" },
         { type: "bullets", items: ["Greet every customer within 5 seconds of their arrival.", "Confirm the order clearly before preparation begins.", "Deliver drinks with a warm smile and positive energy.", "Maintain a clean, organized counter at all times."] },
         { type: "subheader", text: "Customer Experience Rules" },
         { type: "bullets", items: ["Be welcoming and attentive to artists and creatives — they are our community.", "Encourage conversation and a sense of belonging in the space.", "Maintain calm and professionalism even during busy periods.", "Treat every customer as a guest in a creative home."] },
+      ],
+      ar_content: [
+        { type: "para", text: "الخدمة في كوفي بيتس يجب أن تعكس الدفء والاحترافية. كل تفاعل هو جزء من تجربة كوفي بيتس الإبداعية." },
+        { type: "subheader", text: "المعايير" },
+        { type: "bullets", items: ["رحّب بكل زبون خلال 5 ثوانٍ من وصوله.", "أكّد الطلب بوضوح قبل البدء في التحضير.", "قدّم المشروبات بابتسامة دافئة وطاقة إيجابية.", "حافظ على نظافة العداد وترتيبه في جميع الأوقات."] },
+        { type: "subheader", text: "قواعد تجربة الزبون" },
+        { type: "bullets", items: ["كن مرحباً ومنتبهاً للفنانين والمبدعين — هم مجتمعنا.", "شجّع الحوار وشعور الانتماء في المكان.", "حافظ على الهدوء والاحترافية حتى في أوقات الذروة.", "تعامل مع كل زبون كضيف في بيت إبداعي."] },
       ]
     },
     {
-      number: "2", title: "Opening Procedures",
+      number: "2", title: "Opening Procedures", ar_title: "إجراءات الفتح",
       content: [
         { type: "para", text: "Complete the following steps before serving the first customer of the day:" },
         { type: "bullets", items: ["Turn on the espresso machine and allow it to reach operating temperature.", "Calibrate the grinder and verify espresso extraction is within target profile.", "Prepare milk and all perishable ingredients.", "Check syrup, sauce, and topping levels — replenish as needed.", "Clean and prepare the workspace and bar area.", "Verify the POS system is running correctly.", "Prepare cups, lids, and all service items."] },
+      ],
+      ar_content: [
+        { type: "para", text: "أكمل الخطوات التالية قبل خدمة أول زبون في اليوم:" },
+        { type: "bullets", items: ["شغّل ماكينة الإسبريسو واتركها تصل إلى درجة حرارة التشغيل.", "اضبط الطاحونة وتحقق من أن استخلاص الإسبريسو ضمن المواصفات المستهدفة.", "حضّر الحليب وجميع المكونات سريعة التلف.", "تحقق من مستويات الشراب والصوص والإضافات — أعد التعبئة عند الحاجة.", "نظّف مساحة العمل والبار وجهّزها.", "تحقق من تشغيل نظام نقاط البيع بشكل صحيح.", "حضّر الأكواب والأغطية وجميع أدوات الخدمة."] },
       ]
     },
     {
-      number: "3", title: "Closing Procedures",
+      number: "3", title: "Closing Procedures", ar_title: "إجراءات الإغلاق",
       content: [
         { type: "para", text: "Complete the following steps at the end of every shift:" },
         { type: "bullets", items: ["Clean the espresso machine thoroughly.", "Backflush the machine using the appropriate cleaning cycle.", "Clean and brush the grinder.", "Wash all pitchers, tampers, and utensils.", "Empty all trash and replace liners.", "Clean all counters, surfaces, and floors.", "Turn off all machines safely.", "Record remaining inventory levels for the next shift."] },
+      ],
+      ar_content: [
+        { type: "para", text: "أكمل الخطوات التالية في نهاية كل شيفت:" },
+        { type: "bullets", items: ["نظّف ماكينة الإسبريسو بشكل شامل.", "اعمل عملية الباكفلاش باستخدام دورة التنظيف المناسبة.", "نظّف الطاحونة وافرشها.", "اغسل جميع الأباريق والضاغطات والأدوات.", "أفرّغ جميع سلال المهملات واستبدل الأكياس.", "نظّف جميع الأسطح والعدادات والأرضيات.", "أوقف تشغيل جميع الأجهزة بأمان.", "سجّل مستويات المخزون المتبقية للشيفت القادم."] },
       ]
     },
     {
-      number: "4", title: "Quality Control Checklist",
+      number: "4", title: "Quality Control Checklist", ar_title: "قائمة مراجعة ضبط الجودة",
       content: [
         { type: "para", text: "Every shift must verify the following before and during service:" },
         { type: "bullets", items: ["Espresso extraction time is within the target window for the correct coffee type.", "Milk texture achieves smooth microfoam appropriate to the drink.", "Correct cup size is used for every beverage.", "Each drink follows the correct recipe precisely.", "Drink presentation is clean and consistent.", "Workspace remains hygienic throughout the shift."] },
+      ],
+      ar_content: [
+        { type: "para", text: "يجب على كل شيفت التحقق مما يلي قبل الخدمة وخلالها:" },
+        { type: "bullets", items: ["وقت استخلاص الإسبريسو ضمن النطاق المستهدف لنوع القهوة الصحيح.", "ملمس الحليب يحقق رغوة ناعمة مناسبة للمشروب.", "يُستخدم حجم الكوب الصحيح لكل مشروب.", "كل مشروب يتبع الوصفة الصحيحة بدقة.", "تقديم المشروب نظيف ومتناسق.", "تبقى مساحة العمل صحية طوال الشيفت."] },
       ]
     },
     {
-      number: "5", title: "Inventory & Waste Control",
+      number: "5", title: "Inventory & Waste Control", ar_title: "المخزون ومراقبة الهدر",
       content: [
         { type: "subheader", text: "Daily Inventory to Monitor" },
         { type: "bullets", items: ["Coffee beans", "Milk stock (whole, skimmed, plant-based alternatives)", "Syrups and sauces", "Matcha powder", "Chocolate powder and sauces"] },
         { type: "subheader", text: "Waste Reduction Principles" },
         { type: "bullets", items: ["Follow precise measurements for every recipe — no guessing.", "Track and flag expired or near-expiry ingredients immediately.", "Record daily waste to identify recurring patterns.", "Apply FIFO (First In, First Out) for all inventory rotation."] },
+      ],
+      ar_content: [
+        { type: "subheader", text: "المخزون اليومي للمراقبة" },
+        { type: "bullets", items: ["حبوب القهوة", "مخزون الحليب (كامل الدسم، خالي الدسم، البدائل النباتية)", "الشراب والصوص", "بودرة الماتشا", "بودرة الشوكولاتة والصوص"] },
+        { type: "subheader", text: "مبادئ تقليل الهدر" },
+        { type: "bullets", items: ["اتبع القياسات الدقيقة لكل وصفة — لا تخمين.", "تتبّع وأبلغ عن المكونات منتهية أو قريبة من انتهاء الصلاحية فوراً.", "سجّل الهدر اليومي لتحديد الأنماط المتكررة.", "طبّق مبدأ FIFO (الأول يدخل الأول يخرج) لجميع تدوير المخزون."] },
       ]
     },
     {
-      number: "6", title: "Shift Close",
+      number: "6", title: "Shift Close", ar_title: "إغلاق الشيفت",
       content: [
         { type: "para", text: "The shift close is completed in the operations app at the end of every shift. Steps differ between branches as noted below." },
         { type: "subheader", text: "Mandatory Photo Rule" },
@@ -8141,30 +9407,53 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Open the Shift Close screen in the operations app.", "Enter drinks served during the shift using the standard menu.", "If 1 or more drinks are added, attach at least one photo.", "Record any waste or breakages in the Notes field.", "Submit the shift close. Do not submit without completing all mandatory fields.", "Hospitality: enter these separately in the Hospitality section if applicable."] },
         { type: "subheader", text: "Zawya — Shift Close Steps" },
         { type: "bullets", items: ["Open the Shift Close screen in the operations app.", "Enter drinks served during the shift.", "Hospitality: enter separately per screening if applicable.", "If 1 or more drinks are added (standard or hospitality), attach at least one photo.", "Record any waste or breakages in the Notes field.", "Submit the shift close. Do not submit without completing all mandatory fields."] },
+      ],
+      ar_content: [
+        { type: "para", text: "يتم إغلاق الشيفت في تطبيق العمليات في نهاية كل شيفت. تختلف الخطوات بين الفروع كما هو موضح أدناه." },
+        { type: "subheader", text: "قاعدة الصورة الإلزامية" },
+        { type: "para", text: "إذا تمت إضافة مشروب واحد أو أكثر أثناء إغلاق الشيفت، يجب إرفاق صورة واحدة على الأقل قبل تقديم الإغلاق. يُسمح بأكثر من صورة ويُشجَّع عليه." },
+        { type: "subheader", text: "المعادي — خطوات إغلاق الشيفت" },
+        { type: "bullets", items: ["افتح شاشة إغلاق الشيفت في تطبيق العمليات.", "أدخل المشروبات المقدّمة خلال الشيفت باستخدام القائمة المعيارية.", "إذا أُضيف مشروب واحد أو أكثر، أرفق صورة واحدة على الأقل.", "سجّل أي هدر أو كسر في حقل الملاحظات.", "قدّم إغلاق الشيفت. لا تقدّمه دون استكمال جميع الحقول الإلزامية.", "الضيافة: أدخلها بشكل منفصل في قسم الضيافة إن وُجدت."] },
+        { type: "subheader", text: "زاوية — خطوات إغلاق الشيفت" },
+        { type: "bullets", items: ["افتح شاشة إغلاق الشيفت في تطبيق العمليات.", "أدخل المشروبات المقدّمة خلال الشيفت.", "الضيافة: أدخلها بشكل منفصل لكل عرض إن وُجدت.", "إذا أُضيف مشروب واحد أو أكثر (معياري أو ضيافة)، أرفق صورة واحدة على الأقل.", "سجّل أي هدر أو كسر في حقل الملاحظات.", "قدّم إغلاق الشيفت. لا تقدّمه دون استكمال جميع الحقول الإلزامية."] },
       ]
     },
     {
-      number: "7", title: "Record Purchase",
+      number: "7", title: "Record Purchase", ar_title: "تسجيل المشتريات",
       content: [
         { type: "para", text: "Use the Record Purchase screen in the operations app every time supplies are received. All fields must be completed accurately." },
         { type: "subheader", text: "How to Record a Purchase" },
         { type: "bullets", items: ["Open the Record Purchase screen.", "Select the item purchased from the ingredient list.", "Enter the total amount paid (in EGP) — enter the complete invoice total.", "Enter the quantity received.", "Tap the calendar icon to select the expiry date. Leave blank for non-perishables.", "Tap Yes if an electronic receipt was provided and upload the file; tap No otherwise.", "Add any notes about the purchase, then tap Submit."] },
         { type: "subheader", text: "Monthly Receipt Report" },
         { type: "para", text: "At the end of each calendar month, the system automatically sends an email to coffeebeats@haidiyacoub.com with the monthly purchase receipt summary — items with receipts and the total without receipts." },
+      ],
+      ar_content: [
+        { type: "para", text: "استخدم شاشة تسجيل المشتريات في تطبيق العمليات في كل مرة تستلم فيها مستلزمات. يجب استكمال جميع الحقول بدقة." },
+        { type: "subheader", text: "كيفية تسجيل مشتريات" },
+        { type: "bullets", items: ["افتح شاشة تسجيل المشتريات.", "اختر المنتج المشترى من قائمة المكونات.", "أدخل المبلغ الإجمالي المدفوع (بالجنيه المصري) — أدخل إجمالي الفاتورة كاملاً.", "أدخل الكمية المستلمة.", "اضغط على أيقونة التقويم لاختيار تاريخ انتهاء الصلاحية. اتركه فارغاً للمنتجات غير القابلة للتلف.", "اضغط نعم إذا تم توفير إيصال إلكتروني وقم بتحميل الملف؛ اضغط لا في حال العكس.", "أضف أي ملاحظات حول الشراء، ثم اضغط تقديم."] },
+        { type: "subheader", text: "تقرير الإيصالات الشهري" },
+        { type: "para", text: "في نهاية كل شهر ميلادي، يرسل النظام تلقائياً بريداً إلكترونياً إلى coffeebeats@haidiyacoub.com بملخص إيصالات المشتريات الشهرية — العناصر مع الإيصالات والإجمالي بدون إيصالات." },
       ]
     },
     {
-      number: "8", title: "Record Waste",
+      number: "8", title: "Record Waste", ar_title: "تسجيل الهدر",
       content: [
         { type: "para", text: "Use the Record Waste screen to log any ingredient or product that has been discarded, spoiled, spilled, or cannot be used." },
         { type: "subheader", text: "How to Record Waste" },
         { type: "bullets", items: ["Open the Record Waste screen.", "Select the item wasted from the ingredient list.", "Enter the quantity wasted and the reason.", "Add any additional notes if relevant, then tap Submit."] },
         { type: "subheader", text: "Updating an Existing Entry" },
         { type: "para", text: "Waste entries are editable after submission. Tap the entry in the Waste Log, make corrections, and tap Save. Only the shift manager can edit entries from previous shifts." },
+      ],
+      ar_content: [
+        { type: "para", text: "استخدم شاشة تسجيل الهدر لتسجيل أي مكوّن أو منتج تم التخلص منه أو تلفه أو انسكابه أو لا يمكن استخدامه." },
+        { type: "subheader", text: "كيفية تسجيل الهدر" },
+        { type: "bullets", items: ["افتح شاشة تسجيل الهدر.", "اختر العنصر المهدر من قائمة المكونات.", "أدخل الكمية المهدرة والسبب.", "أضف أي ملاحظات إضافية إن وُجدت، ثم اضغط تقديم."] },
+        { type: "subheader", text: "تحديث إدخال موجود" },
+        { type: "para", text: "يمكن تعديل إدخالات الهدر بعد التقديم. اضغط على الإدخال في سجل الهدر، أجرِ التصحيحات، واضغط حفظ. فقط مشرف الشيفت يمكنه تعديل إدخالات من الشيفتات السابقة." },
       ]
     },
     {
-      number: "9", title: "Sign-In Stamps",
+      number: "9", title: "Sign-In Stamps", ar_title: "بصمة الحضور",
       content: [
         { type: "para", text: "The Sign-In Stamp is the official daily attendance record for all morning-shift baristas. Every morning shift must begin with a clock-in photo submitted through the Operations App." },
         { type: "subheader", text: "How to Submit a Sign-In Stamp" },
@@ -8173,42 +9462,90 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Late 15 min – 60 min: ½ day deducted.", "Late 60 min – 120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 3 or more times in a calendar month, every subsequent penalty in that month is doubled automatically."] },
         { type: "subheader", text: "Early Arrival Bonus" },
         { type: "para", text: "If your clock-in photo is submitted 30 minutes or more before the scheduled opening time, the system records an Early Arrival Bonus automatically, reflected in the Punctuality KPI." },
+      ],
+      ar_content: [
+        { type: "para", text: "بصمة الحضور هي سجل الحضور اليومي الرسمي لجميع بريستا الشيفت الصباحي. يجب أن يبدأ كل شيفت صباحي بصورة حضور مُقدَّمة عبر تطبيق العمليات." },
+        { type: "subheader", text: "كيفية تقديم بصمة الحضور" },
+        { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو زاوية).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
+        { type: "subheader", text: "قواعد الخصم التلقائي" },
+        { type: "bullets", items: ["تأخر 15 دقيقة – 60 دقيقة: خصم نصف يوم.", "تأخر 60 دقيقة – 120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "غياب بدون بصمة: خصم 3 أيام.", "إذا تأخر نفس البريستا 3 مرات أو أكثر في شهر ميلادي واحد، يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً."] },
+        { type: "subheader", text: "مكافأة الحضور المبكر" },
+        { type: "para", text: "إذا تم تقديم صورة الحضور قبل 30 دقيقة أو أكثر من وقت الفتح المجدول، يسجّل النظام مكافأة الحضور المبكر تلقائياً، وتنعكس في مؤشر الانضباط." },
       ]
     },
     {
-      number: "10", title: "Supplier Orders & Restock Alerts",
+      number: "10", title: "Supplier Orders & Restock Alerts", ar_title: "طلبات الموردين وتنبيهات إعادة التخزين",
       content: [
         { type: "para", text: "When any inventory item falls below seven days of estimated supply, the Operations App automatically fires a low-stock alert. The barista on shift is personally responsible for taking immediate action." },
         { type: "subheader", text: "How to Log Your Action" },
         { type: "bullets", items: ["Open the Operations App and tap the red banner or \"Reorder Actions\".", "Tick at least one checkbox: Called the supplier directly — or — Communicated to head barista.", "Add a comment with useful details (delivery date, who you spoke to).", "Tap Save Action. The red banner clears."] },
         { type: "subheader", text: "Follow-Up Alarm Schedule" },
         { type: "bullets", items: ["Day 0: Initial alert fires. Action required before shift ends.", "Day +3: First follow-up alarm fires if item not yet in purchase log.", "Day +5: Second follow-up — \"URGENT — reorder overdue.\"", "Day +6: Final alarm — \"CRITICAL — reorder still missing.\""] },
+        { type: "subheader", text: "Inventory Engine (Inventory Manager)" },
+        { type: "para", text: "The barista assigned as Inventory Manager this month has access to the Inventory Engine screen. This screen shows POS-driven consumption forecasting, days of stock remaining, reorder thresholds, and five alert types: Low Stock, Critical Stock, Dead Inventory, Supplier Delay Risk, and Consumption Spike. Alerts clear automatically once a purchase is logged for the item. The Inventory Manager is responsible for monitoring this screen daily and escalating any critical alerts immediately." },
         { type: "subheader", text: "KPI Impact" },
         { type: "bullets", items: ["Action logged within 24 hours: no penalty.", "Action logged within 3 days: −10 points from Teamwork score.", "Action after first follow-up: −20 points.", "Action after second follow-up: −30 points.", "No action after 6 days: −50 points."] },
+      ],
+      ar_content: [
+        { type: "para", text: "عندما ينخفض أي صنف في المخزون إلى أقل من سبعة أيام من الإمداد المقدّر، يُطلق تطبيق العمليات تلقائياً تنبيه نقص المخزون. البريستا في الشيفت مسؤول شخصياً عن اتخاذ الإجراء الفوري." },
+        { type: "subheader", text: "كيفية تسجيل الإجراء" },
+        { type: "bullets", items: ["افتح تطبيق العمليات واضغط على الشريط الأحمر أو \"إجراءات إعادة الطلب\".", "ضع علامة على خانة واحدة على الأقل: اتصلت بالمورد مباشرة — أو — أبلغت رئيس البريستا.", "أضف تعليقاً بتفاصيل مفيدة (تاريخ التسليم، من تحدثت معه).", "اضغط حفظ الإجراء. يختفي الشريط الأحمر."] },
+        { type: "subheader", text: "جدول تنبيهات المتابعة" },
+        { type: "bullets", items: ["اليوم 0: يُطلَق التنبيه الأولي. الإجراء مطلوب قبل نهاية الشيفت.", "اليوم +3: أول تنبيه متابعة إذا لم يُسجَّل الصنف في سجل المشتريات.", "اليوم +5: تنبيه ثانٍ — \"عاجل — تأخر إعادة الطلب\".", "اليوم +6: التنبيه الأخير — \"حرج — إعادة الطلب لا تزال مفقودة\"."] },
+        { type: "subheader", text: "محرك المخزون (مدير المخزون)" },
+        { type: "para", text: "البريستا المعيّن مديراً للمخزون هذا الشهر لديه وصول إلى شاشة محرك المخزون. تعرض هذه الشاشة توقعات الاستهلاك المدفوعة بنقاط البيع، وأيام المخزون المتبقية، وحدود إعادة الطلب، وخمسة أنواع من التنبيهات: مخزون منخفض، مخزون حرج، مخزون راكد، خطر تأخير المورد، وارتفاع حاد في الاستهلاك. تختفي التنبيهات تلقائياً بمجرد تسجيل مشتريات للصنف. مدير المخزون مسؤول عن مراقبة هذه الشاشة يومياً والتصعيد الفوري لأي تنبيهات حرجة." },
+        { type: "subheader", text: "التأثير على مؤشرات الأداء" },
+        { type: "bullets", items: ["تسجيل الإجراء خلال 24 ساعة: لا خصومات.", "تسجيل الإجراء خلال 3 أيام: −10 نقاط من درجة العمل الجماعي.", "الإجراء بعد أول تنبيه متابعة: −20 نقطة.", "الإجراء بعد التنبيه الثاني: −30 نقطة.", "عدم اتخاذ إجراء بعد 6 أيام: −50 نقطة."] },
       ]
     },
     {
-      number: "11", title: "Monthly Leadership Roles",
+      number: "11", title: "Monthly Leadership Roles", ar_title: "الأدوار القيادية الشهرية",
       content: [
-        { type: "para", text: "Each month, specific operational responsibilities are assigned to individual baristas or head baristas. Every assigned role carries a direct accountability requirement." },
+        { type: "para", text: "Each month, specific operational responsibilities are assigned to individual baristas or head baristas. Every assigned role carries a direct accountability requirement and unlocks additional screens in the Operations App for the duration of that month." },
         { type: "subheader", text: "The Three Monthly Roles" },
-        { type: "bullets", items: ["<strong>Schedule Manager</strong> — Accountable for weekly schedule and sign-in stamp compliance. Each unresolved missing stamp deducts 15 pts from Leadership KPI; a late stamp deducts 10 pts.", "<strong>Inventory Manager</strong> — Must submit the end-of-month inventory snapshot before midnight on the last day. A missing snapshot results in a half-day salary deduction plus a Leadership KPI penalty.", "<strong>Cash Manager</strong> — Responsible for logging the weekly Maadi ATM cash deposit every week. A reminder fires automatically every Thursday. Missed entries result in a ¼ day salary deduction per week."] },
+        { type: "bullets", items: [
+          "<strong>Schedule Manager</strong> — Accountable for weekly schedule accuracy and sign-in stamp compliance. Gains edit access to the Weekly Schedule screen for the month — can create, update, and publish rosters. Each unresolved missing stamp deducts 15 pts from Leadership KPI; a late stamp deducts 10 pts.",
+          "<strong>Inventory Manager</strong> — Responsible for daily stock monitoring and must submit the end-of-month inventory snapshot before midnight on the last day. Gains access to the Inventory Engine screen — a POS-driven forecasting dashboard showing consumption rates, days remaining, reorder thresholds, and risk alerts. A missing snapshot results in a half-day salary deduction plus a Leadership KPI penalty.",
+          "<strong>Cash Manager</strong> — Responsible for logging the weekly Maadi ATM cash deposit and maintaining the petty cash log. Gains access to the Petty Cash screen and the ATM Deposit screen (Maadi branch) for the month. A reminder fires automatically every Thursday. Missed deposit entries result in a ¼ day salary deduction per week."
+        ] },
+        { type: "subheader", text: "How App Access Works" },
+        { type: "para", text: "Access is granted automatically when assignments are set in Leadership Roles. It expires when the assignment changes. The assigned screens appear as dedicated tiles on the home screen under a labelled section (e.g. \"Inventory Manager\", \"Cash Manager\"). If no new assignment is made, the previous month carries forward." },
         { type: "subheader", text: "How Assignments Work" },
-        { type: "para", text: "At the beginning of each month, management assigns one barista or head barista to each role. If no new assignment is made, the system carries forward the previous month's assignment automatically." },
+        { type: "para", text: "At the beginning of each month, management assigns one barista or head barista to each role via the Leadership Roles screen. Role holders are notified automatically when alerts relevant to their role fire." },
+      ],
+      ar_content: [
+        { type: "para", text: "في كل شهر، يتم تعيين مسؤوليات تشغيلية محددة لبريستا أو رئيس بريستا بعينهم. كل دور معيّن يحمل متطلب مساءلة مباشر ويفتح شاشات إضافية في تطبيق العمليات لمدة ذلك الشهر." },
+        { type: "subheader", text: "الأدوار الشهرية الثلاثة" },
+        { type: "bullets", items: [
+          "<strong>مدير الجدول</strong> — مسؤول عن دقة الجدول الأسبوعي وامتثال بصمات الحضور. يحصل على صلاحية تعديل شاشة الجدول الأسبوعي للشهر — يمكنه إنشاء الجداول وتحديثها ونشرها. كل بصمة غائبة غير محلولة تخصم 15 نقطة من مؤشر القيادة؛ والبصمة المتأخرة تخصم 10 نقاط.",
+          "<strong>مدير المخزون</strong> — مسؤول عن المراقبة اليومية للمخزون ويجب تقديم جرد المخزون في نهاية الشهر قبل منتصف ليل اليوم الأخير. يحصل على وصول إلى شاشة محرك المخزون — لوحة توقعات مدفوعة بنقاط البيع تعرض معدلات الاستهلاك والأيام المتبقية وحدود إعادة الطلب وتنبيهات المخاطر. الجرد المفقود يؤدي إلى خصم نصف يوم من الراتب إضافة إلى عقوبة في مؤشر القيادة.",
+          "<strong>مدير الكاش</strong> — مسؤول عن تسجيل إيداع الكاش الأسبوعي في ماكينة الصراف الآلي بالمعادي والحفاظ على سجل النثريات. يحصل على وصول إلى شاشة النثريات وشاشة إيداع الصراف الآلي (فرع المعادي) للشهر. يُرسَل تذكير تلقائياً كل خميس. الإدخالات المفقودة تؤدي إلى خصم ربع يوم من الراتب عن كل أسبوع."
+        ] },
+        { type: "subheader", text: "كيفية عمل صلاحيات التطبيق" },
+        { type: "para", text: "تُمنح الصلاحيات تلقائياً عند تعيين الأدوار في الأدوار القيادية. تنتهي صلاحيتها عند تغيير التعيين. تظهر الشاشات المخصصة كبلاطات مخصصة على الشاشة الرئيسية تحت قسم مُسمّى (مثل \"مدير المخزون\"، \"مدير الكاش\"). إذا لم يتم تعيين جديد، يستمر التعيين السابق." },
+        { type: "subheader", text: "كيفية عمل التعيينات" },
+        { type: "para", text: "في بداية كل شهر، تعيّن الإدارة بريستا أو رئيس بريستا لكل دور عبر شاشة الأدوار القيادية. يتم إشعار أصحاب الأدوار تلقائياً عند إطلاق التنبيهات المتعلقة بدورهم." },
       ]
     },
     {
-      number: "12", title: "KPI Dashboard & Scorecard",
+      number: "12", title: "KPI Dashboard & Scorecard", ar_title: "لوحة المؤشرات وبطاقة التقييم",
       content: [
         { type: "para", text: "The KPI Scorecard is a monthly performance summary for every barista and head barista, aggregating data into a single weighted score from 0 to 100." },
         { type: "subheader", text: "The Nine KPI Categories" },
         { type: "bullets", items: ["<strong>Punctuality (5%)</strong> — Calculated from sign-in stamp data.", "<strong>Waste Control (15%)</strong> — Derived from monthly waste log entries.", "<strong>Cleanliness (10%)</strong> — Pulled each month from the cleaning logs.", "<strong>Coffee Craft (15%)</strong> — Pulled from customer reviews on the Coffee Beats website.", "<strong>Upselling (10%)</strong> — Tracks successful add-on suggestions via ticket size report.", "<strong>Customer Score (15%)</strong> — Based on customer feedback from the Coffee Beats website.", "<strong>Teamwork (5%)</strong> — Reflects response to restock alerts and shared tasks.", "<strong>Leadership (20%)</strong> — The highest-weighted category. Scored from monthly role performance.", "<strong>Hygiene (5%)</strong> — Scored from the Penalties log. Every \"not wearing uniform\" or hygiene penalty deducts 25 points."] },
         { type: "subheader", text: "Important Rules" },
         { type: "para", text: "Scores are locked at the end of each month. Disputes must be raised with the branch manager within seven days of month-end. The scorecard is used for performance reviews, bonus calculations, and promotion decisions." },
+      ],
+      ar_content: [
+        { type: "para", text: "بطاقة مؤشرات الأداء هي ملخص أداء شهري لكل بريستا ورئيس بريستا، تجمع البيانات في درجة مرجحة واحدة من 0 إلى 100." },
+        { type: "subheader", text: "فئات مؤشرات الأداء التسع" },
+        { type: "bullets", items: ["<strong>الانضباط (5%)</strong> — يُحسب من بيانات بصمة الحضور.", "<strong>ضبط الهدر (15%)</strong> — مستمد من إدخالات سجل الهدر الشهري.", "<strong>النظافة (10%)</strong> — يُسحب كل شهر من سجلات النظافة.", "<strong>حرفة القهوة (15%)</strong> — مستمد من آراء الزبائن على موقع كوفي بيتس.", "<strong>البيع الإضافي (10%)</strong> — يتتبع نجاح اقتراحات الإضافات عبر تقرير حجم الطلب.", "<strong>رضا الزبون (15%)</strong> — مبني على تغذية راجعة الزبائن من موقع كوفي بيتس.", "<strong>العمل الجماعي (5%)</strong> — يعكس الاستجابة لتنبيهات إعادة التخزين والمهام المشتركة.", "<strong>القيادة (20%)</strong> — أعلى الفئات وزناً. يُحسب من أداء الدور الشهري.", "<strong>الصحة العامة (5%)</strong> — يُحسب من سجل العقوبات. كل عقوبة \"عدم ارتداء الزي\" أو مخالفة صحية تخصم 25 نقطة."] },
+        { type: "subheader", text: "قواعد مهمة" },
+        { type: "para", text: "تُقفَل الدرجات في نهاية كل شهر. يجب تقديم الاعتراضات لمدير الفرع خلال سبعة أيام من نهاية الشهر. تُستخدم بطاقة التقييم في مراجعات الأداء وحسابات المكافآت وقرارات الترقية." },
       ]
     },
     {
-      number: "13", title: "HR Functions",
+      number: "13", title: "HR Functions", ar_title: "وظائف الموارد البشرية",
       content: [
         { type: "para", text: "The Operations App includes a built-in HR module that manages payroll, attendance penalties, overtime, loans, and leave for all baristas and head baristas. All data is calculated automatically from recorded activity — no manual payroll entry is required." },
         { type: "subheader", text: "My HR — Individual View" },
@@ -8220,20 +9557,128 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["A summary row: Total Active Staff, Total Payroll, Total Penalties, Total Overtime for the selected month.", "A full table: Name, Role, Base Salary, Overtime, Penalties, Loans, Net Due, KPI Score, Leave Days for every barista.", "A grand total row summing all payroll columns across the team.", "Clickable rows to drill into any individual barista's My HR view.", "Month navigation to review any previous payroll period."] },
         { type: "subheader", text: "Payroll Cycle" },
         { type: "para", text: "Payroll is calculated monthly. All deductions, overtime entries, and loan repayments are recorded throughout the month in the Operations App. The final net due figure is locked at the end of the month. Disputes must be raised with the branch manager within seven days of month-end." },
+      ],
+      ar_content: [
+        { type: "para", text: "يتضمن تطبيق العمليات وحدة موارد بشرية مدمجة تدير الرواتب وعقوبات الحضور والعمل الإضافي والقروض والإجازات لجميع البريستا ورؤساء البريستا. يتم حساب جميع البيانات تلقائياً من النشاط المسجّل — لا يلزم إدخال رواتب يدوي." },
+        { type: "subheader", text: "موارد بشرية — العرض الشخصي" },
+        { type: "para", text: "يمكن لكل بريستا ورئيس بريستا الوصول إلى لوحة الموارد البشرية الشخصية من تطبيق العمليات بالضغط على \"موارد بشرية\". تعرض اللوحة:" },
+        { type: "bullets", items: ["<strong>الراتب الأساسي</strong> — الراتب الشهري الثابت للدور.", "<strong>العمل الإضافي</strong> — أجر إضافي للشيفتات المعملة زيادة على الساعات المتعاقد عليها، يُسجَّل تلقائياً.", "<strong>العقوبات</strong> — خصومات من الراتب تُطبَّق لمخالفات الحضور (بصمات متأخرة/غائبة) ومخالفات النظافة وإهمال واجبات الدور القيادي. كل إدخال يعرض التاريخ والسبب والمبلغ المخصوم.", "<strong>القروض</strong> — أي سلفة أو رصيد قرض مُتتبَّع على حساب البريستا.", "<strong>الصافي المستحق</strong> — المبلغ النهائي المحسوب للدفع بعد إضافة العمل الإضافي وخصم العقوبات وأقساط القرض.", "<strong>مستوى مكافأة مؤشر الأداء</strong> — في نهاية الشهر، تحدد درجة مؤشر الأداء للبريستا مستواه: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو تطوير (أقل من 70). ينعكس في لوحة الموارد البشرية جنباً إلى جنب مع ملخص الدفع الشهري.", "<strong>الإجازة</strong> — أيام الإجازة المعتمدة المأخوذة خلال الشهر. الغيابات غير المعتمدة تُضاف كإدخالات عقوبات منفصلة."] },
+        { type: "para", text: "تدعم اللوحة التنقل بين الأشهر — يمكن للبريستا مراجعة تفصيل الراتب الكامل لأي شهر سابق." },
+        { type: "subheader", text: "موارد البشرية للطاقم — عرض الإدارة" },
+        { type: "para", text: "يمكن للملاك والمحاسبين ورؤساء البريستا الوصول إلى عرض الموارد البشرية للطاقم الذي يعرض ملخص الرواتب الكامل لجميع الموظفين النشطين:" },
+        { type: "bullets", items: ["صف ملخص: إجمالي الموظفين النشطين، إجمالي الرواتب، إجمالي العقوبات، إجمالي العمل الإضافي للشهر المحدد.", "جدول كامل: الاسم، الدور، الراتب الأساسي، العمل الإضافي، العقوبات، القروض، الصافي المستحق، درجة الأداء، أيام الإجازة لكل بريستا.", "صف الإجمالي الكلي يجمع جميع أعمدة الرواتب للفريق.", "صفوف قابلة للنقر للدخول إلى عرض الموارد البشرية لأي بريستا بعينه.", "التنقل بين الأشهر لمراجعة أي فترة رواتب سابقة."] },
+        { type: "subheader", text: "دورة الرواتب" },
+        { type: "para", text: "يُحسب الراتب شهرياً. جميع الخصومات وإدخالات العمل الإضافي وأقساط القرض مسجّلة طوال الشهر في تطبيق العمليات. يُقفَل الصافي المستحق النهائي في نهاية الشهر. يجب تقديم الاعتراضات لمدير الفرع خلال سبعة أيام من نهاية الشهر." },
       ]
     },
     {
-      number: "14", title: "Emergency Contacts",
+      number: "14", title: "Emergency Contacts", ar_title: "جهات الاتصال للطوارئ",
       content: [
         { type: "para", text: "Each barista must have at least one emergency contact on file. Emergency contact information is stored in the Operations App under each barista's HR profile and is accessible to the owner and head barista at all times." },
         { type: "subheader", text: "What to Provide" },
         { type: "bullets", items: ["Emergency contact name", "Relationship (e.g. spouse, parent, sibling)", "Phone number"] },
         { type: "para", text: "Contact details must be kept up to date. Notify the head barista immediately if your emergency contact changes." },
+      ],
+      ar_content: [
+        { type: "para", text: "يجب على كل بريستا أن يكون لديه جهة اتصال طارئة واحدة على الأقل مسجّلة في ملفه. يتم تخزين معلومات جهة الاتصال للطوارئ في تطبيق العمليات ضمن ملف الموارد البشرية لكل بريستا ويمكن للمالك ورئيس البريستا الوصول إليها في جميع الأوقات." },
+        { type: "subheader", text: "ما يجب توفيره" },
+        { type: "bullets", items: ["اسم جهة الاتصال للطوارئ", "العلاقة (مثل: زوج/زوجة، أحد الوالدين، أخ/أخت)", "رقم الهاتف"] },
+        { type: "para", text: "يجب الحفاظ على تحديث بيانات الاتصال. أبلغ رئيس البريستا فوراً إذا تغيّرت جهة الاتصال للطوارئ." },
       ]
     },
   ];
 
-  if (!state.om_overrides) state.om_overrides = {};
+  if (!state.om_overrides)    state.om_overrides    = {};
+  if (!state.om_ar_overrides) state.om_ar_overrides = {};
+
+  const canEditOM = u && ["owner", "head_barista"].includes(u.role);
+  const operatingModelSection = el("div", {});
+
+  function buildOMSection() {
+    operatingModelSection.innerHTML = "";
+    const isAr = lang === "ar";
+    OM_SECTIONS.forEach(sec => {
+      const card = el("div", { class: "card", style: { marginBottom: "14px", padding: "0", overflow: "hidden", border: "1px solid var(--border)", borderRadius: "8px" } });
+
+      const cardHead = el("div", { style: { background: "#3b2314", color: "#f5e6d3", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", direction: isAr ? "rtl" : "ltr" } });
+      cardHead.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", letterSpacing: "0.3px" } }, `${sec.number}. ${isAr ? sec.ar_title : sec.title}`));
+
+      if (canEditOM) {
+        const editBtn = el("button", { style: { background: "rgba(255,255,255,0.15)", color: "#f5e6d3", border: "none", borderRadius: "4px", padding: "3px 10px", fontSize: "12px", cursor: "pointer" } }, "Edit");
+        cardHead.appendChild(editBtn);
+        editBtn.addEventListener("click", () => {
+          editForm.style.display = editForm.style.display === "none" ? "" : "none";
+          if (editForm.style.display !== "none") {
+            const currentContent = isAr
+              ? (state.om_ar_overrides[sec.number] || state.om_overrides[sec.number] || sec.ar_content)
+              : (state.om_overrides[sec.number] || sec.content);
+            ta.value = omContentToText(currentContent);
+            ta.focus();
+          }
+        });
+      }
+      card.appendChild(cardHead);
+
+      const body = el("div", { style: { padding: "12px 14px", direction: isAr ? "rtl" : "ltr" } });
+      // Rule: English edits always reflect in Arabic (Arabic falls back to English override, then to default Arabic)
+      const currentContent = isAr
+        ? (state.om_ar_overrides[sec.number] || state.om_overrides[sec.number] || sec.ar_content)
+        : (state.om_overrides[sec.number] || sec.content);
+      renderOMBody(currentContent, body);
+      card.appendChild(body);
+
+      const editForm = el("div", { style: { display: "none", padding: "12px 14px", borderTop: "1px solid var(--border)", background: "var(--surface-2)" } });
+      if (canEditOM) {
+        const hint = el("div", { style: { fontSize: "11.5px", color: "var(--ink-dim)", marginBottom: "6px" } },
+          isAr
+            ? "أسطر تبدأ بـ ## = عنوان فرعي  ·  أسطر تبدأ بـ - = نقطة  ·  غيرها = فقرة"
+            : "Lines starting with ## = sub-header  ·  Lines starting with - = bullet  ·  Other lines = paragraph");
+        const ta = el("textarea", { style: { width: "100%", minHeight: "180px", fontSize: "13px", lineHeight: "1.6", padding: "8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontFamily: "monospace", boxSizing: "border-box", resize: "vertical", direction: isAr ? "rtl" : "ltr" } });
+        const btnRow = el("div", { style: { display: "flex", gap: "8px", marginTop: "8px" } });
+        const saveBtn   = el("button", { class: "btn", style: { flex: "1" } }, isAr ? "حفظ" : "Save");
+        const resetBtn  = el("button", { class: "btn ghost", style: { flex: "1" } }, isAr ? "إعادة ضبط" : "Reset to default");
+        const cancelBtn = el("button", { class: "btn ghost" }, isAr ? "إلغاء" : "Cancel");
+        btnRow.append(saveBtn, resetBtn, cancelBtn);
+        editForm.append(hint, ta, btnRow);
+
+        saveBtn.addEventListener("click", () => {
+          const parsed = omTextToContent(ta.value);
+          if (isAr) {
+            state.om_ar_overrides[sec.number] = parsed;
+          } else {
+            state.om_overrides[sec.number] = parsed;
+            // Rule: English edit reflects in Arabic — clear any stale Arabic-specific override
+            // so Arabic falls back to this updated English content
+            delete state.om_ar_overrides[sec.number];
+          }
+          saveState();
+          renderOMBody(parsed, body);
+          editForm.style.display = "none";
+          toast("Section updated", "ok");
+        });
+        resetBtn.addEventListener("click", () => {
+          if (isAr) {
+            delete state.om_ar_overrides[sec.number];
+            const fallback = state.om_overrides[sec.number] || sec.ar_content;
+            renderOMBody(fallback, body);
+          } else {
+            delete state.om_overrides[sec.number];
+            delete state.om_ar_overrides[sec.number];
+            renderOMBody(sec.content, body);
+          }
+          saveState();
+          editForm.style.display = "none";
+          toast("Reset to default", "ok");
+        });
+        cancelBtn.addEventListener("click", () => { editForm.style.display = "none"; });
+      }
+      card.appendChild(editForm);
+      operatingModelSection.appendChild(card);
+    });
+  }
+
+  buildOMSection();
+  wrap.appendChild(operatingModelSection);
 
   function omContentToText(content) {
     return content.map(item => {
@@ -8289,70 +9734,6 @@ routes.handbook = function (u) {
     });
   }
 
-  const canEditOM = u && ["owner", "head_barista"].includes(u.role);
-
-  const operatingModelSection = el("div", {});
-  OM_SECTIONS.forEach(sec => {
-    const card = el("div", { class: "card", style: { marginBottom: "14px", padding: "0", overflow: "hidden", border: "1px solid var(--border)", borderRadius: "8px" } });
-
-    // ── Header row ──
-    const cardHead = el("div", { style: { background: "#3b2314", color: "#f5e6d3", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" } });
-    cardHead.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", letterSpacing: "0.3px" } }, `${sec.number}. ${sec.title}`));
-    if (canEditOM) {
-      const editBtn = el("button", { style: { background: "rgba(255,255,255,0.15)", color: "#f5e6d3", border: "none", borderRadius: "4px", padding: "3px 10px", fontSize: "12px", cursor: "pointer" } }, "Edit");
-      cardHead.appendChild(editBtn);
-      editBtn.addEventListener("click", () => {
-        editForm.style.display = editForm.style.display === "none" ? "" : "none";
-        if (editForm.style.display !== "none") {
-          const currentContent = state.om_overrides[sec.number] || sec.content;
-          ta.value = omContentToText(currentContent);
-          ta.focus();
-        }
-      });
-    }
-    card.appendChild(cardHead);
-
-    // ── Body ──
-    const body = el("div", { style: { padding: "12px 14px" } });
-    const currentContent = state.om_overrides[sec.number] || sec.content;
-    renderOMBody(currentContent, body);
-    card.appendChild(body);
-
-    // ── Inline edit form (owner/head barista only) ──
-    const editForm = el("div", { style: { display: "none", padding: "12px 14px", borderTop: "1px solid var(--border)", background: "var(--surface-2)" } });
-    if (canEditOM) {
-      const hint = el("div", { style: { fontSize: "11.5px", color: "var(--ink-dim)", marginBottom: "6px" } },
-        "Lines starting with ## = sub-header  ·  Lines starting with - = bullet  ·  Other lines = paragraph");
-      const ta = el("textarea", { style: { width: "100%", minHeight: "180px", fontSize: "13px", lineHeight: "1.6", padding: "8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontFamily: "monospace", boxSizing: "border-box", resize: "vertical" } });
-      const btnRow = el("div", { style: { display: "flex", gap: "8px", marginTop: "8px" } });
-      const saveBtn = el("button", { class: "btn", style: { flex: "1" } }, "Save");
-      const resetBtn = el("button", { class: "btn ghost", style: { flex: "1" } }, "Reset to default");
-      const cancelBtn = el("button", { class: "btn ghost" }, "Cancel");
-      btnRow.append(saveBtn, resetBtn, cancelBtn);
-      editForm.append(hint, ta, btnRow);
-
-      saveBtn.addEventListener("click", () => {
-        state.om_overrides[sec.number] = omTextToContent(ta.value);
-        saveState();
-        renderOMBody(state.om_overrides[sec.number], body);
-        editForm.style.display = "none";
-        toast("Section updated", "ok");
-      });
-      resetBtn.addEventListener("click", () => {
-        delete state.om_overrides[sec.number];
-        saveState();
-        renderOMBody(sec.content, body);
-        editForm.style.display = "none";
-        toast("Reset to default", "ok");
-      });
-      cancelBtn.addEventListener("click", () => { editForm.style.display = "none"; });
-    }
-    card.appendChild(editForm);
-
-    operatingModelSection.appendChild(card);
-  });
-  wrap.appendChild(operatingModelSection);
-
   function renderSections() {
     recipesSection.style.display = activeTab === "recipes" ? "" : "none";
     operatingModelSection.style.display = activeTab === "operating_model" ? "" : "none";
@@ -8363,7 +9744,7 @@ routes.handbook = function (u) {
   function openRecipeEditor(existing) {
     const isNew = !existing;
     const draft = existing ? { ...existing, ingredients: [...(existing.ingredients||[])], steps: [...(existing.steps||[])] }
-                           : { id: uuid(), category: "", name: "", size: "", time: "", coffee_notes: "", ingredients: [""], steps: [""] };
+                           : { id: uuid(), category: "", name: "", size: "", time: "", coffee_notes: "", description: "", ingredients: [""], steps: [""] };
 
     const root = document.querySelector("#modal-root");
     root.innerHTML = "";
@@ -8399,6 +9780,13 @@ routes.handbook = function (u) {
     const notesIn = el("input", { type: "text", value: draft.coffee_notes || "", placeholder: "Leave blank to hide the banner" });
     notesIn.addEventListener("input", () => draft.coffee_notes = notesIn.value.trim());
     inner.appendChild(notesIn);
+
+    // Description
+    inner.appendChild(el("label", {}, "Description"));
+    const descIn = el("textarea", { placeholder: "Short description of this drink…", style: { minHeight: "56px", resize: "vertical" } });
+    descIn.value = draft.description || "";
+    descIn.addEventListener("input", () => draft.description = descIn.value.trim());
+    inner.appendChild(descIn);
 
     // Ingredients dynamic list
     inner.appendChild(el("label", {}, "Ingredients"));
@@ -8444,22 +9832,12 @@ routes.handbook = function (u) {
     renderStepsBox();
     inner.appendChild(stepsBox);
 
-    // Action buttons
-    const btnRow = el("div", { class: "btn-row", style: { marginTop: "16px" } });
-
-    if (!isNew) {
-      const delBtn = el("button", { class: "btn danger", style: { flex: "0 0 auto" } }, "Delete");
-      delBtn.addEventListener("click", () => {
-        if (!confirm(`Delete "${existing.name}"?`)) return;
-        state.handbook_recipes = state.handbook_recipes.filter(r => r.id !== existing.id);
-        saveState(); root.innerHTML = ""; renderRecipes(); buildTabs(); toast("Recipe deleted.");
-      });
-      btnRow.appendChild(delBtn);
-    }
+    // Action buttons — Save/Cancel row on top, Delete below
+    const topBtnRow = el("div", { class: "btn-row", style: { marginTop: "16px" } });
 
     const cancelBtn = el("button", { class: "btn ghost" }, "Cancel");
     cancelBtn.addEventListener("click", () => root.innerHTML = "");
-    btnRow.appendChild(cancelBtn);
+    topBtnRow.appendChild(cancelBtn);
 
     const saveBtn = el("button", { class: "btn" }, isNew ? "Add Recipe" : "Save Changes");
     saveBtn.addEventListener("click", () => {
@@ -8476,14 +9854,68 @@ routes.handbook = function (u) {
       saveState(); root.innerHTML = ""; renderRecipes(); buildTabs();
       toast(isNew ? "Recipe added ✓" : "Recipe updated ✓");
     });
-    btnRow.appendChild(saveBtn);
-    inner.appendChild(btnRow);
+    topBtnRow.appendChild(saveBtn);
+    inner.appendChild(topBtnRow);
+
+    if (!isNew) {
+      const delRow = el("div", { style: { marginTop: "10px" } });
+      const delBtn = el("button", { class: "btn danger", style: { flex: "0 0 auto" } }, "Delete Recipe");
+      delBtn.addEventListener("click", () => {
+        if (!confirm(`Delete "${existing.name}"?`)) return;
+        state.handbook_recipes = state.handbook_recipes.filter(r => r.id !== existing.id);
+        saveState(); root.innerHTML = ""; renderRecipes(); buildTabs(); toast("Recipe deleted.");
+      });
+      delRow.appendChild(delBtn);
+      inner.appendChild(delRow);
+    }
 
     sheet.appendChild(inner);
     root.appendChild(sheet);
   }
 
-  wrap.appendChild(btnBack());
+  // ── Bottom action bar: Back + Export Recipes + Export Operating Model ──
+  const handbookBar = el("div", { class: "sticky-actions", style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+  handbookBar.appendChild(el("button", { class: "btn ghost", onClick: () => go("home") }, "← Back to home"));
+
+  if (u.role === "owner") {
+  const exportRecipesBtn = el("button", { class: "btn secondary", style: { marginLeft: "auto" } }, "⬇ Export Recipes");
+  exportRecipesBtn.addEventListener("click", () => {
+    const rows = (state.handbook_recipes || []).map(r => ({
+      category: r.category, name: r.name, size: r.size, time: r.time,
+      coffee_notes: r.coffee_notes || "", description: r.description || "",
+      ingredients: (r.ingredients || []).join(" | "),
+      steps: (r.steps || []).join(" | "),
+    }));
+    if (!rows.length) { toast("No recipes to export."); return; }
+    const dateStr = new Date().toISOString().slice(0, 10);
+    download(`cb-handbook-recipes-${dateStr}.csv`, new Blob([toCSV(rows)], { type: "text/csv" }));
+    toast(`Exported ${rows.length} recipes`);
+  });
+  handbookBar.appendChild(exportRecipesBtn);
+
+  const exportOMBtn = el("button", { class: "btn secondary" }, "⬇ Export Operating Model");
+  exportOMBtn.addEventListener("click", () => {
+    const rows = OM_SECTIONS.map(sec => {
+      const content = state.om_overrides[sec.number] || sec.content;
+      return {
+        section: sec.number,
+        title: sec.title,
+        content: content.map(item => {
+          if (item.type === "para")      return item.text;
+          if (item.type === "subheader") return "## " + item.text;
+          if (item.type === "bullets")   return item.items.map(i => "- " + i.replace(/<[^>]+>/g, "")).join("; ");
+          return "";
+        }).join(" | "),
+      };
+    });
+    const dateStr = new Date().toISOString().slice(0, 10);
+    download(`cb-handbook-om-${dateStr}.csv`, new Blob([toCSV(rows)], { type: "text/csv" }));
+    toast(`Exported ${rows.length} sections`);
+  });
+  handbookBar.appendChild(exportOMBtn);
+  } // end owner-only exports
+
+  wrap.appendChild(handbookBar);
   return wrap;
 };
 
@@ -8942,8 +10374,87 @@ function header(title, sub) {
     sub ? el("div", { class: "muted small" }, sub) : null,
   ]);
 }
+// Maps route names to a function that returns { rows: Array, name: String }
+// for CSV export. btnBack() checks this and appends an export button automatically.
+const ROUTE_EXPORTS = {
+  waste_list:          () => ({ rows: state.waste || [], name: "waste" }),
+  shift_close_list:    () => ({ rows: state.shift_closes || [], name: "shift-closes" }),
+  reorder_action_list: () => ({ rows: state.reorder_actions || [], name: "reorder-actions" }),
+  purchase_list:       () => ({
+    rows: (state.purchases || []).flatMap(p =>
+      (p.lines || []).map(l => ({ date: p.date || (p.at || "").slice(0,10), branch: p.branch, supplier: p.supplier, ...l }))),
+    name: "purchases" }),
+  petty_cash:          () => ({ rows: state.petty_cash || [], name: "petty-cash" }),
+  penalties:           () => ({ rows: (state.penalties || []).filter(p => !p._deleted), name: "penalties" }),
+  maadi_deposits:      () => ({ rows: state.maadi_deposits || [], name: "maadi-deposits" }),
+  bank:                () => ({ rows: state.bank_ledger || [], name: "bank-ledger" }),
+  shifts:              () => ({ rows: state.shifts || [], name: "shifts" }),
+  cleaning_log_list:   () => ({ rows: state.cleaning_logs || [], name: "cleaning-logs" }),
+  signin_stamp_list:   () => ({ rows: state.signin_stamps || [], name: "signin-stamps" }),
+  leave_list:          () => ({ rows: state.leaves || [], name: "leaves" }),
+  assets_list:         () => ({ rows: state.assets || [], name: "assets" }),
+  users:               () => ({
+    rows: staffDir.all().map(({ uid, name, role, branches, active }) =>
+      ({ uid, name, role, active, branches: (branches || []).join("|") })),
+    name: "staff" }),
+  menu:                () => ({
+    rows: (state.menu || []).map(({ branches, ...r }) => ({ ...r, branches: (branches || []).join("|") })),
+    name: "menu" }),
+  items_list:          () => ({ rows: state.items || [], name: "inventory-items" }),
+  supplier_list:       () => ({
+    rows: Object.entries(state.suppliers || {}).flatMap(([itemId, sups]) =>
+      (sups || []).map(s => ({ item_id: itemId, ...s }))),
+    name: "suppliers" }),
+  salaries:            () => ({ rows: state.salaries || [], name: "salaries" }),
+  overheads:           () => ({ rows: state.overheads || [], name: "overheads" }),
+  snapshot_new:        () => ({
+    rows: (state.snapshots || []).flatMap(s =>
+      (s.entries || []).map(e => ({ snapshot_id: s.id, as_of: s.as_of, branch: e.branch, item_id: e.item_id, qty: e.qty }))),
+    name: "snapshots" }),
+  leadership_roles:    () => ({ rows: state.leadership_assignments || [], name: "leadership-assignments" }),
+  leave_new:           () => ({ rows: state.leaves || [], name: "leaves" }),
+  reorder_action_new:  () => ({ rows: state.reorder_actions || [], name: "reorder-actions" }),
+  inventory_engine:    () => ({
+    rows: (state.items || []).filter(it => it.active !== false).map(it => {
+      const sd_ = state.inv_engine_sales_data || [];
+      const rc_ = state.inv_engine_recipes    || [];
+      const mStock = (computeStock("maadi") || {})[it.id] || 0;
+      const zStock = (computeStock("zawya") || {})[it.id] || 0;
+      const mConsump = invAvgDailyConsumption(it.id, "maadi", 30, sd_, rc_);
+      const zConsump = invAvgDailyConsumption(it.id, "zawya", 30, sd_, rc_);
+      const mDays  = invStockLongevity(it.id, "maadi", sd_, rc_);
+      const zDays  = invStockLongevity(it.id, "zawya", sd_, rc_);
+      const cfg_   = (state.inv_engine.thresholds || {})[it.id] || {};
+      return {
+        item: it.name, unit: it.unit, category: cfg_.category_rule || it.category || "",
+        priority: cfg_.priority || "",
+        maadi_stock: mStock.toFixed(3), maadi_avg_daily: mConsump.toFixed(4),
+        maadi_days_remaining: isFinite(mDays) ? mDays.toFixed(1) : "∞",
+        zawya_stock: zStock.toFixed(3), zawya_avg_daily: zConsump.toFixed(4),
+        zawya_days_remaining: isFinite(zDays) ? zDays.toFixed(1) : "∞",
+        reorder_threshold: invAdjustedReorderThreshold(it.id, "maadi", sd_, rc_).toFixed(3),
+        protection_days: cfg_.protection_days || "",
+      };
+    }),
+    name: "inventory-engine" }),
+};
+
 function btnBack() {
-  return el("div", { class: "sticky-actions" }, [ el("button", { class: "btn ghost", onClick: () => go("home") }, "← Back to home") ]);
+  const exportDef = ROUTE_EXPORTS[route.name];
+  const bar = el("div", { class: "sticky-actions", style: { display: "flex", gap: "8px" } });
+  bar.appendChild(el("button", { class: "btn ghost", onClick: () => go("home") }, "← Back to home"));
+  if (exportDef) {
+    bar.appendChild(el("button", { class: "btn secondary", style: { marginLeft: "auto" }, onClick: () => {
+      try {
+        const { rows, name } = exportDef();
+        if (!rows || !rows.length) { toast("Nothing to export."); return; }
+        const dateStr = new Date().toISOString().slice(0, 10);
+        download(`cb-${name}-${dateStr}.csv`, new Blob([toCSV(rows)], { type: "text/csv" }));
+        toast(`Exported ${rows.length} rows → cb-${name}-${dateStr}.csv`);
+      } catch (e) { console.error(e); toast("Export failed: " + e.message); }
+    }}, "⬇ Export CSV"));
+  }
+  return bar;
 }
 function openSheet(content) {
   const root = $("#modal-root"); root.innerHTML = "";
@@ -9745,7 +11256,7 @@ function notifyLeadershipRole(roleKey, title, body) {
 
 function kpiLeadershipScore(userId, month) {
   const assignment = getLeadershipAssignment(month);
-  const ROLES = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+  const ROLES = ["weekly_schedule","inventory_management","cash_status"];
   const myRole = assignment ? (ROLES.find(r => assignment[r] === userId) || null) : null;
   if (!myRole) return 100;
 
@@ -9818,16 +11329,6 @@ function kpiLeadershipScore(userId, month) {
     return Math.round((weeksWithDeposit / totalWeeks) * 100);
   }
 
-  if (myRole === "barista_hygiene") {
-    const count = (state.penalties || []).filter(p =>
-      p.reason_code === "no_uniform" && p.month === month
-    ).length;
-    if (count === 0) {
-      const hasPenaltiesThisMonth = (state.penalties || []).some(p => p.month === month);
-      if (!hasPenaltiesThisMonth) return null;
-    }
-    return Math.max(0, 100 - count * 25);
-  }
 
   return null;
 }
@@ -9875,6 +11376,54 @@ function kpiHygieneScore(userId, month) {
   return Math.max(0, 100 - pens.length * 25);
 }
 
+// Ticket size formula:
+//   Ticket Size = number of product line items (modifiers excluded) per order_reference
+//   Avg Ticket Size per barista = total items across barista's orders / count of barista's orders
+//   Upselling Score = max(0, min(100, (avg - 1.0) / 2.0 * 100))
+//   → 1.0 items/order = 0 pts · 2.0 items/order = 50 pts · 3.0+ items/order = 100 pts
+function calcTicketSizeByBarista(branch, isoMonth) {
+  const orders = (state.orders || []).filter(o => o.branch === branch && o.month === isoMonth);
+  const items  = (state.order_items || []).filter(i => i.branch === branch && i.month === isoMonth);
+  // Build map order_ref → total qty (items in that order)
+  const orderQty = new Map();
+  for (const i of items) orderQty.set(i.order_ref, (orderQty.get(i.order_ref) || 0) + (Number(i.qty) || 1));
+  // Accumulate per barista
+  const byBarista = new Map(); // barista_name → { orders, totalItems }
+  for (const o of orders) {
+    const qty = orderQty.get(o.order_ref) || 1;
+    const cur = byBarista.get(o.barista_name) || { orders: 0, totalItems: 0 };
+    cur.orders++;
+    cur.totalItems += qty;
+    byBarista.set(o.barista_name, cur);
+  }
+  const result = new Map();
+  for (const [name, d] of byBarista) {
+    const avg = d.orders > 0 ? d.totalItems / d.orders : 1;
+    result.set(name, { orders: d.orders, totalItems: d.totalItems, avg: +avg.toFixed(2) });
+  }
+  return result;
+}
+
+function kpiUpsellScore(userId, month) {
+  const user = (state.users || []).find(u => u.id === userId);
+  if (!user) return null;
+  const branches = user.branches || ["maadi", "zawya"];
+  let totalOrders = 0, totalItems = 0;
+  for (const branch of branches) {
+    const map = calcTicketSizeByBarista(branch, month);
+    // Match by name (barista_name in File 3 vs user.name)
+    for (const [name, d] of map) {
+      if (name.toLowerCase().trim() === (user.name || "").toLowerCase().trim()) {
+        totalOrders += d.orders;
+        totalItems  += d.totalItems;
+      }
+    }
+  }
+  if (totalOrders === 0) return null;
+  const avg = totalItems / totalOrders;
+  return Math.round(Math.max(0, Math.min(100, (avg - 1.0) / 2.0 * 100)));
+}
+
 function kpiGetUserScores(userId) {
   const cutoff = Date.now() - 30*24*60*60*1000;
   const month  = new Date().toISOString().slice(0,7);
@@ -9895,7 +11444,7 @@ function kpiGetUserScores(userId) {
     waste,
     cleanliness,
     craft:     craftAuto ?? (manual.craft ?? null),  // auto first, manual fallback
-    upselling: manual.upselling ?? null,
+    upselling: kpiUpsellScore(userId, month) ?? (manual.upselling ?? null),
     customer:  customer ?? (manual.customer ?? null),
     // Teamwork: auto-calculated from reorder compliance; manual override by owner only
     teamwork:   teamworkAuto ?? (manual.teamwork ?? null),
@@ -9950,8 +11499,6 @@ routes.leadership_roles = function(u) {
       desc:"Must submit end-of-month inventory snapshot. Gets low-stock and reorder alerts. Half-day penalty if snapshot missing at month-end." },
     { key:"cash_status",          label:"💵 Cash Manager",
       desc:"Responsible for managing the petty cash received from the owner and logging the weekly Maadi ATM cash deposit in the Operations App every week. A reminder fires automatically every Thursday by email and app notification. If the deposit is not logged by end of day Friday, a ¼ day salary deduction is applied for that week. Repeated missed entries are reflected in the Leadership KPI score." },
-    { key:"barista_hygiene",      label:"🧹 Hygiene Manager",
-      desc:"Accountable for team uniform compliance. Score auto-calculates from 'no uniform' penalties issued during the month (−25 pts each)." },
   ];
 
   function draw() {
@@ -10219,7 +11766,7 @@ routes.scorecard = function(u) {
     manCard.appendChild(manFields);
     const MAN_CATS = [
       {k:"craft",     label:"☕ Coffee Craft",  hint:"Customer reviews mentioning coffee/drink quality from coffeebeats.art (0-100)"},
-      {k:"upselling", label:"📈 Upselling",      hint:"Ticket size report upload — how often add-ons/upgrades were suggested (0-100)"},
+      {k:"upselling", label:"📈 Upselling",      hint:"Auto-calculated from File 3 (orders) + File 2 (order items). Score = avg items/order mapped 1→0 to 3+→100. Manual override below if Files not yet uploaded."},
       {k:"customer",  label:"😊 Customer Score", hint:"Feedback from coffeebeats.art — positive, neutral, negative tags aggregated (0-100)"},
       {k:"teamwork",  label:"👥 Teamwork",        hint:"Reorder compliance, covering shifts, contributing to shared tasks (0-100)"},
     ];
@@ -10377,7 +11924,7 @@ routes.my_scorecard = function(u) {
   (function() {
     const lMonth = new Date().toISOString().slice(0,7);
     const lAssign = getLeadershipAssignment(lMonth);
-    const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status","barista_hygiene"];
+    const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status"];
     const ROLE_INFO = {
       weekly_schedule:      { en:"📅 Schedule Manager",  ar:"📅 مدير الجداول",
         descEn:"You are accountable for the weekly schedule and sign-in stamp compliance. You are alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from your Leadership KPI; a late stamp (>15 min) deducts 10 pts. Act on alerts the same day — a stamp submitted before the owner's missing-stamp check avoids the deduction.",
@@ -10388,9 +11935,6 @@ routes.my_scorecard = function(u) {
       cash_status:          { en:"💵 Cash Manager",      ar:"💵 مدير الودائع",
         descEn:"You are accountable for logging the weekly Maadi cash deposit in the Operations App. You receive a reminder every Thursday by email and in-app. If the deposit is not logged by end of Friday, a ¼ day salary deduction is applied for that week. Repeated missed entries also lower your Leadership KPI score.",
         descAr:"أنت مسؤول عن تسجيل الإيداع الأسبوعي في ماعدي في تطبيق العمليات. ستتلقى تذكيراً كل خميس عبر البريد الإلكتروني والتطبيق. إذا لم يُسجَّل الإيداع بنهاية الجمعة، يُطبَّق خصم ربع يوم من راتبك عن تلك الأسبوع. التكرار يؤثر سلباً على نقاط القيادة." },
-      barista_hygiene:      { en:"🧹 Hygiene Manager",   ar:"🧹 مدير النظافة",
-        descEn:"You are accountable for team uniform compliance. Each 'no uniform' penalty deducts 25 pts from your leadership score.",
-        descAr:"أنت مسؤول عن الزي الموحد للفريق. كل مخالفة تحسم 25 نقطة من نقاط قيادتك." },
     };
     const myRole = lAssign ? (ROLE_KEYS.find(r => lAssign[r] === u.id) || null) : null;
     const roleCard = el("div",{class:"card",style:{marginBottom:"12px",borderColor:"var(--accent,#e8a020)"}});
@@ -11684,6 +13228,493 @@ routes.leaderboard = function(u) {
     "Scores are based on the last 30 days of activity. Ties are broken alphabetically."));
 
   wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ==============================================================
+// INVENTORY INTELLIGENCE ENGINE — UI
+// ==============================================================
+routes.inventory_engine = function(u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("🧠 Inventory Engine", "POS-driven consumption forecasting · predictive reorder · risk alerts"));
+
+  // Run alert scan on entry
+  try { runEngineAlertScan(); } catch(e) { console.warn("Engine scan error", e); }
+
+  const sd = () => state.inv_engine_sales_data || [];
+  const rc = () => state.inv_engine_recipes    || [];
+  const cfg = () => state.inv_engine || {};
+  const thresholds = () => (cfg().thresholds || {});
+  const engSettings = () => (cfg().settings || {});
+
+  let activeBranch = (u.branches && u.branches[0]) || "maadi";
+
+  // Helper: format days number
+  const fmtDays = d => !isFinite(d) || d > 999 ? "∞" : d.toFixed(1) + "d";
+
+  // Helper: risk level from days remaining vs threshold
+  function riskLevel(itemId, branch) {
+    const cfg_ = thresholds()[itemId] || {};
+    const days = invStockLongevity(itemId, branch, sd(), rc());
+    if (!isFinite(days) || days === 0) {
+      const stock = (computeStock(branch)||{})[itemId] || 0;
+      if (stock <= 0) return "dead";
+    }
+    if (cfg_.priority === "Critical" && isFinite(days) && days < 3) return "critical";
+    const threshold = invAdjustedReorderThreshold(itemId, branch, sd(), rc());
+    const stock = (computeStock(branch)||{})[itemId] || 0;
+    if (stock <= 0) return "dead";
+    if (stock <= threshold) return cfg_.priority === "Critical" ? "critical" : "high";
+    if (isFinite(days) && days < (cfg_.protection_days || 10)) return "medium";
+    return "ok";
+  }
+
+  // ── [A] Summary cards ──────────────────────────────────────
+  function buildSummaryCards(branch) {
+    const alerts = (cfg().engine_alerts || []).filter(a => !a.dismissed && a.branch === branch);
+    const critCount  = alerts.filter(a => a.type === "critical_stock").length;
+    const lowCount   = alerts.filter(a => a.type === "low_stock").length;
+    const spikeCount = alerts.filter(a => a.type === "spike").length;
+    const deadCount  = alerts.filter(a => a.type === "dead_inventory").length;
+
+    const cards = el("div", { class: "inv-summary-cards" });
+    const mkCard = (num, label, color) => {
+      const c = el("div", { class: "inv-summary-card" });
+      c.appendChild(el("div", { class: "num", style: { color } }, String(num)));
+      c.appendChild(el("div", { class: "lbl" }, label));
+      return c;
+    };
+    cards.appendChild(mkCard(critCount,  "Critical Stock",    "#991b1b"));
+    cards.appendChild(mkCard(lowCount,   "Low Stock Alerts",  "#92400e"));
+    cards.appendChild(mkCard(spikeCount, "Consumption Spikes","#78350f"));
+    cards.appendChild(mkCard(deadCount,  "Dead Inventory",    "#6b7280"));
+    return cards;
+  }
+
+  // ── [C] Alert panel ────────────────────────────────────────
+  function buildAlertPanel(branch) {
+    const activeAlerts = (cfg().engine_alerts || []).filter(a => !a.dismissed && a.branch === branch);
+    const panel = el("div", { class: "card", style: { marginBottom: "12px", padding: "0" } });
+    const panelHead = el("div", {
+      style: { padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }
+    });
+    panelHead.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px" } },
+      `⚠️ Active Alerts (${activeAlerts.length})`));
+    const toggleBtn = el("span", { class: "chip", style: { fontSize: "11px" } }, "Show");
+    panelHead.appendChild(toggleBtn);
+    panel.appendChild(panelHead);
+
+    const body = el("div", { style: { display: "none" } });
+    panel.appendChild(body);
+    panelHead.addEventListener("click", () => {
+      const open = body.style.display !== "none";
+      body.style.display = open ? "none" : "block";
+      toggleBtn.textContent = open ? "Show" : "Hide";
+    });
+
+    if (!activeAlerts.length) {
+      body.appendChild(el("div", { style: { padding: "16px", textAlign: "center", color: "var(--ink-dim)", fontSize: "13px" } },
+        "✅ No active alerts for this branch"));
+    } else {
+      const TYPE_LABELS = {
+        low_stock: "Low Stock", critical_stock: "Critical", dead_inventory: "Dead Stock",
+        supplier_delay: "Supplier Risk", spike: "Spike",
+      };
+      for (const a of activeAlerts) {
+        const d = a.detail || {};
+        const row = el("div", { class: "inv-alert-row" });
+        row.appendChild(el("span", { class: `inv-alert-type ${a.type}` }, TYPE_LABELS[a.type] || a.type));
+        const info = el("div", { style: { flex: "1", fontSize: "12px" } });
+        info.appendChild(el("div", { style: { fontWeight: "600" } }, a.item_name));
+        let detail = "";
+        if (a.type === "low_stock")      detail = `${fmtDays(d.days_remaining)} remaining · threshold ${d.threshold != null ? d.threshold.toFixed(2) : "—"}`;
+        if (a.type === "critical_stock") detail = `Only ${fmtDays(d.days_remaining)} left · REORDER NOW`;
+        if (a.type === "dead_inventory") detail = `No consumption in ${d.dead_since_days}+ days · ${d.stock != null ? d.stock.toFixed(2) : "?"} in stock`;
+        if (a.type === "supplier_delay") detail = `${fmtDays(d.days_remaining)} remaining vs ${d.lead_time_days}d lead time`;
+        if (a.type === "spike")          detail = `Recent avg ${(d.recent_avg||0).toFixed(3)} vs historical ${(d.historical_avg||0).toFixed(3)} (×${(d.spike_ratio||0).toFixed(1)})`;
+        info.appendChild(el("div", { class: "muted small" }, detail));
+        row.appendChild(info);
+        const dismissBtn = el("button", { class: "chip", style: { fontSize: "10px", flexShrink: "0" } }, "Dismiss");
+        dismissBtn.addEventListener("click", () => {
+          a.dismissed = true;
+          saveState();
+          render();
+        });
+        row.appendChild(dismissBtn);
+        body.appendChild(row);
+      }
+    }
+    return panel;
+  }
+
+  // ── [D] Intelligence table ─────────────────────────────────
+  function buildTable(branch) {
+    const stocks = computeStock(branch);
+    const items = (state.items || []).filter(it => it.active !== false);
+
+    const rows = items.map(it => {
+      const consumption = invAvgDailyConsumption(it.id, branch, 30, sd(), rc());
+      const days        = invStockLongevity(it.id, branch, sd(), rc());
+      const threshold   = invAdjustedReorderThreshold(it.id, branch, sd(), rc());
+      const stock       = stocks[it.id] || 0;
+      const cfg_        = thresholds()[it.id] || {};
+      const protDays    = cfg_.protection_days || 10;
+      const stockoutDate = invEstimatedStockoutDate(it.id, branch, sd(), rc());
+      const orderDate   = stockoutDate ? new Date(stockoutDate - protDays * 86400000) : null;
+      const suggestedQty = consumption * (protDays + (cfg_.safety_buffer_days || engSettings().default_safety_buffer || 3));
+      const risk        = riskLevel(it.id, branch);
+      const series      = invDailyUsageSeries(it.id, branch, sd(), rc(), 14);
+      const ma7         = series.length >= 2 ? (invMovingAverage(series, 7).slice(-1)[0]||{}).ma : null;
+      const volatility  = invSalesVolatility(it.id, branch, sd(), rc());
+
+      // supplier info
+      const supplierList = (state.suppliers || {})[it.id] || [];
+      const supplierName = supplierList.length ? supplierList[0].name : "—";
+
+      return { it, stock, consumption, days, threshold, protDays, stockoutDate, orderDate,
+               suggestedQty, risk, ma7, volatility, supplierName, cfg_ };
+    });
+
+    // Sort by risk severity then days remaining
+    const riskOrder = { critical: 0, high: 1, medium: 2, ok: 3, dead: 4 };
+    rows.sort((a, b) => {
+      const rd = (riskOrder[a.risk] || 5) - (riskOrder[b.risk] || 5);
+      if (rd !== 0) return rd;
+      const ad = isFinite(a.days) ? a.days : 9999;
+      const bd = isFinite(b.days) ? b.days : 9999;
+      return ad - bd;
+    });
+
+    const fmtNum = (n, dec) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(dec != null ? dec : 3);
+    const fmtDate = d => d ? localISODate(d) : "—";
+
+    const RISK_LABEL = { critical: "Critical", high: "High", medium: "Medium", ok: "OK", dead: "Dead Stock" };
+    const RISK_CLASS = { critical: "critical", high: "high", medium: "medium", ok: "ok", dead: "dead" };
+
+    const scrollWrap = el("div", { class: "inv-engine-scroll" });
+    const table = el("table", { class: "inv-engine-table" });
+    const thead = el("thead", {});
+    const hRow  = el("tr", {});
+    for (const h of ["Item","Category","Priority","Unit","Avg Daily","Stock","Days Left","Reorder At","Prot. Days","Order By","Suggest Qty","MA 7d","Volatility","Risk","Supplier"]) {
+      hRow.appendChild(el("th", {}, h));
+    }
+    thead.appendChild(hRow);
+    table.appendChild(thead);
+
+    const tbody = el("tbody", {});
+    for (const r of rows) {
+      const tr = el("tr", { class: `risk-${r.risk}` });
+      const cells = [
+        el("td", { style: { fontWeight: "600", whiteSpace: "nowrap" } }, r.it.name),
+        el("td", { class: "muted" }, r.cfg_.category_rule || r.it.category || "—"),
+        el("td", {}, el("span", { class: `risk-badge ${(r.cfg_.priority||"").toLowerCase()}` }, r.cfg_.priority || "—")),
+        el("td", { class: "muted" }, r.it.unit || "—"),
+        el("td", {}, fmtNum(r.consumption, 4)),
+        el("td", { style: { fontWeight: "600" } }, fmtNum(r.stock, 3)),
+        el("td", { style: { fontWeight: "700", color: r.risk === "critical" ? "#991b1b" : r.risk === "high" ? "#92400e" : "inherit" } }, fmtDays(r.days)),
+        el("td", {}, fmtNum(r.threshold, 3)),
+        el("td", {}, String(r.protDays) + "d"),
+        el("td", {}, fmtDate(r.orderDate)),
+        el("td", {}, fmtNum(r.suggestedQty, 3)),
+        el("td", {}, r.ma7 != null ? fmtNum(r.ma7, 4) : "—"),
+        el("td", {}, r.volatility > 0 ? (r.volatility * 100).toFixed(0) + "%" : "—"),
+        el("td", {}, el("span", { class: `risk-badge ${RISK_CLASS[r.risk]}` }, RISK_LABEL[r.risk])),
+        el("td", { class: "muted small" }, r.supplierName),
+      ];
+      for (const c of cells) tr.appendChild(c);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+
+    // No-data hint when consumption is all zeros
+    const hasComputed = rows.some(r => r.consumption > 0);
+    if (!hasComputed) {
+      const hint = el("div", { class: "card", style: { background: "var(--surface-2)", marginBottom: "10px", fontSize: "13px", color: "var(--ink-dim)" } }, [
+        el("b", {}, "No POS data loaded yet. "),
+        "Upload order items reports below and a Recipe sheet to activate computed consumption. Until then, Excel seed values are shown in the Avg Daily column.",
+      ]);
+      const wrapper = el("div", {});
+      wrapper.appendChild(hint);
+      wrapper.appendChild(scrollWrap);
+      return wrapper;
+    }
+    return scrollWrap;
+  }
+
+  // ── [E] Upload panel ───────────────────────────────────────
+  function buildUploadPanel() {
+    const panel = el("div", { class: "card", style: { marginBottom: "12px" } });
+    panel.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "12px" } }, "📤 Data Uploads"));
+
+    // POS Upload
+    panel.appendChild(el("div", { style: { fontWeight: "600", fontSize: "12px", marginBottom: "6px" } }, "1. POS Order Items Report"));
+    const posInfo = el("div", { class: "muted small", style: { marginBottom: "8px" } }, "Upload the monthly Foodics order items export for one branch.");
+    panel.appendChild(posInfo);
+
+    const posRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "12px" } });
+    const branchSel = el("select", { style: { fontSize: "13px", padding: "6px 10px" } });
+    for (const b of ["maadi","zawya"]) { const o = el("option", { value: b }, b.charAt(0).toUpperCase()+b.slice(1)); branchSel.appendChild(o); }
+    branchSel.value = activeBranch;
+
+    const monthInp = el("input", { type: "month", style: { fontSize: "13px", padding: "6px 10px" } });
+    monthInp.value = new Date().toISOString().slice(0, 7);
+
+    const posFile = el("input", { type: "file", accept: ".xlsx,.csv", style: { fontSize: "12px" } });
+    const posUpBtn = el("button", { class: "btn", style: { minWidth: "120px" } }, "Upload POS");
+    posUpBtn.addEventListener("click", () => {
+      if (!posFile.files || !posFile.files[0]) { toast("Select a file first."); return; }
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+          const batch = invParsePOSOrderItems(wb, branchSel.value, monthInp.value);
+          // Replace any existing batch for same branch+month
+          state.inv_engine_sales_data = (state.inv_engine_sales_data || []).filter(
+            b => !(b.branch === batch.branch && b.month === batch.month)
+          );
+          state.inv_engine_sales_data.push(batch);
+          saveState();
+          toast(`Loaded ${batch.rows.length} rows for ${batch.branch} ${batch.month}.`);
+          render();
+        } catch(err) {
+          console.error(err);
+          toast("Could not parse file: " + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(posFile.files[0]);
+    });
+    posRow.appendChild(branchSel);
+    posRow.appendChild(monthInp);
+    posRow.appendChild(posFile);
+    posRow.appendChild(posUpBtn);
+    panel.appendChild(posRow);
+
+    // Recipe BOM Upload
+    panel.appendChild(el("hr", { style: { border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" } }));
+    panel.appendChild(el("div", { style: { fontWeight: "600", fontSize: "12px", marginBottom: "6px" } }, "2. Recipe Sheet"));
+    panel.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } }, "Upload Recipe.xlsx — the \"Receipe\" tab (wide matrix: products × ingredients) is parsed automatically."));
+
+    const bomRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "12px" } });
+    const bomFile = el("input", { type: "file", accept: ".xlsx", style: { fontSize: "12px" } });
+    const bomUpBtn = el("button", { class: "btn", style: { minWidth: "140px" } }, "Upload Recipe Sheet");
+    bomUpBtn.addEventListener("click", () => {
+      if (!bomFile.files || !bomFile.files[0]) { toast("Select a file first."); return; }
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+          const recipes = invParseRecipeBOM(wb);
+          if (!recipes.length) { toast("No recipe rows found — check the file format."); return; }
+          state.inv_engine_recipes = recipes;
+          saveState();
+          const matched = recipes.filter(r => r.inv_item_id).length;
+          toast(`Loaded ${recipes.length} recipe entries · ${matched} ingredients matched to inventory.`);
+          render();
+        } catch(err) {
+          console.error(err);
+          toast("Could not parse recipe file: " + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(bomFile.files[0]);
+    });
+    bomRow.appendChild(bomFile);
+    bomRow.appendChild(bomUpBtn);
+    panel.appendChild(bomRow);
+
+    // Data status
+    panel.appendChild(el("hr", { style: { border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" } }));
+    panel.appendChild(el("div", { style: { fontWeight: "600", fontSize: "12px", marginBottom: "6px" } }, "3. Data Status"));
+    const statusGrid = el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", fontSize: "12px" } });
+    for (const b of ["maadi","zawya"]) {
+      const batchesForBranch = sd().filter(x => x.branch === b);
+      const months = batchesForBranch.map(x => x.month).sort().join(", ") || "none";
+      const rows_ = batchesForBranch.reduce((s, x) => s + (x.rows||[]).length, 0);
+      const box = el("div", { class: "card", style: { padding: "8px 12px", background: "var(--surface-2)" } });
+      box.appendChild(el("div", { style: { fontWeight: "700", textTransform: "capitalize" } }, b));
+      box.appendChild(el("div", { class: "muted small" }, `Months: ${months}`));
+      box.appendChild(el("div", { class: "muted small" }, `Rows: ${rows_.toLocaleString()}`));
+      statusGrid.appendChild(box);
+    }
+    const recBox = el("div", { class: "card", style: { padding: "8px 12px", background: "var(--surface-2)", gridColumn: "1 / -1" } });
+    recBox.appendChild(el("div", { style: { fontWeight: "700" } }, "Recipe Sheet"));
+    const rc_ = rc();
+    if (rc_.length) {
+      const matched = rc_.filter(r => r.inv_item_id).length;
+      recBox.appendChild(el("div", { class: "muted small" }, `${rc_.length} entries · ${matched} matched · uploaded ${(rc_[0].uploaded_at||"").slice(0,10)}`));
+    } else {
+      recBox.appendChild(el("div", { class: "muted small" }, "Not uploaded yet"));
+    }
+    statusGrid.appendChild(recBox);
+    panel.appendChild(statusGrid);
+
+    return panel;
+  }
+
+  // ── [F] Threshold editor ───────────────────────────────────
+  function buildThresholdEditor() {
+    const isOwner = u.role === "owner";
+    const panel = el("div", { class: "card", style: { marginBottom: "12px" } });
+    panel.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "10px" } }, "⚙️ Threshold Editor" + (isOwner ? "" : " (read-only)")));
+
+    const items = (state.items || []).filter(it => it.active !== false && thresholds()[it.id]);
+    for (const it of items) {
+      const t = thresholds()[it.id];
+      const row = el("div", { class: "card", style: { background: "var(--surface-2)", marginBottom: "8px", padding: "10px 12px" } });
+      row.appendChild(el("div", { style: { fontWeight: "700", fontSize: "12px", marginBottom: "6px" } }, it.name));
+      const grid = el("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: "6px", fontSize: "12px" } });
+
+      const fields = [
+        { key: "avg_daily_usage",   label: "Avg Daily Usage",   type: "number", step: "0.001" },
+        { key: "protection_days",   label: "Protection Days",   type: "number", step: "1" },
+        { key: "lead_time_days",    label: "Lead Time (days)",  type: "number", step: "1" },
+        { key: "safety_buffer_days",label: "Safety Buffer",     type: "number", step: "1" },
+        { key: "priority",          label: "Priority",          type: "select", opts: ["Critical","High","Medium","Standard","Low"] },
+        { key: "category_rule",     label: "Category",          type: "select", opts: ["critical","specialty","low_turnover","standard"] },
+        { key: "expiry_days",       label: "Expiry (days)",     type: "number", step: "1" },
+      ];
+
+      for (const f of fields) {
+        const cell = el("div", {});
+        cell.appendChild(el("div", { class: "muted", style: { fontSize: "10px", marginBottom: "2px" } }, f.label));
+        if (f.type === "select") {
+          const sel = el("select", { style: { fontSize: "12px", padding: "4px 6px", width: "100%" }, disabled: !isOwner });
+          for (const opt of f.opts) {
+            const o = el("option", { value: opt }, opt);
+            if (String(t[f.key]) === opt) o.selected = true;
+            sel.appendChild(o);
+          }
+          sel.addEventListener("change", () => {
+            t[f.key] = sel.value;
+            saveState();
+          });
+          cell.appendChild(sel);
+        } else {
+          const inp = el("input", { type: "number", step: f.step || "0.001", value: String(t[f.key] != null ? t[f.key] : ""), style: { fontSize: "12px", padding: "4px 6px", width: "100%" }, disabled: !isOwner });
+          inp.addEventListener("change", () => {
+            t[f.key] = Number(inp.value);
+            saveState();
+          });
+          cell.appendChild(inp);
+        }
+        grid.appendChild(cell);
+      }
+      row.appendChild(grid);
+      panel.appendChild(row);
+    }
+    return panel;
+  }
+
+  // ── [G] Engine settings ────────────────────────────────────
+  function buildEngineSettings() {
+    const isOwner = u.role === "owner";
+    const s_ = engSettings();
+    const panel = el("div", { class: "card", style: { marginBottom: "12px" } });
+    panel.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "10px" } }, "🔧 Engine Settings"));
+    const grid = el("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: "10px", fontSize: "12px" } });
+
+    const settingsFields = [
+      { key: "default_lead_time_days", label: "Default Lead Time (days)" },
+      { key: "default_safety_buffer",  label: "Default Safety Buffer (days)" },
+      { key: "spike_multiplier",        label: "Spike Multiplier (× avg)" },
+      { key: "dead_stock_days",         label: "Dead Stock Window (days)" },
+      { key: "ma_window_days",          label: "Moving Avg Window (days)" },
+    ];
+    for (const f of settingsFields) {
+      const cell = el("div", {});
+      cell.appendChild(el("label", { class: "muted", style: { fontSize: "11px", display: "block", marginBottom: "3px" } }, f.label));
+      const inp = el("input", { type: "number", step: "0.1", value: String(s_[f.key] != null ? s_[f.key] : ""), style: { fontSize: "13px", padding: "6px 8px", width: "100%" }, disabled: !isOwner });
+      inp.addEventListener("change", () => {
+        state.inv_engine.settings[f.key] = Number(inp.value);
+        saveState();
+      });
+      cell.appendChild(inp);
+      grid.appendChild(cell);
+    }
+    panel.appendChild(grid);
+    return panel;
+  }
+
+  // ── Assemble screen ─────────────────────────────────────────
+  function draw() {
+    wrap.innerHTML = "";
+    wrap.appendChild(header("🧠 Inventory Engine", "POS-driven consumption forecasting · predictive reorder · risk alerts"));
+
+    // Branch tab picker
+    const bpWrap = el("div", { style: { display: "flex", gap: "8px", marginBottom: "14px" } });
+    for (const b of ["maadi","zawya"]) {
+      const btn = el("button", {
+        class: activeBranch === b ? "btn" : "btn ghost",
+        style: { flex: "1", textTransform: "capitalize" },
+      }, b.charAt(0).toUpperCase() + b.slice(1));
+      btn.addEventListener("click", () => { activeBranch = b; draw(); });
+      bpWrap.appendChild(btn);
+    }
+    wrap.appendChild(bpWrap);
+
+    // Summary cards
+    wrap.appendChild(buildSummaryCards(activeBranch));
+
+    // Alert panel
+    wrap.appendChild(buildAlertPanel(activeBranch));
+
+    // Intelligence table
+    wrap.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "8px" } },
+      `📊 Intelligence Table — ${activeBranch.charAt(0).toUpperCase() + activeBranch.slice(1)}`));
+    wrap.appendChild(buildTable(activeBranch));
+
+    // Upload section
+    wrap.appendChild(el("div", { style: { marginTop: "16px" } }));
+    const uploadToggle = el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "8px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" } });
+    uploadToggle.appendChild(el("span", {}, "📤 Data Uploads"));
+    const uploadChip = el("span", { class: "chip", style: { fontSize: "11px" } }, "Show");
+    uploadToggle.appendChild(uploadChip);
+    const uploadBody = el("div", { style: { display: "none" } });
+    uploadBody.appendChild(buildUploadPanel());
+    uploadToggle.addEventListener("click", () => {
+      const open = uploadBody.style.display !== "none";
+      uploadBody.style.display = open ? "none" : "block";
+      uploadChip.textContent = open ? "Show" : "Hide";
+    });
+    wrap.appendChild(uploadToggle);
+    wrap.appendChild(uploadBody);
+
+    // Threshold editor (collapsible)
+    const tEdToggle = el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "8px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" } });
+    tEdToggle.appendChild(el("span", {}, "⚙️ Threshold Editor"));
+    const tEdChip = el("span", { class: "chip", style: { fontSize: "11px" } }, "Show");
+    tEdToggle.appendChild(tEdChip);
+    const tEdBody = el("div", { style: { display: "none" } });
+    tEdBody.appendChild(buildThresholdEditor());
+    tEdToggle.addEventListener("click", () => {
+      const open = tEdBody.style.display !== "none";
+      tEdBody.style.display = open ? "none" : "block";
+      tEdChip.textContent = open ? "Show" : "Hide";
+    });
+    wrap.appendChild(tEdToggle);
+    wrap.appendChild(tEdBody);
+
+    // Engine settings (collapsible, owner only)
+    if (u.role === "owner") {
+      const sToggle = el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "8px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" } });
+      sToggle.appendChild(el("span", {}, "🔧 Engine Settings"));
+      const sChip = el("span", { class: "chip", style: { fontSize: "11px" } }, "Show");
+      sToggle.appendChild(sChip);
+      const sBody = el("div", { style: { display: "none" } });
+      sBody.appendChild(buildEngineSettings());
+      sToggle.addEventListener("click", () => {
+        const open = sBody.style.display !== "none";
+        sBody.style.display = open ? "none" : "block";
+        sChip.textContent = open ? "Show" : "Hide";
+      });
+      wrap.appendChild(sToggle);
+      wrap.appendChild(sBody);
+    }
+
+    wrap.appendChild(btnBack());
+  }
+
+  draw();
   return wrap;
 };
 
