@@ -2446,6 +2446,7 @@ routes.home = function (u) {
   // ── Owner + Accountant: full operational visibility ──
   if (u.role === "owner" || u.role === "accountant") {
     tiles.appendChild(sectionHeader("Operation"));
+    tiles.appendChild(_notifTile());
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
     tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
@@ -2484,7 +2485,6 @@ routes.home = function (u) {
     tiles.appendChild(tile("⚖️", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
-    tiles.appendChild(_notifTile());
   }
   wrap.appendChild(tiles);
 
