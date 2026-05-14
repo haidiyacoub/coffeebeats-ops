@@ -2142,11 +2142,11 @@ const ROLE_ACCESS = {
                  "signin_stamp_new","signin_stamp_list",
                  "leave_new","leave_list",
                  "scorecard","my_scorecard","my_jd",
-                 "reorder_action_list","supplier_list","items_list",
+                 "reorder_action_new","reorder_action_list","supplier_list","items_list",
                  "inventory_engine",
                  "my_hr","staff_hr","leaderboard","notifications"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","my_hr","leaderboard","notifications"],
+  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr","leaderboard","notifications"],
   // Zawya-only support roles — minimal access: home screen + own profile
   manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook","notifications"],
   helper:  ["home","my_id","users","handbook","notifications"],
@@ -2366,6 +2366,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🧹", "Cleaning Log", "Upload checklist photo", () => go("cleaning_log_new")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
+    tiles.appendChild(tile("📦", "Reorder Actions", "Log supplier actions", () => go("reorder_action_new")));
     // Leadership role tiles — shown only to the assigned barista for this month
     const _bLeadMonth  = new Date().toISOString().slice(0, 7);
     const _bLeadAssign = getLeadershipAssignment(_bLeadMonth);
@@ -2445,7 +2446,6 @@ routes.home = function (u) {
   // ── Owner + Accountant: full operational visibility ──
   if (u.role === "owner" || u.role === "accountant") {
     tiles.appendChild(sectionHeader("Operation"));
-    tiles.appendChild(_notifTile());
     tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
     tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
@@ -2479,10 +2479,12 @@ routes.home = function (u) {
     const _ownerUsr = state.users.find(x => x.id === u.id);
     const _ownerHasId = (_ownerUsr?.id_photo_urls || []).length > 0;
     tiles.appendChild(tile("🪪", "My ID", _ownerHasId ? "✓ ID uploaded" : "Upload your government ID", () => go("my_id")));
+    tiles.appendChild(tile("💰", "Staff Payroll", "Monthly payroll · deductions · leaves", () => go("staff_payroll")));
     tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
     tiles.appendChild(tile("⚖️", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
+    tiles.appendChild(_notifTile());
   }
   wrap.appendChild(tiles);
 
@@ -2538,7 +2540,7 @@ routes.home = function (u) {
           el("div", { class: "k", style: { fontWeight: "600" } }, `${a.item_name} · ${a.branch}`),
           el("div", { class: "v", style: { color: hasFollowUp ? "#c0392b" : "#666", fontSize: "12px" } }, hasFollowUp ? `🔴 ${daysSince}d overdue` : `${daysSince}d ago`),
         ]);
-        row.addEventListener("click", () => go("reorder_action_list"));
+        row.addEventListener("click", () => go("reorder_action_new", { alert_key: a.key }));
         raCard.appendChild(row);
       }
       if (pending.length > 6) {
@@ -3401,6 +3403,148 @@ routes.snapshot_new = function (u) {
 // ==============================================================
 // REORDER ACTIONS
 // ==============================================================
+routes.reorder_action_new = function (u, params) {
+  params = params || {};
+  const wrap = el("div", {});
+  wrap.appendChild(header("Reorder Action", "Log the action you took for a low-stock alert."));
+
+  state.alert_log = state.alert_log || [];
+  state.reorder_actions = state.reorder_actions || [];
+
+  // Build list of actionable alerts (not resolved, no action yet — or follow-up needed)
+  const now = Date.now();
+  const pending = state.alert_log.filter(a => {
+    if (isReorderResolved(a.item_id, a.date)) return false;
+    if (isReorderActionedByCalling(a.key)) return false;
+    const daysSince = Math.floor((now - new Date(a.date + "T00:00:00")) / 86400000);
+    return daysSince <= 14;
+  });
+
+  if (pending.length === 0) {
+    wrap.appendChild(el("div", { class: "card", style: { textAlign: "center", padding: "32px 16px" } }, [
+      el("div", { style: { fontSize: "32px", marginBottom: "8px" } }, "✅"),
+      el("div", { style: { fontWeight: "700", marginBottom: "4px" } }, "No pending reorder actions"),
+      el("div", { class: "muted" }, "All low-stock alerts have been actioned or resolved."),
+    ]));
+    return wrap;
+  }
+
+  // Pre-select alert from params or default to first
+  let selectedKey = params.alert_key || pending[0].key;
+  if (!pending.some(a => a.key === selectedKey)) selectedKey = pending[0].key;
+
+  // Alert picker (if multiple pending)
+  if (pending.length > 1) {
+    const pickerLabel = el("div", { class: "muted small", style: { marginBottom: "4px" } }, "Select alert to action:");
+    const picker = el("select", { style: { marginBottom: "14px" } });
+    pending.forEach(a => {
+      const daysSince = Math.floor((now - new Date(a.date + "T00:00:00")) / 86400000);
+      const opt = el("option", { value: a.key }, `${a.item_name} · ${a.branch} · ${daysSince}d ago`);
+      if (a.key === selectedKey) opt.selected = true;
+      picker.appendChild(opt);
+    });
+    picker.addEventListener("change", () => { selectedKey = picker.value; renderForm(); });
+    wrap.appendChild(pickerLabel);
+    wrap.appendChild(picker);
+  }
+
+  const formArea = el("div", {});
+  wrap.appendChild(formArea);
+
+  function renderForm() {
+    formArea.innerHTML = "";
+    const alert = pending.find(a => a.key === selectedKey) || pending[0];
+    if (!alert) return;
+
+    const daysSince = Math.floor((now - new Date(alert.date + "T00:00:00")) / 86400000);
+    const isOverdue = Array.isArray(alert.follow_ups) && alert.follow_ups.length > 0;
+
+    // Alert summary card
+    const summaryCard = el("div", { class: "card", style: { background: isOverdue ? "#fff5f5" : "var(--surface-2)", border: `1px solid ${isOverdue ? "#c0392b" : "var(--border)"}`, marginBottom: "14px" } });
+    summaryCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px", marginBottom: "4px" } }, `📦 ${alert.item_name}`));
+    summaryCard.appendChild(el("div", { class: "muted small" }, `Branch: ${alert.branch} · Alert date: ${alert.date} · ${daysSince} day${daysSince!==1?"s":""} ago`));
+    if (isOverdue) {
+      summaryCard.appendChild(el("div", { style: { color: "#c0392b", fontWeight: "600", fontSize: "12px", marginTop: "6px" } }, `🔴 ${alert.follow_ups.length} follow-up alarm${alert.follow_ups.length>1?"s":""} fired — action overdue`));
+    }
+    formArea.appendChild(summaryCard);
+
+    // Supplier info
+    const suppliers = (state.suppliers || {})[alert.item_id] || [];
+    const supCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+    supCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "8px" } }, "📞 Supplier Info"));
+    if (suppliers.length === 0) {
+      supCard.appendChild(el("div", { class: "muted small" }, "No suppliers loaded yet for this item. Contact head barista or owner."));
+    } else {
+      suppliers.forEach(s => {
+        const row = el("div", { style: { marginBottom: "8px", paddingBottom: "8px", borderBottom: "1px solid var(--border)" } });
+        row.appendChild(el("div", { style: { fontWeight: "600" } }, s.name));
+        if (s.contact) row.appendChild(el("div", { class: "muted small" }, `📱 ${s.contact}`));
+        if (s.notes)   row.appendChild(el("div", { class: "muted small" }, s.notes));
+        supCard.appendChild(row);
+      });
+    }
+    formArea.appendChild(supCard);
+
+    // Action checkboxes
+    let calledSupplier = false;
+    let notifiedHead = false;
+
+    const actionCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+    actionCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "10px" } }, "Action Taken (tick at least one)"));
+
+    const cbCalled = el("input", { type: "checkbox" });
+    cbCalled.addEventListener("change", () => { calledSupplier = cbCalled.checked; });
+    const lblCalled = el("label", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px", cursor: "pointer", fontSize: "14px" } });
+    lblCalled.appendChild(cbCalled);
+    lblCalled.appendChild(el("span", {}, "☎️ Called the supplier directly"));
+    actionCard.appendChild(lblCalled);
+
+    const cbHead = el("input", { type: "checkbox" });
+    cbHead.addEventListener("change", () => { notifiedHead = cbHead.checked; });
+    const lblHead = el("label", { style: { display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "14px" } });
+    lblHead.appendChild(cbHead);
+    lblHead.appendChild(el("span", {}, "👤 Communicated to head barista to order"));
+    actionCard.appendChild(lblHead);
+    formArea.appendChild(actionCard);
+
+    // Comment field
+    const commentCard = el("div", { class: "card", style: { marginBottom: "14px" } });
+    commentCard.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "8px" } }, "Comment (optional but recommended)"));
+    const commentIn = el("textarea", { placeholder: "e.g. Called Beano's — delivery Thursday. / Told Ahmed to order before weekend.", rows: "3", style: { width: "100%", resize: "vertical" } });
+    commentCard.appendChild(commentIn);
+    formArea.appendChild(commentCard);
+
+    // Save button
+    const saveBtn = el("button", { class: "btn", style: { width: "100%" } }, "Save Action");
+    saveBtn.addEventListener("click", () => {
+      if (!calledSupplier && !notifiedHead) {
+        toast("Tick at least one action before saving.");
+        return;
+      }
+      const s = stamp();
+      state.reorder_actions.push({
+        id: uuid(),
+        alert_key: alert.key,
+        item_id: alert.item_id,
+        item_name: alert.item_name,
+        branch: alert.branch,
+        alert_date: alert.date,
+        called_supplier: calledSupplier,
+        notified_head_barista: notifiedHead,
+        comment: commentIn.value.trim(),
+        by: s.by, by_name: s.by_name, at: s.at,
+      });
+      saveState();
+      toast("✓ Reorder action saved");
+      go("home");
+    });
+    formArea.appendChild(saveBtn);
+  }
+
+  renderForm();
+  return wrap;
+};
+
 routes.reorder_action_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Inventory Status", "Low-stock alerts · reorder actions logged by baristas."));
@@ -3483,6 +3627,13 @@ routes.reorder_action_list = function (u) {
       });
     } else {
       card.appendChild(el("div", { style: { color: "#e67e22", fontSize: "13px" } }, "No action logged yet."));
+    }
+
+    // Quick-action button for pending items
+    if (hasPending || (!resolved && !calledSupplier)) {
+      const btn = el("button", { class: "btn secondary", style: { marginTop: "8px", padding: "6px 14px", fontSize: "12px" } }, "📝 Log action");
+      btn.addEventListener("click", () => go("reorder_action_new", { alert_key: a.key }));
+      card.appendChild(btn);
     }
 
     wrap.appendChild(card);
@@ -6906,6 +7057,132 @@ routes.roster = function (u) {
 };
 
 // ==============================================================
+// ROASTER — head barista posts weekly schedule to the whole team
+// Read access: everyone (barista, head_barista, owner, accountant)
+// Edit access: head_barista + owner only
+// ==============================================================
+routes.roaster = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Roaster", "Head barista posts the weekly schedule for Maadi and Zawya — morning and night shifts."));
+
+  state.roaster_schedules = state.roaster_schedules || [];
+
+  const canEdit = (u.role === "owner" || u.role === "head_barista");
+
+  let weekOf = mondayOf(new Date().toISOString().slice(0,10));
+
+  const weekPicker = el("input", { type: "date", value: weekOf });
+  weekPicker.addEventListener("input", () => { weekOf = mondayOf(weekPicker.value); draw(); });
+  wrap.appendChild(el("label", {}, "Week starting (snaps to Monday)"));
+  wrap.appendChild(weekPicker);
+
+  const body = el("div", { class: "stack" });
+  wrap.appendChild(body);
+
+  function currentSchedule() {
+    return state.roaster_schedules.find(r => r.week_of === weekOf);
+  }
+
+  function draw() {
+    body.innerHTML = "";
+    const sched = currentSchedule();
+
+    if (canEdit) {
+      body.appendChild(el("div", { class: "banner-arch" },
+        "Post the weekly roaster for all baristas — Maadi and Zawya, morning and night. " +
+        "All team members can read this. Changes save when you tap Post."));
+
+      const ta = el("textarea", {
+        rows: "14",
+        placeholder: "Paste or type the weekly roaster here…\n\nExample:\n━━ MAADI ━━\n  Morning: Barista 1, Khaled\n  Night:   Barista 2\n\n━━ ZAWYA ━━\n  Morning: Barista 3\n  Night:   Barista 1",
+        style: { marginTop: "10px", width: "100%", fontFamily: "monospace", fontSize: "13px", lineHeight: "1.6" }
+      });
+      if (sched) ta.value = sched.note || "";
+
+      body.appendChild(ta);
+
+      const btnRow = el("div", { class: "btn-row", style: { marginTop: "10px" } });
+      btnRow.appendChild(el("button", { class: "btn", onClick: () => {
+        const note = ta.value.trim();
+        if (!note) return toast("Write the roaster before posting", "error");
+        const s = stamp();
+        if (sched) {
+          sched.note = note;
+          sched.updated_by = s.by;
+          sched.updated_by_name = s.by_name;
+          sched.updated_at = s.at;
+        } else {
+          state.roaster_schedules.push({
+            id: uuid(), week_of: weekOf, note,
+            by: s.by, by_name: s.by_name, at: s.at,
+            updated_at: null,
+          });
+        }
+        saveState();
+        toast("📤 Roaster posted for week of " + weekOf);
+        draw();
+      } }, "📤 Post roaster"));
+
+      if (sched) {
+        btnRow.appendChild(el("button", { class: "btn danger", style: { width: "auto", flexShrink: "0" }, onClick: () => {
+          if (!confirm("Clear roaster for week of " + weekOf + "?")) return;
+          state.roaster_schedules = state.roaster_schedules.filter(r => r.week_of !== weekOf);
+          saveState(); toast("Roaster cleared"); draw();
+        } }, "🗑 Clear"));
+      }
+      body.appendChild(btnRow);
+    } else {
+      body.appendChild(el("div", { class: "banner-arch" },
+        "Read-only — your weekly roaster is posted by the head barista."));
+    }
+
+    // Show the current week's posted schedule
+    if (sched) {
+      const card = el("div", { class: "card", style: { marginTop: "12px" } });
+      card.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } },
+        "Week of " + sched.week_of));
+      card.appendChild(el("pre", {
+        style: { margin: "10px 0 0", fontSize: "13px", whiteSpace: "pre-wrap", fontFamily: "monospace", lineHeight: "1.7", background: "var(--surface-2)", borderRadius: "10px", padding: "12px" }
+      }, sched.note));
+      const byLine = sched.updated_at
+        ? "Updated by " + (sched.updated_by_name || "—") + " on " + fmtDate(sched.updated_at)
+        : "Posted by " + (sched.by_name || "—") + " on " + fmtDate(sched.at);
+      card.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } }, byLine));
+      body.appendChild(card);
+    } else if (!canEdit) {
+      body.appendChild(el("div", { class: "card", style: { marginTop: "12px" } }, [
+        el("div", { class: "muted small" }, "No roaster posted for this week yet — check back later."),
+      ]));
+    }
+
+    // History: last 4 other weeks for quick navigation
+    const recent = state.roaster_schedules
+      .filter(r => r.week_of !== weekOf)
+      .sort((a, b) => b.week_of.localeCompare(a.week_of))
+      .slice(0, 4);
+    if (recent.length > 0) {
+      const hist = el("div", { class: "card", style: { marginTop: "10px" } });
+      hist.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "Recent weeks"));
+      for (const r of recent) {
+        hist.appendChild(el("div", { class: "kv", style: { cursor: "pointer" }, onClick: () => {
+          weekPicker.value = r.week_of;
+          weekOf = r.week_of;
+          draw();
+        } }, [
+          el("div", { class: "k" }, r.week_of),
+          el("div", { class: "v muted small" }, "by " + (r.by_name || "—")),
+        ]));
+      }
+      body.appendChild(hist);
+    }
+  }
+
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ==============================================================
 // MENU ITEMS
 // ==============================================================
 routes.menu = function (u) {
@@ -7143,7 +7420,7 @@ routes.menu = function (u) {
 // Routes the owner can grant/revoke per-user via the Users screen. Order matters —
 // this is the order they appear in the access-rights editor.
 const MANAGEABLE_ROUTES = [
-  "home","shifts","roster","handbook",
+  "home","shifts","roster","roaster","handbook",
   "waste_new","waste_list","snapshot_new",
   "purchase_new","purchase_list","petty_cash",
   "shift_close_new","shift_close_list",
@@ -7151,7 +7428,7 @@ const MANAGEABLE_ROUTES = [
   "signin_stamp_new","signin_stamp_list",
   "salaries","penalties","maadi_deposits",
   "overheads","bank","dashboard","menu","items_list",
-  "reorder_action_list","supplier_list","inventory_engine",
+  "reorder_action_new","reorder_action_list","supplier_list","inventory_engine",
   "sales_import","users","settings",
   "leave_new","leave_list",
   "my_id","my_hr","my_jd","my_scorecard",
@@ -12258,6 +12535,282 @@ routes.staff_hr = function(u) {
   }
 
   drawBody();
+  return wrap;
+};
+
+// ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+routes.staff_payroll = function(u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Staff Payroll Overview", "Monthly payroll, penalties, loans, KPI and leave summary for all active staff."));
+
+  if (!["owner", "accountant", "head_barista"].includes(u.role)) {
+    wrap.appendChild(el("div", { class: "card" }, "Access restricted."));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  state.salary_config  = state.salary_config  || {};
+  state.penalties      = state.penalties      || [];
+  state.overtime_logs  = state.overtime_logs  || [];
+  state.salary_loans   = state.salary_loans   || [];
+  state.leaves         = state.leaves         || [];
+
+  let selMonth = new Date().toISOString().slice(0, 7);
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+  const prevBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = d.toISOString().slice(0, 7);
+    monthLbl.textContent = selMonth;
+    drawBody();
+  }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
+
+  function drawBody() {
+    body.innerHTML = "";
+    const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
+    const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+
+    let totalPayroll = 0, totalPen = 0, totalOT = 0;
+    const staffData = staff.map(p => {
+      const salary  = Number((state.salary_config[p.id] || {}).monthly_salary || 0);
+      const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const netDue  = Math.max(0, salary + otSum - penSum - loanSum);
+      const scores  = kpiGetUserScores(p.id);
+      const kpiTotal = scores ? kpiCalcTotal(scores) : 0;
+      const thisYear = selMonth.slice(0, 4);
+      const lvDays  = (state.leaves || [])
+        .filter(x => x.user_id === p.id && x.status === "approved" && x.type === "annual" && (x.from_date || "").startsWith(thisYear))
+        .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
+      totalPayroll += netDue; totalPen += penSum; totalOT += otSum;
+      return { p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays };
+    });
+
+    // Summary stat cards
+    const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
+    [
+      ["👥 Active Staff", String(staff.length)],
+      ["💰 Total Payroll", money(totalPayroll)],
+      ["⚖ Total Penalties", money(totalPen)],
+      ["⏱ Total Overtime", money(totalOT)],
+    ].forEach(([k, v]) => {
+      const c = el("div", { class: "card", style: { padding: "12px", textAlign: "center" } });
+      c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
+      c.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px" } }, v));
+      statsRow.appendChild(c);
+    });
+    body.appendChild(statsRow);
+
+    // Staff table
+    const tableCard = el("div", { class: "card" });
+    const t = el("table", {});
+    t.appendChild(el("thead", {}, [el("tr", {}, [
+      el("th", {}, "Name"),
+      el("th", {}, "Role"),
+      el("th", { style: { textAlign: "right" } }, "Base"),
+      el("th", { style: { textAlign: "right" } }, "OT"),
+      el("th", { style: { textAlign: "right" } }, "Pen."),
+      el("th", { style: { textAlign: "right" } }, "Loans"),
+      el("th", { style: { textAlign: "right" } }, "Net Due"),
+      el("th", { style: { textAlign: "center" } }, "KPI"),
+      el("th", { style: { textAlign: "center" } }, "Leave"),
+    ])]));
+    const tb = el("tbody", {});
+    let grandBase = 0, grandOT = 0, grandPen = 0, grandLoan = 0, grandNet = 0;
+    staffData.forEach(({ p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays }) => {
+      grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
+      const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
+      tb.appendChild(el("tr", { style: { cursor: "pointer" }, onClick: () => go("my_hr", { user_id: p.id }) }, [
+        el("td", { style: { fontWeight: "600" } }, p.name),
+        el("td", { class: "muted small" }, p.role === "head_barista" ? "Head" : "Barista"),
+        el("td", { class: "num" }, money(salary)),
+        el("td", { class: "num", style: { color: "var(--ok)" } }, otSum ? "+" + money(otSum) : "—"),
+        el("td", { class: "num", style: { color: penSum ? "var(--bad)" : "" } }, penSum ? "−" + money(penSum) : "—"),
+        el("td", { class: "num", style: { color: loanSum ? "var(--warn)" : "" } }, loanSum ? "−" + money(loanSum) : "—"),
+        el("td", { class: "num", style: { fontWeight: "700", color: netColor } }, money(netDue)),
+        el("td", { style: { textAlign: "center", fontSize: "12px", fontWeight: "700", color: kpiScoreColor(kpiTotal) } }, kpiTotal ? kpiGradeEn(kpiTotal).split(" ")[0] + " " + kpiTotal.toFixed(0) : "—"),
+        el("td", { style: { textAlign: "center" } }, lvDays ? String(lvDays) + "d" : "—"),
+      ]));
+    });
+    tb.appendChild(el("tr", { style: { borderTop: "2px solid var(--border)", fontWeight: "800" } }, [
+      el("td", { colspan: "2" }, "Total"),
+      el("td", { class: "num" }, money(grandBase)),
+      el("td", { class: "num" }, money(grandOT)),
+      el("td", { class: "num" }, money(grandPen)),
+      el("td", { class: "num" }, money(grandLoan)),
+      el("td", { class: "num", style: { color: "var(--ok)" } }, money(grandNet)),
+      el("td", {}), el("td", {}),
+    ]));
+    t.appendChild(tb);
+    tableCard.appendChild(t);
+    body.appendChild(tableCard);
+  }
+
+  drawBody();
+  return wrap;
+};
+
+// ─── DAILY LOG (barista self-report, Arabic UI) ────────────────────────────────
+
+routes.kpi_log_new = function(u) {
+  const isAR = u.role==="barista"||u.role==="head_barista";
+  const dir  = isAR?"rtl":"ltr";
+  const wrap = el("div",{style:{direction:dir}});
+
+  wrap.appendChild(el("h2",{style:{marginBottom:"4px"}},isAR?"📝 سجّل شيفتي اليوم":"📝 Log My Shift"));
+  wrap.appendChild(el("div",{class:"muted",style:{marginBottom:"14px",fontSize:"13px"}},
+    isAR?"ملاحظة: الصدق يُكافأ — كل إدخال يُحسب لصالحك في بطاقة الأداء":"Honesty earns points — every entry improves your scorecard."));
+
+  const form = el("div",{class:"stack"});
+  // Date + shift
+  const dateCard = el("div",{class:"card"});
+  dateCard.appendChild(el("label",{},isAR?"📅 التاريخ":"📅 Date"));
+  const dateInp = el("input",{type:"date",value:fmtDay(now()),id:"kl_date_inp"});
+  dateCard.appendChild(dateInp);
+  dateCard.appendChild(el("label",{},isAR?"🌤️ نوع الشيفت":"🌤️ Shift Type"));
+  const shiftSel = el("select",{id:"kl_shift"});
+  shiftSel.appendChild(el("option",{value:"morning"},isAR?"☀️ صباحي (فتح)":"☀️ Morning (Opening)"));
+  shiftSel.appendChild(el("option",{value:"afternoon"},isAR?"🌤️ ظهر":"🌤️ Afternoon"));
+  shiftSel.appendChild(el("option",{value:"closing"},isAR?"🌙 إغلاق":"🌙 Closing"));
+  dateCard.appendChild(shiftSel);
+  form.appendChild(dateCard);
+
+  // Punctuality
+  const pCard = el("div",{class:"card"});
+  pCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"⏱️ الانضباط والحضور":"⏱️ Punctuality"));
+  pCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+    el("div",{},[el("label",{},isAR?"الوقت المحدد":"Scheduled"),el("input",{type:"time",value:"09:00",id:"kl_sched"})]),
+    el("div",{},[el("label",{},isAR?"وصلت في":"Actual clock-in"),el("input",{type:"time",id:"kl_actual",oninput:"kpiLivePunct()"})]),
+  ]));
+  const pRes = el("div",{id:"kpi_punct_res",class:"muted small",style:{marginTop:"6px"}},isAR?"أدخل وقت الحضور الفعلي لحساب النقاط":"Enter your actual clock-in time");
+  pCard.appendChild(pRes);
+  form.appendChild(pCard);
+
+  // Waste
+  const wCard = el("div",{class:"card"});
+  wCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"♻️ ترشيد الهدر":"♻️ Waste Control"));
+  wCard.appendChild(el("div",{class:"grid c2",style:{gap:"8px"}},[
+    el("div",{},[el("label",{},isAR?"شوطات الإسبريسو المهدرة":"Espresso shots wasted"),el("input",{type:"number",min:"0",max:"50",placeholder:"0",id:"kl_shots",oninput:"kpiLiveWaste()"})]),
+    el("div",{},[el("label",{},isAR?"الحليب المهدر (مل)":"Milk wasted (ml)"),el("input",{type:"number",min:"0",placeholder:"0",id:"kl_milk",oninput:"kpiLiveWaste()"})]),
+  ]));
+  wCard.appendChild(el("label",{},isAR?"ملاحظات أخرى":"Other waste notes"));
+  wCard.appendChild(el("input",{type:"text",id:"kl_wnotes",placeholder:isAR?"مثال: زجاجة شراب سقطت، حليب أوت منتهي الصلاحية":"e.g. Dropped syrup, expired oat milk"}));
+  const wRes = el("div",{id:"kpi_waste_res",class:"muted small",style:{marginTop:"6px"}},"");
+  wCard.appendChild(wRes);
+  form.appendChild(wCard);
+
+  // Cleanliness checklist
+  const cCard = el("div",{class:"card"});
+  cCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"🧹 قائمة النظافة":"🧹 Cleanliness Checklist"));
+  const items = isAR?CLEAN_AR:CLEAN_EN;
+  items.forEach((item,i)=>{
+    const lbl = el("label",{style:{display:"flex",alignItems:"flex-start",gap:"8px",padding:"7px 0",borderBottom:"1px solid var(--border)",fontSize:"13px",cursor:"pointer"}});
+    lbl.appendChild(el("input",{type:"checkbox",id:"kl_clean_"+i,style:{width:"16px",height:"16px",marginTop:"2px",flexShrink:"0"},oninput:"kpiLiveClean()"}));
+    lbl.appendChild(el("span",{},item));
+    cCard.appendChild(lbl);
+  });
+  cCard.appendChild(el("div",{style:{marginTop:"8px",fontWeight:"600",fontSize:"13px"}},[ isAR?"النقاط: ":"Score: ", el("span",{id:"kpi_clean_score",style:{color:"var(--accent)"}},isAR?"٠/١٠٠":"0/100")]));
+  form.appendChild(cCard);
+
+  // Notes
+  const nCard = el("div",{class:"card"});
+  nCard.appendChild(el("div",{style:{fontWeight:"700",marginBottom:"8px"}},isAR?"💬 ملاحظات الشيفت":"💬 Shift Notes"));
+  nCard.appendChild(el("label",{},isAR?"أبرز حدث اليوم (إيجابي أو تحدٍّ)":"Highlight or challenge today"));
+  nCard.appendChild(el("textarea",{id:"kl_notes",rows:"2",placeholder:isAR?"مثال: ضغط كبير في الصباح، لكن الفريق تعاون بشكل رائع":"e.g. Very busy morning but team worked great"}));
+  nCard.appendChild(el("label",{},isAR?"شكر خاص لزميل (اختياري)":"Team shoutout (optional)"));
+  nCard.appendChild(el("input",{type:"text",id:"kl_shout",placeholder:isAR?"مثال: رانا غطّت عني وقت الضغط — شكراً جزيلاً":"e.g. Rana covered for me during rush — huge help!"}));
+  form.appendChild(nCard);
+
+  wrap.appendChild(form);
+
+  const submitBtn = el("button",{class:"btn",style:{marginTop:"12px"},onClick:submitKpiLog},isAR?"✅ إرسال تقرير الشيفت":"✅ Submit Shift Log");
+  wrap.appendChild(submitBtn);
+  wrap.appendChild(btnBack());
+
+  // Live calc helpers attached to window for inline oninput handlers
+  window.kpiLivePunct = function() {
+    const sched = document.getElementById("kl_sched");
+    const actual = document.getElementById("kl_actual");
+    const res = document.getElementById("kpi_punct_res");
+    if (!sched||!actual||!res||!actual.value) return;
+    const [sh,sm]=sched.value.split(":").map(Number);
+    const [ah,am]=actual.value.split(":").map(Number);
+    const diff=(ah*60+am)-(sh*60+sm);
+    let score,msg;
+    if(diff<=0){score=100;msg=isAR?"🎉 في الموعد! علامة كاملة":"🎉 On time! Full marks";}
+    else if(diff<=5){score=90;msg=isAR?"✅ تأخير ٥ دقائق — ٩٠ نقطة":"✅ Within grace — 90 pts";}
+    else if(diff<=15){score=70;msg=isAR?"⚠️ تأخير ٦-١٥ دقيقة — ٧٠ نقطة":"⚠️ 6-15 min late — 70 pts";}
+    else if(diff<=30){score=50;msg=isAR?"⚠️ تأخير ١٦-٣٠ دقيقة — ٥٠ نقطة":"⚠️ 16-30 min late — 50 pts";}
+    else{score=20;msg=isAR?"❌ أكثر من ٣٠ دقيقة — ٢٠ نقطة":"❌ Over 30 min late — 20 pts";}
+    res.textContent=msg;
+    res.style.color=score>=90?"var(--ok)":score>=70?"var(--warn)":"var(--bad)";
+  };
+  window.kpiLiveWaste = function() {
+    const shots=parseInt(document.getElementById("kl_shots")?.value)||0;
+    const milk=parseInt(document.getElementById("kl_milk")?.value)||0;
+    let score=100;
+    if(shots>3)score-=(shots-3)*10;
+    if(milk>100)score-=Math.floor((milk-100)/50)*10;
+    score=Math.max(score,10);
+    const el2=document.getElementById("kpi_waste_res");
+    if(el2){el2.textContent=(isAR?"نقاط الهدر: ":"Waste score: ")+score+"/100";el2.style.color=kpiScoreColor(score);}
+  };
+  window.kpiLiveClean = function() {
+    const boxes=document.querySelectorAll("[id^='kl_clean_']");
+    const checked=Array.from(boxes).filter(b=>b.checked).length;
+    const score=Math.round((checked/boxes.length)*100);
+    const el2=document.getElementById("kpi_clean_score");
+    if(el2){el2.textContent=score+"/100";el2.style.color=kpiScoreColor(score);}
+  };
+
+  function submitKpiLog() {
+    const sched = document.getElementById("kl_sched")?.value||"09:00";
+    const actual= document.getElementById("kl_actual")?.value||"";
+    let pScore=70;
+    if(actual){
+      const [sh,sm]=sched.split(":").map(Number);
+      const [ah,am]=actual.split(":").map(Number);
+      const diff=(ah*60+am)-(sh*60+sm);
+      pScore=diff<=0?100:diff<=5?90:diff<=15?70:diff<=30?50:20;
+    }
+    const shots=parseInt(document.getElementById("kl_shots")?.value)||0;
+    const milk=parseInt(document.getElementById("kl_milk")?.value)||0;
+    let wScore=100;
+    if(shots>3)wScore-=(shots-3)*10;
+    if(milk>100)wScore-=Math.floor((milk-100)/50)*10;
+    wScore=Math.max(wScore,10);
+    const boxes=document.querySelectorAll("[id^='kl_clean_']");
+    const cleanScore=boxes.length?Math.round(Array.from(boxes).filter(b=>b.checked).length/boxes.length*100):0;
+    const entry = {
+      id:uuid(), user_id:u.id, at:now(),
+      date:document.getElementById("kl_date_inp")?.value||fmtDay(now()),
+      shift:document.getElementById("kl_shift")?.value||"morning",
+      punctuality:pScore, waste:wScore, cleanliness:cleanScore,
+      waste_notes:document.getElementById("kl_wnotes")?.value||"",
+      notes:document.getElementById("kl_notes")?.value||"",
+      shoutout:document.getElementById("kl_shout")?.value||"",
+    };
+    if(!state.kpi_logs) state.kpi_logs=[];
+    state.kpi_logs.unshift(entry);
+    save();
+    toast(isAR?"✅ تم إرسال التقرير! شكراً على التزامك ⭐":"✅ Log submitted! Scores updated.");
+    go("my_scorecard");
+  }
   return wrap;
 };
 
