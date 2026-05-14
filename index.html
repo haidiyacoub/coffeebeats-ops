@@ -281,6 +281,31 @@
   .inv-alert-type.dead_inventory { background:#f3f4f6; color:#6b7280; }
   .inv-alert-type.supplier_delay { background:#e0f2fe; color:#0369a1; }
   .inv-alert-type.spike         { background:#fde68a; color:#78350f; }
+  /* ── Notifications & Alerts Center ─────────────────────── */
+  .notif-section-hdr { font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-dim); padding: 12px 0 6px;
+    border-bottom: 2px solid var(--border); margin-bottom: 10px; }
+  .notif-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; display: flex;
+    flex-direction: column; gap: 5px; }
+  .notif-card.critical { border-left: 4px solid #991b1b; }
+  .notif-card.low      { border-left: 4px solid #92400e; }
+  .notif-card.dead     { border-left: 4px solid #6b7280; }
+  .notif-card.delay    { border-left: 4px solid #0369a1; }
+  .notif-card.spike    { border-left: 4px solid #78350f; }
+  .notif-card.legacy   { border-left: 4px solid var(--warn); }
+  .notif-card.sysnotif { border-left: 4px solid var(--accent); }
+  .notif-status-chip { font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 999px; display: inline-block; white-space: nowrap; }
+  .notif-status-chip.active    { background: #fee2e2; color: #991b1b; }
+  .notif-status-chip.dismissed { background: #f3f4f6; color: #6b7280; }
+  .notif-status-chip.resolved  { background: #dcfce7; color: #166534; }
+  .notif-badge { display: inline-flex; align-items: center; justify-content: center;
+    background: var(--bad); color: #fff; font-size: 10px; font-weight: 700;
+    border-radius: 999px; min-width: 18px; height: 18px; padding: 0 5px;
+    margin-left: 4px; vertical-align: middle; }
+  .notif-empty { color: var(--ink-dim); font-size: 13px; text-align: center;
+    padding: 24px 16px; }
   .banner-arch { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--ink-dim); font-size: 12px; margin-bottom: 10px; }
   .toast-wrap { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 50; display: flex; flex-direction: column; gap: 6px; }
   .toast { background: var(--surface); border: 1px solid var(--accent); color: var(--ink); padding: 10px 14px; border-radius: 10px; box-shadow: var(--shadow); }
@@ -1895,6 +1920,9 @@ function runEngineAlertScan() {
       const alertDate = alert.fired_at ? alert.fired_at.slice(0, 10) : today;
       if (isReorderResolved(alert.item_id, alertDate)) {
         alert.dismissed = true;
+        alert.dismissed_by_id   = "system";
+        alert.dismissed_by_name = "Auto-resolved";
+        alert.dismissed_at      = new Date().toISOString();
         dirty = true;
       }
     }
@@ -2116,12 +2144,12 @@ const ROLE_ACCESS = {
                  "scorecard","my_scorecard","my_jd",
                  "reorder_action_new","reorder_action_list","supplier_list","items_list",
                  "inventory_engine",
-                 "my_hr","staff_hr","leaderboard"],
+                 "my_hr","staff_hr","leaderboard","notifications"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr","leaderboard"],
+  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","reorder_action_new","my_hr","leaderboard","notifications"],
   // Zawya-only support roles — minimal access: home screen + own profile
-  manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook"],
-  helper:  ["home","my_id","users","handbook"],
+  manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook","notifications"],
+  helper:  ["home","my_id","users","handbook","notifications"],
 
 };
 function canAccess(routeName, u) {
@@ -2304,6 +2332,26 @@ routes.home = function (u) {
 
   const tiles = el("div", { id: "home-grid", class: "grid c2" });
 
+  // ── Notifications tile (all roles) ──
+  const _activeAlertCount = ((state.inv_engine && state.inv_engine.engine_alerts) || [])
+    .filter(a => !a.dismissed).length;
+  function _notifTile() {
+    const iconWrap = el("div", { class: "icon" });
+    iconWrap.appendChild(document.createTextNode("🔔"));
+    if (_activeAlertCount > 0) {
+      iconWrap.appendChild(el("span", { class: "notif-badge" }, String(_activeAlertCount)));
+    }
+    const t = el("div", { class: "tile" });
+    t.appendChild(iconWrap);
+    t.appendChild(el("div", { class: "label" }, "Notifications"));
+    t.appendChild(el("div", { class: "sub" },
+      _activeAlertCount > 0
+        ? `${_activeAlertCount} active alert${_activeAlertCount > 1 ? "s" : ""}`
+        : "Alerts · Actions · System"));
+    t.addEventListener("click", () => go("notifications"));
+    return t;
+  }
+
   // ── Regular barista: 6 tiles only ──
   if (u.role === "barista") {
     const _baristaSchedMonth = new Date().toISOString().slice(0, 7);
@@ -2334,6 +2382,7 @@ routes.home = function (u) {
       }
     }
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
+    tiles.appendChild(_notifTile());
     tiles.appendChild(sectionHeader("HR"));
     const _selfUsr = state.users.find(x => x.id === u.id);
     const _hasId = (_selfUsr?.id_photo_urls || []).length > 0;
@@ -2369,6 +2418,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
+    tiles.appendChild(_notifTile());
     tiles.appendChild(sectionHeader("HR"));
     tiles.appendChild(tile("💰", "Salaries", "Monthly transfers", () => go("salaries")));
     tiles.appendChild(tile("⚖", "Penalties", "Half/full day deductions", () => go("penalties")));
@@ -2387,6 +2437,7 @@ routes.home = function (u) {
   // ── Manager / Helper (Zawya only): handbook only ──
   if (u.role === "manager" || u.role === "helper") {
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(_notifTile());
     tiles.appendChild(el("div", {
       style: { gridColumn: "1 / -1", textAlign: "center", padding: "16px 16px 32px", color: "var(--ink-dim)", fontSize: "14px" },
     }, "No other app access — contact the owner if you need assistance."));
@@ -2433,6 +2484,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("⚖️", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("👥", "Users", "PINs & roles", () => go("users")));
+    tiles.appendChild(_notifTile());
   }
   wrap.appendChild(tiles);
 
@@ -7376,9 +7428,11 @@ const MANAGEABLE_ROUTES = [
   "signin_stamp_new","signin_stamp_list",
   "salaries","penalties","maadi_deposits",
   "overheads","bank","dashboard","menu","items_list",
+  "reorder_action_new","reorder_action_list","supplier_list","inventory_engine",
   "sales_import","users","settings",
   "leave_new","leave_list",
-  "my_id","staff_hr","leaderboard",
+  "my_id","my_hr","my_jd","my_scorecard",
+  "staff_hr","scorecard","leaderboard",
 ];
 
 routes.users = function (u) {
@@ -13433,6 +13487,9 @@ routes.inventory_engine = function(u) {
         const dismissBtn = el("button", { class: "chip", style: { fontSize: "10px", flexShrink: "0" } }, "Dismiss");
         dismissBtn.addEventListener("click", () => {
           a.dismissed = true;
+          a.dismissed_by_id   = u.uid;
+          a.dismissed_by_name = u.name;
+          a.dismissed_at      = new Date().toISOString();
           saveState();
           render();
         });
@@ -13811,6 +13868,210 @@ routes.inventory_engine = function(u) {
   }
 
   draw();
+  return wrap;
+};
+
+// ==============================================================
+// NOTIFICATIONS & ALERTS CENTER
+// ==============================================================
+routes.notifications = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("🔔 Notifications & Alerts", "Engine alerts · Inventory actions · System notifications"));
+
+  const SEVERITY = { critical_stock: 0, low_stock: 1, spike: 2, supplier_delay: 3, dead_inventory: 4 };
+  const TYPE_LABELS = {
+    low_stock: "Low Stock", critical_stock: "Critical Stock", dead_inventory: "Dead Stock",
+    supplier_delay: "Supplier Risk", spike: "Spike",
+  };
+  const TYPE_CSS = {
+    low_stock: "low", critical_stock: "critical", dead_inventory: "dead",
+    supplier_delay: "delay", spike: "spike",
+  };
+
+  function fmtTs(iso) {
+    if (!iso) return "—";
+    return iso.slice(0, 16).replace("T", " ");
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // SECTION A — Engine Alerts
+  // ══════════════════════════════════════════════════════════════
+  wrap.appendChild(el("div", { class: "notif-section-hdr" }, "Engine Alerts"));
+
+  const allEngineAlerts = ((state.inv_engine && state.inv_engine.engine_alerts) || [])
+    .slice()
+    .sort((a, b) => {
+      if (!a.dismissed && b.dismissed) return -1;
+      if (a.dismissed && !b.dismissed) return 1;
+      const sa = SEVERITY[a.type] ?? 99, sb = SEVERITY[b.type] ?? 99;
+      if (sa !== sb) return sa - sb;
+      return (b.fired_at || "").localeCompare(a.fired_at || "");
+    });
+
+  const activeEngineAlerts    = allEngineAlerts.filter(a => !a.dismissed);
+  const dismissedEngineAlerts = allEngineAlerts.filter(a =>  a.dismissed);
+
+  if (!allEngineAlerts.length) {
+    wrap.appendChild(el("div", { class: "notif-empty card" }, "✅ No engine alerts on record."));
+  } else {
+    // Active
+    for (const a of activeEngineAlerts) {
+      const d = a.detail || {};
+      let detail = "";
+      if (a.type === "low_stock")       detail = `${(d.days_remaining||0).toFixed(1)}d remaining · threshold ${d.threshold != null ? d.threshold.toFixed(2) : "—"}`;
+      if (a.type === "critical_stock")  detail = `Only ${(d.days_remaining||0).toFixed(1)}d left — REORDER NOW`;
+      if (a.type === "dead_inventory")  detail = `No consumption in ${d.dead_since_days || "?"}+ days · ${d.stock != null ? d.stock.toFixed(2) : "?"} in stock`;
+      if (a.type === "supplier_delay")  detail = `${(d.days_remaining||0).toFixed(1)}d remaining vs ${d.lead_time_days}d lead time`;
+      if (a.type === "spike")           detail = `Avg ${(d.recent_avg||0).toFixed(3)} vs historical ${(d.historical_avg||0).toFixed(3)} (×${(d.spike_ratio||0).toFixed(1)})`;
+
+      const card = el("div", { class: `notif-card ${TYPE_CSS[a.type] || ""}` });
+      const topRow = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } });
+      topRow.appendChild(el("span", { class: `inv-alert-type ${a.type}` }, TYPE_LABELS[a.type] || a.type));
+      topRow.appendChild(el("span", { style: { fontWeight: "600", fontSize: "13px" } }, `${a.item_name} · ${a.branch}`));
+      topRow.appendChild(el("span", { class: "notif-status-chip active" }, "Active"));
+      card.appendChild(topRow);
+      if (detail) card.appendChild(el("div", { class: "muted small" }, detail));
+      card.appendChild(el("div", { class: "muted small" }, `Fired: ${fmtTs(a.fired_at)}`));
+      if (Array.isArray(a.follow_ups) && a.follow_ups.length > 0) {
+        card.appendChild(el("div", { style: { fontSize: "12px", color: "#c0392b" } },
+          `⚠️ ${a.follow_ups.length} follow-up alarm${a.follow_ups.length > 1 ? "s" : ""} fired`));
+      }
+      wrap.appendChild(card);
+    }
+
+    // Dismissed — collapsed behind toggle
+    if (dismissedEngineAlerts.length > 0) {
+      const dismissedWrap = el("div", { style: { marginTop: "4px" } });
+      const toggleBtn = el("button", { class: "chip", style: { fontSize: "11px", marginBottom: "8px" } },
+        `Show ${dismissedEngineAlerts.length} dismissed alert${dismissedEngineAlerts.length > 1 ? "s" : ""}`);
+      const dismissedBody = el("div", { style: { display: "none" } });
+      toggleBtn.addEventListener("click", () => {
+        const open = dismissedBody.style.display !== "none";
+        dismissedBody.style.display = open ? "none" : "block";
+        toggleBtn.textContent = open
+          ? `Show ${dismissedEngineAlerts.length} dismissed alert${dismissedEngineAlerts.length > 1 ? "s" : ""}`
+          : "Hide dismissed";
+      });
+      dismissedWrap.appendChild(toggleBtn);
+      for (const a of dismissedEngineAlerts) {
+        const isAutoResolved = a.dismissed_by_name === "Auto-resolved";
+        const card = el("div", { class: "notif-card dead" });
+        const topRow = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } });
+        topRow.appendChild(el("span", { class: `inv-alert-type ${a.type}` }, TYPE_LABELS[a.type] || a.type));
+        topRow.appendChild(el("span", { style: { fontWeight: "600", fontSize: "13px" } }, `${a.item_name} · ${a.branch}`));
+        if (isAutoResolved) {
+          topRow.appendChild(el("span", { class: "notif-status-chip resolved" }, "✅ Auto-resolved"));
+        } else {
+          topRow.appendChild(el("span", { class: "notif-status-chip dismissed" },
+            `Dismissed by ${a.dismissed_by_name || "unknown"}`));
+        }
+        card.appendChild(topRow);
+        card.appendChild(el("div", { class: "muted small" }, `Fired: ${fmtTs(a.fired_at)}`));
+        if (a.dismissed_at) {
+          card.appendChild(el("div", { class: "muted small" },
+            `${isAutoResolved ? "Resolved" : "Dismissed"}: ${fmtTs(a.dismissed_at)}`));
+        }
+        dismissedBody.appendChild(card);
+      }
+      dismissedWrap.appendChild(dismissedBody);
+      wrap.appendChild(dismissedWrap);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // SECTION B — Inventory Actions (legacy alert_log + reorder_actions)
+  // ══════════════════════════════════════════════════════════════
+  wrap.appendChild(el("div", { class: "notif-section-hdr" }, "Inventory Actions"));
+
+  const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const legacyAlerts = (state.alert_log || [])
+    .filter(a => a.date >= cutoff)
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  if (!legacyAlerts.length) {
+    wrap.appendChild(el("div", { class: "notif-empty card" }, "No inventory alerts in the last 30 days."));
+  } else {
+    for (const a of legacyAlerts) {
+      const actions = (state.reorder_actions || []).filter(r => r.alert_key === a.key);
+      const resolved      = isReorderResolved(a.item_id, a.date);
+      const calledSupplier = isReorderActionedByCalling(a.key);
+      const daysSince = Math.floor((Date.now() - new Date(a.date + "T00:00:00")) / 86400000);
+      const isOverdue = !resolved && !calledSupplier && daysSince > 6;
+
+      let statusLabel, statusClass;
+      if (resolved)            { statusLabel = "✅ Resolved (purchased)"; statusClass = "resolved"; }
+      else if (calledSupplier) { statusLabel = "✅ Supplier called";       statusClass = "resolved"; }
+      else if (isOverdue)      { statusLabel = "🔴 Overdue";              statusClass = "active";   }
+      else if (!actions.length){ statusLabel = "⏳ Pending";              statusClass = "active";   }
+      else                     { statusLabel = "⏳ Awaiting purchase";     statusClass = "dismissed";}
+
+      const card = el("div", { class: "notif-card legacy" });
+      const topRow = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } });
+      topRow.appendChild(el("span", { style: { fontWeight: "600", fontSize: "13px" } }, `${a.item_name} · ${a.branch}`));
+      topRow.appendChild(el("span", { class: `notif-status-chip ${statusClass}` }, statusLabel));
+      card.appendChild(topRow);
+      card.appendChild(el("div", { class: "muted small" }, `Alert date: ${a.date} · ${daysSince}d ago`));
+
+      if (Array.isArray(a.follow_ups) && a.follow_ups.length > 0) {
+        card.appendChild(el("div", { style: { fontSize: "12px", color: "#c0392b" } },
+          `⚠️ ${a.follow_ups.length} follow-up alarm${a.follow_ups.length > 1 ? "s" : ""} fired`));
+      }
+
+      // Actions / acknowledgements
+      if (actions.length > 0) {
+        for (const r of actions) {
+          const chips = [];
+          if (r.called_supplier)         chips.push("☎️ Called supplier");
+          if (r.notified_head_barista)   chips.push("👤 Notified head barista");
+          const aRow = el("div", { style: { background: "var(--surface-2,var(--surface))", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px", marginTop: "6px", fontSize: "12px" } });
+          aRow.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "2px" } }, chips.join(" · ") || "Action logged"));
+          aRow.appendChild(el("div", { class: "muted small" }, `By: ${r.by_name} · ${fmtTs(r.at)}`));
+          if (r.comment) aRow.appendChild(el("div", { style: { fontStyle: "italic", marginTop: "2px", fontSize: "11px" } }, `"${r.comment}"`));
+          card.appendChild(aRow);
+        }
+      } else {
+        card.appendChild(el("div", { style: { color: "#e67e22", fontSize: "12px", marginTop: "4px" } }, "No action logged yet."));
+      }
+
+      // Log action button (roles that can act)
+      if (!resolved && !calledSupplier && ["barista", "head_barista", "owner", "accountant"].includes(u.role)) {
+        const btn = el("button", { class: "btn secondary", style: { marginTop: "8px", padding: "5px 12px", fontSize: "12px" } }, "📝 Log action");
+        btn.addEventListener("click", () => go("reorder_action_new", { alert_key: a.key }));
+        card.appendChild(btn);
+      }
+
+      wrap.appendChild(card);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // SECTION C — System Notifications (leadership_notifications)
+  // ══════════════════════════════════════════════════════════════
+  wrap.appendChild(el("div", { class: "notif-section-hdr" }, "System Notifications"));
+
+  const sysNotifs = (state.leadership_notifications || [])
+    .slice()
+    .sort((a, b) => (b.at || "").localeCompare(a.at || ""))
+    .slice(0, 50);
+
+  if (!sysNotifs.length) {
+    wrap.appendChild(el("div", { class: "notif-empty card" }, "No system notifications on record."));
+  } else {
+    for (const n of sysNotifs) {
+      const card = el("div", { class: "notif-card sysnotif" });
+      card.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px" } }, n.title || "Notification"));
+      if (n.body) card.appendChild(el("div", { class: "muted small", style: { marginTop: "2px" } }, n.body));
+      card.appendChild(el("div", { class: "muted small" }, fmtTs(n.at)));
+      if (n.role_key) {
+        const roleNames = { weekly_schedule: "Schedule Manager", inventory_management: "Inventory Manager", cash_status: "Cash Manager" };
+        card.appendChild(el("div", { class: "muted small" }, `Role: ${roleNames[n.role_key] || n.role_key}`));
+      }
+      wrap.appendChild(card);
+    }
+  }
+
+  wrap.appendChild(btnBack());
   return wrap;
 };
 
