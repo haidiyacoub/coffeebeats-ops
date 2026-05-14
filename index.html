@@ -13893,11 +13893,7 @@ routes.notifications = function (u) {
     return iso.slice(0, 16).replace("T", " ");
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SECTION A — Engine Alerts
-  // ══════════════════════════════════════════════════════════════
-  wrap.appendChild(el("div", { class: "notif-section-hdr" }, "Engine Alerts"));
-
+  // ── Pre-compute data for badge counts ──────────────────────
   const allEngineAlerts = ((state.inv_engine && state.inv_engine.engine_alerts) || [])
     .slice()
     .sort((a, b) => {
@@ -13907,14 +13903,55 @@ routes.notifications = function (u) {
       if (sa !== sb) return sa - sb;
       return (b.fired_at || "").localeCompare(a.fired_at || "");
     });
-
   const activeEngineAlerts    = allEngineAlerts.filter(a => !a.dismissed);
   const dismissedEngineAlerts = allEngineAlerts.filter(a =>  a.dismissed);
 
-  if (!allEngineAlerts.length) {
-    wrap.appendChild(el("div", { class: "notif-empty card" }, "✅ No engine alerts on record."));
-  } else {
-    // Active
+  const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const legacyAlerts = (state.alert_log || [])
+    .filter(a => a.date >= cutoff)
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const sysNotifs = (state.leadership_notifications || [])
+    .slice()
+    .sort((a, b) => (b.at || "").localeCompare(a.at || ""))
+    .slice(0, 50);
+
+  // ── Tab bar ─────────────────────────────────────────────────
+  let activeTab = "engine";
+  const tabBar  = el("div", { class: "tabs", style: { marginBottom: "16px" } });
+  const body    = el("div", {});
+
+  const TAB_DEFS = [
+    { key: "engine",  label: "⚡ Engine Alerts",      badge: activeEngineAlerts.length },
+    { key: "legacy",  label: "📦 Inventory Actions",   badge: legacyAlerts.filter(a => {
+        const resolved = isReorderResolved(a.item_id, a.date);
+        const called   = isReorderActionedByCalling(a.key);
+        return !resolved && !called;
+      }).length },
+    { key: "system",  label: "🔔 System",              badge: sysNotifs.length },
+  ];
+
+  function buildTabBar() {
+    tabBar.innerHTML = "";
+    TAB_DEFS.forEach(({ key, label, badge }) => {
+      const btn = el("div", { class: "tab" + (activeTab === key ? " on" : "") });
+      btn.appendChild(document.createTextNode(label));
+      if (badge > 0) {
+        btn.appendChild(el("span", { class: "notif-badge", style: { marginLeft: "5px" } }, String(badge)));
+      }
+      btn.addEventListener("click", () => { activeTab = key; buildTabBar(); renderBody(); });
+      tabBar.appendChild(btn);
+    });
+  }
+
+  // ── Tab body renderers ──────────────────────────────────────
+  function renderEngineTab() {
+    if (!allEngineAlerts.length) {
+      body.appendChild(el("div", { class: "notif-empty card" }, "✅ No engine alerts on record."));
+      return;
+    }
+    // Active alerts
     for (const a of activeEngineAlerts) {
       const d = a.detail || {};
       let detail = "";
@@ -13936,21 +13973,18 @@ routes.notifications = function (u) {
         card.appendChild(el("div", { style: { fontSize: "12px", color: "#c0392b" } },
           `⚠️ ${a.follow_ups.length} follow-up alarm${a.follow_ups.length > 1 ? "s" : ""} fired`));
       }
-      wrap.appendChild(card);
+      body.appendChild(card);
     }
-
     // Dismissed — collapsed behind toggle
     if (dismissedEngineAlerts.length > 0) {
       const dismissedWrap = el("div", { style: { marginTop: "4px" } });
       const toggleBtn = el("button", { class: "chip", style: { fontSize: "11px", marginBottom: "8px" } },
-        `Show ${dismissedEngineAlerts.length} dismissed alert${dismissedEngineAlerts.length > 1 ? "s" : ""}`);
+        `Show ${dismissedEngineAlerts.length} dismissed / resolved`);
       const dismissedBody = el("div", { style: { display: "none" } });
       toggleBtn.addEventListener("click", () => {
         const open = dismissedBody.style.display !== "none";
         dismissedBody.style.display = open ? "none" : "block";
-        toggleBtn.textContent = open
-          ? `Show ${dismissedEngineAlerts.length} dismissed alert${dismissedEngineAlerts.length > 1 ? "s" : ""}`
-          : "Hide dismissed";
+        toggleBtn.textContent = open ? `Show ${dismissedEngineAlerts.length} dismissed / resolved` : "Hide";
       });
       dismissedWrap.appendChild(toggleBtn);
       for (const a of dismissedEngineAlerts) {
@@ -13974,27 +14008,18 @@ routes.notifications = function (u) {
         dismissedBody.appendChild(card);
       }
       dismissedWrap.appendChild(dismissedBody);
-      wrap.appendChild(dismissedWrap);
+      body.appendChild(dismissedWrap);
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SECTION B — Inventory Actions (legacy alert_log + reorder_actions)
-  // ══════════════════════════════════════════════════════════════
-  wrap.appendChild(el("div", { class: "notif-section-hdr" }, "Inventory Actions"));
-
-  const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  const legacyAlerts = (state.alert_log || [])
-    .filter(a => a.date >= cutoff)
-    .slice()
-    .sort((a, b) => b.date.localeCompare(a.date));
-
-  if (!legacyAlerts.length) {
-    wrap.appendChild(el("div", { class: "notif-empty card" }, "No inventory alerts in the last 30 days."));
-  } else {
+  function renderLegacyTab() {
+    if (!legacyAlerts.length) {
+      body.appendChild(el("div", { class: "notif-empty card" }, "No inventory alerts in the last 30 days."));
+      return;
+    }
     for (const a of legacyAlerts) {
       const actions = (state.reorder_actions || []).filter(r => r.alert_key === a.key);
-      const resolved      = isReorderResolved(a.item_id, a.date);
+      const resolved       = isReorderResolved(a.item_id, a.date);
       const calledSupplier = isReorderActionedByCalling(a.key);
       const daysSince = Math.floor((Date.now() - new Date(a.date + "T00:00:00")) / 86400000);
       const isOverdue = !resolved && !calledSupplier && daysSince > 6;
@@ -14012,18 +14037,16 @@ routes.notifications = function (u) {
       topRow.appendChild(el("span", { class: `notif-status-chip ${statusClass}` }, statusLabel));
       card.appendChild(topRow);
       card.appendChild(el("div", { class: "muted small" }, `Alert date: ${a.date} · ${daysSince}d ago`));
-
       if (Array.isArray(a.follow_ups) && a.follow_ups.length > 0) {
         card.appendChild(el("div", { style: { fontSize: "12px", color: "#c0392b" } },
           `⚠️ ${a.follow_ups.length} follow-up alarm${a.follow_ups.length > 1 ? "s" : ""} fired`));
       }
-
       // Actions / acknowledgements
       if (actions.length > 0) {
         for (const r of actions) {
           const chips = [];
-          if (r.called_supplier)         chips.push("☎️ Called supplier");
-          if (r.notified_head_barista)   chips.push("👤 Notified head barista");
+          if (r.called_supplier)       chips.push("☎️ Called supplier");
+          if (r.notified_head_barista) chips.push("👤 Notified head barista");
           const aRow = el("div", { style: { background: "var(--surface-2,var(--surface))", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px", marginTop: "6px", fontSize: "12px" } });
           aRow.appendChild(el("div", { style: { fontWeight: "600", marginBottom: "2px" } }, chips.join(" · ") || "Action logged"));
           aRow.appendChild(el("div", { class: "muted small" }, `By: ${r.by_name} · ${fmtTs(r.at)}`));
@@ -14033,31 +14056,20 @@ routes.notifications = function (u) {
       } else {
         card.appendChild(el("div", { style: { color: "#e67e22", fontSize: "12px", marginTop: "4px" } }, "No action logged yet."));
       }
-
-      // Log action button (roles that can act)
-      if (!resolved && !calledSupplier && ["barista", "head_barista", "owner", "accountant"].includes(u.role)) {
+      if (!resolved && !calledSupplier && ["barista","head_barista","owner","accountant"].includes(u.role)) {
         const btn = el("button", { class: "btn secondary", style: { marginTop: "8px", padding: "5px 12px", fontSize: "12px" } }, "📝 Log action");
         btn.addEventListener("click", () => go("reorder_action_new", { alert_key: a.key }));
         card.appendChild(btn);
       }
-
-      wrap.appendChild(card);
+      body.appendChild(card);
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // SECTION C — System Notifications (leadership_notifications)
-  // ══════════════════════════════════════════════════════════════
-  wrap.appendChild(el("div", { class: "notif-section-hdr" }, "System Notifications"));
-
-  const sysNotifs = (state.leadership_notifications || [])
-    .slice()
-    .sort((a, b) => (b.at || "").localeCompare(a.at || ""))
-    .slice(0, 50);
-
-  if (!sysNotifs.length) {
-    wrap.appendChild(el("div", { class: "notif-empty card" }, "No system notifications on record."));
-  } else {
+  function renderSystemTab() {
+    if (!sysNotifs.length) {
+      body.appendChild(el("div", { class: "notif-empty card" }, "No system notifications on record."));
+      return;
+    }
     for (const n of sysNotifs) {
       const card = el("div", { class: "notif-card sysnotif" });
       card.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px" } }, n.title || "Notification"));
@@ -14067,10 +14079,21 @@ routes.notifications = function (u) {
         const roleNames = { weekly_schedule: "Schedule Manager", inventory_management: "Inventory Manager", cash_status: "Cash Manager" };
         card.appendChild(el("div", { class: "muted small" }, `Role: ${roleNames[n.role_key] || n.role_key}`));
       }
-      wrap.appendChild(card);
+      body.appendChild(card);
     }
   }
 
+  function renderBody() {
+    body.innerHTML = "";
+    if (activeTab === "engine") renderEngineTab();
+    else if (activeTab === "legacy") renderLegacyTab();
+    else if (activeTab === "system") renderSystemTab();
+  }
+
+  buildTabBar();
+  renderBody();
+  wrap.appendChild(tabBar);
+  wrap.appendChild(body);
   wrap.appendChild(btnBack());
   return wrap;
 };
