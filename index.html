@@ -3761,7 +3761,25 @@ routes.supplier_list = function (u) {
     const item = items.find(it => it.id === selectedItemId);
     if (!item) return;
 
-    rightPanel.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "12px", fontSize: "15px" } }, `📦 ${item.name}`));
+    const nameHdr = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" } });
+    nameHdr.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px", flex: "1" } }, `📦 ${item.name}`));
+    const renameBtn = el("button", { class: "btn ghost", style: { padding: "3px 10px", fontSize: "12px" } }, "✏️ Rename");
+    renameBtn.addEventListener("click", () => {
+      openPrompt({
+        title: "Rename item",
+        fields: [{ key: "name", label: "Name", type: "text", value: item.name }],
+        onSubmit: (v) => {
+          const trimmed = (v.name || "").trim();
+          if (!trimmed) return toast("Name cannot be empty", "error");
+          const target = state.items.find(x => x.id === item.id);
+          if (target) { target.name = trimmed; saveState(); }
+          renderItemList();
+          renderSingleRight();
+        }
+      });
+    });
+    nameHdr.appendChild(renameBtn);
+    rightPanel.appendChild(nameHdr);
 
     const suppliers = state.suppliers[selectedItemId] || [];
 
