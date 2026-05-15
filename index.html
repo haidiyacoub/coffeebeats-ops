@@ -3587,7 +3587,18 @@ routes.supplier_list = function (u) {
   wrap.appendChild(header("Supplier List", "Assign suppliers to inventory items. Baristas see this when a reorder alert fires."));
 
   state.suppliers = state.suppliers || {};
-  const items = (state.items || []).filter(it => it.active !== false).sort((a,b) => a.name.localeCompare(b.name));
+
+  const INV_CATS_SL = [
+    { value: "coffee-beans", label: "Coffee Beans" }, { value: "milk",         label: "Milk" },
+    { value: "tea",          label: "Tea" },           { value: "powder",       label: "Powder" },
+    { value: "spices",       label: "Spices" },        { value: "sugar",        label: "Sugar" },
+    { value: "puree",        label: "Puree" },         { value: "syrup",        label: "Syrup" },
+    { value: "sauce",        label: "Sauce" },         { value: "dairy-extras", label: "Dairy Extras" },
+    { value: "halo-snacks",  label: "Halo Snacks" },   { value: "snacks",       label: "Snacks" },
+    { value: "beverages",    label: "Beverages" },     { value: "packaging",    label: "Packaging" },
+  ];
+
+  let items = (state.items || []).filter(it => it.active !== false).sort((a,b) => a.name.localeCompare(b.name));
 
   // ── Mode: "single" (click to edit one item) or "bulk" (checkboxes → assign to many) ──
   let mode = "single";
@@ -3623,7 +3634,12 @@ routes.supplier_list = function (u) {
   const searchIn  = el("input", { type: "search", placeholder: "Search items…", style: { marginBottom: "8px" } });
   const itemList  = el("div", { style: { maxHeight: "70vh", overflowY: "auto" } });
 
+  function refreshItems() {
+    items = (state.items || []).filter(it => it.active !== false).sort((a,b) => a.name.localeCompare(b.name));
+  }
+
   function renderItemList() {
+    refreshItems();
     itemList.innerHTML = "";
     const filtered = items.filter(it => !searchQ || it.name.toLowerCase().includes(searchQ));
 
@@ -3675,6 +3691,22 @@ routes.supplier_list = function (u) {
           `${state.suppliers[it.id].length}✓`));
       }
 
+      const removeItemBtn = el("button", { style: {
+        background: "none", border: "none", cursor: "pointer", color: "var(--bad)",
+        fontSize: "14px", lineHeight: "1", padding: "0 2px", flexShrink: "0", opacity: "0.6",
+      }}, "×");
+      removeItemBtn.title = "Remove item";
+      removeItemBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove "${it.name}" from inventory? It will be hidden from all pickers.`)) return;
+        const target = state.items.find(x => x.id === it.id);
+        if (target) { target.active = false; saveState(); }
+        if (selectedItemId === it.id) { selectedItemId = null; }
+        renderItemList();
+        renderRight();
+      });
+      row.appendChild(removeItemBtn);
+
       row.addEventListener("click", () => {
         if (mode === "single") { selectedItemId = it.id; renderItemList(); renderRight(); }
         else {
@@ -3688,6 +3720,33 @@ routes.supplier_list = function (u) {
 
   searchIn.addEventListener("input", () => { searchQ = searchIn.value.toLowerCase(); renderItemList(); });
   leftPanel.appendChild(searchIn);
+
+  const addItemBtn = el("button", { class: "btn secondary", style: { width: "100%", marginBottom: "8px", fontSize: "13px" } }, "＋ Add inventory item");
+  addItemBtn.addEventListener("click", () => {
+    openPrompt({
+      title: "Add inventory item",
+      fields: [
+        { key: "name",     label: "Name",     type: "text",   value: "" },
+        { key: "unit",     label: "Unit",      type: "select", value: "unit",
+          options: [{ value: "g", label: "g (grams)" }, { value: "ml", label: "ml (millilitres)" }, { value: "unit", label: "unit (each)" }] },
+        { key: "category", label: "Category", type: "select", value: "beverages", options: INV_CATS_SL },
+      ],
+      onSubmit: (v) => {
+        if (!v.name || !v.name.trim()) return toast("Name is required", "error");
+        const nums = (state.items || []).map(it => { const m = (it.id || "").match(/^inv_(\d+)$/); return m ? parseInt(m[1], 10) : 0; });
+        const nextNum = (nums.length ? Math.max(...nums) : 0) + 1;
+        const id = "inv_" + String(nextNum).padStart(4, "0");
+        state.items = state.items || [];
+        state.items.push({ id, name: v.name.trim(), unit: v.unit, category: v.category, active: true });
+        saveState();
+        toast(`Added "${v.name.trim()}"`);
+        renderItemList();
+        selectedItemId = id;
+        renderRight();
+      }
+    });
+  });
+  leftPanel.appendChild(addItemBtn);
   leftPanel.appendChild(itemList);
   layout.appendChild(leftPanel);
 
