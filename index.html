@@ -1065,11 +1065,13 @@ function migrateState(s) {
     thresholds: {},
     engine_alerts: [],
     settings: {
-      default_lead_time_days: 3,
+      default_lead_time_days: 5,
       default_safety_buffer: 3,
       spike_multiplier: 1.5,
       dead_stock_days: 30,
       ma_window_days: 7,
+      supplier_ordering_windows: {},
+      category_ordering_windows: {},
     },
   };
   s.inv_engine_sales_data = s.inv_engine_sales_data || [];
@@ -1176,6 +1178,23 @@ function migrateState(s) {
       }
     }
     s._supplier_seed_v1 = true;
+  }
+
+  // One-time migration: seed supplier and category ordering windows.
+  if (!s._inv_ordering_window_seed_v1) {
+    s.inv_engine = s.inv_engine || { thresholds: {}, engine_alerts: [], settings: {} };
+    s.inv_engine.settings = s.inv_engine.settings || {};
+    s.inv_engine.settings.supplier_ordering_windows = {
+      ...(s.inv_engine.settings.supplier_ordering_windows || {}),
+      "Brix": 10,
+    };
+    s.inv_engine.settings.category_ordering_windows = {
+      ...(s.inv_engine.settings.category_ordering_windows || {}),
+      "halo-snacks": 10,
+    };
+    if ((s.inv_engine.settings.default_lead_time_days || 0) < 5)
+      s.inv_engine.settings.default_lead_time_days = 5;
+    s._inv_ordering_window_seed_v1 = true;
   }
 }
 // `opts.immediate` pushes to Firestore right now instead of waiting for the
@@ -1812,11 +1831,36 @@ function invStockLongevity(ingredientId, branch, salesData, recipes) {
   return stock / consumption;
 }
 
+// invGetLeadTime: ordering window in days for an item, resolved in priority order:
+// 1. explicit per-item seed value  2. category window  3. supplier window  4. default
+function invGetLeadTime(itemId) {
+  const cfg = (state.inv_engine.thresholds || {})[itemId] || {};
+  if (cfg.lead_time_days != null) return cfg.lead_time_days;
+
+  const settings = state.inv_engine.settings || {};
+  const item = (state.items || []).find(it => it.id === itemId);
+
+  if (item && settings.category_ordering_windows) {
+    const catDays = settings.category_ordering_windows[item.category];
+    if (catDays != null) return catDays;
+  }
+
+  if (settings.supplier_ordering_windows) {
+    const sups = (state.suppliers || {})[itemId] || [];
+    for (const sup of sups) {
+      const supDays = settings.supplier_ordering_windows[sup.name];
+      if (supDays != null) return supDays;
+    }
+  }
+
+  return settings.default_lead_time_days ?? 5;
+}
+
 // dynamicReorderThreshold: stock level at which to reorder
 function invDynamicReorderThreshold(ingredientId, branch, salesData, recipes) {
   const cfg = (state.inv_engine.thresholds || {})[ingredientId] || {};
   const consumption = invAvgDailyConsumption(ingredientId, branch, 30, salesData, recipes);
-  const lead   = cfg.lead_time_days     ?? state.inv_engine.settings.default_lead_time_days;
+  const lead   = invGetLeadTime(ingredientId);
   const buffer = cfg.safety_buffer_days ?? state.inv_engine.settings.default_safety_buffer;
   return consumption * (lead + buffer);
 }
@@ -1961,8 +2005,7 @@ function invDetectSupplierDelayRisk(branch, salesData, recipes) {
   const out = [];
   for (const it of (state.items || [])) {
     if (!it.active) continue;
-    const cfg = (state.inv_engine.thresholds || {})[it.id] || {};
-    const leadTime = cfg.lead_time_days ?? (state.inv_engine.settings || {}).default_lead_time_days ?? 3;
+    const leadTime = invGetLeadTime(it.id);
     const days = invStockLongevity(it.id, branch, salesData, recipes);
     if (isFinite(days) && days < leadTime * 1.5) {
       out.push(_invNewAlert("supplier_delay", it.id, it.name, branch, {
