@@ -1034,11 +1034,15 @@ function migrateState(s) {
   s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork
   s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
   s.kpi_settings  = s.kpi_settings  || {
-    weights: { punctuality:5, waste:15, cleanliness:10, craft:15, upselling:10, customer:15, teamwork:5, leadership:20, hygiene:5 }
+    weights: { punctuality:5, waste:15, cleanliness:10, craft:15, upselling:10, customer:15, teamwork:5, leadership:15, hygiene:5, training:10 }
   };
-  // Migrate old weights (training → hygiene, updated percentages)
-  if (s.kpi_settings && s.kpi_settings.weights && s.kpi_settings.weights.training !== undefined) {
-    s.kpi_settings.weights = { punctuality:5, waste:15, cleanliness:10, craft:15, upselling:10, customer:15, teamwork:5, leadership:20, hygiene:5 };
+  // Migrate weights to include training (10%) carved from leadership (20% → 15%)
+  if (s.kpi_settings && s.kpi_settings.weights) {
+    const w = s.kpi_settings.weights;
+    if (w.training === undefined || (w.leadership === 20 && w.training === undefined)) {
+      w.leadership = 15;
+      w.training   = 10;
+    }
   }
   s.leadership_assignments   = s.leadership_assignments   || [];
   s.leadership_notifications = s.leadership_notifications || [];
@@ -11307,9 +11311,9 @@ routes.app_guide = function (u) {
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 const KPI_W = () => state.kpi_settings.weights;
 function save() { saveState(); }  // KPI module alias
-const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", leadership:"Leadership", hygiene:"Hygiene" };
-const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", leadership:"القيادة والمسؤولية", hygiene:"النظافة الشخصية" };
-const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", leadership:"👑", hygiene:"🧼" };
+const KPI_LABELS_EN = { punctuality:"Punctuality", waste:"Waste Control", cleanliness:"Cleanliness", craft:"Coffee Craft", upselling:"Upselling", customer:"Customer Score", teamwork:"Teamwork", leadership:"Leadership", hygiene:"Hygiene", training:"Training Test" };
+const KPI_LABELS_AR = { punctuality:"الانضباط والحضور", waste:"ترشيد الهدر", cleanliness:"النظافة والترتيب", craft:"جودة صنع القهوة", upselling:"البيع الإضافي", customer:"رضا العملاء", teamwork:"العمل الجماعي", leadership:"القيادة والمسؤولية", hygiene:"النظافة الشخصية", training:"الاختبار الشهري" };
+const KPI_ICONS    = { punctuality:"⏱️", waste:"♻️", cleanliness:"🧹", craft:"☕", upselling:"📈", customer:"😊", teamwork:"👥", leadership:"👑", hygiene:"🧼", training:"📝" };
 const CLEAN_AR = [
   "تنظيف رأس الإسبريسو وشطف الماكينة",
   "مسح عصا البخار وتنقيتها بعد كل استخدام ✓",
@@ -11812,6 +11816,14 @@ function kpiUpsellScore(userId, month) {
   return Math.round(Math.max(0, Math.min(100, (avg - 1.0) / 2.0 * 100)));
 }
 
+// Training score: barista's latest completed quiz score for the current month (0–100), or null if not taken.
+function kpiTrainingScore(userId) {
+  const month = new Date().toISOString().slice(0, 7);
+  const quiz  = (state.training_quizzes || [])
+    .find(q => q.staff_id === userId && q.month === month && q.status === "completed");
+  return quiz != null ? Math.round(quiz.score) : null;
+}
+
 function kpiGetUserScores(userId) {
   const cutoff = Date.now() - 30*24*60*60*1000;
   const month  = new Date().toISOString().slice(0,7);
@@ -11838,6 +11850,7 @@ function kpiGetUserScores(userId) {
     teamwork:   teamworkAuto ?? (manual.teamwork ?? null),
     leadership: kpiLeadershipScore(userId, month) ?? null,
     hygiene:    kpiHygieneScore(userId, month),
+    training:   kpiTrainingScore(userId),
   };
 
   const cats = Object.keys(KPI_W());
@@ -11850,7 +11863,7 @@ function kpiGetAllScores() {
   for (const u of state.users) {
     if (!["barista","head_barista"].includes(u.role)) continue;
     const s = kpiGetUserScores(u.id);
-    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,leadership:null,hygiene:null };
+    result[u.id] = s || { punctuality:null,waste:null,cleanliness:null,craft:null,upselling:null,customer:null,teamwork:null,leadership:null,hygiene:null,training:null };
   }
   return result;
 }
