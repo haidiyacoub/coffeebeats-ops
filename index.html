@@ -2322,11 +2322,16 @@ function canAccess(routeName, u) {
   return allow.includes(routeName);
 }
 
+// Real-time listener for the sign-in page — cleaned up when a user logs in.
+let _loginPeopleUnsub = null;
+
 // ----- root render -----
 function render() {
   const root = $("#app");
   root.innerHTML = "";
   if (!state._auth) { stopIdleTimer(); stopNoStampCheck(); root.appendChild(loginView()); return; }
+  // Clean up sign-in listener once someone is authenticated.
+  if (_loginPeopleUnsub) { _loginPeopleUnsub(); _loginPeopleUnsub = null; }
   const u = currentUser();
   if (!u || !u.active) { auth.signOut(); return; }
   if (["owner", "head_barista"].includes(u.role)) startNoStampCheck();
@@ -2388,24 +2393,10 @@ function loginView() {
   const pinPad = el("div", { class: "card", style: { marginTop: "16px", display: "none" } });
   main.appendChild(pinPad);
 
-  // Load staff from staff_public (public Firestore collection, no auth needed).
-  // Falls back to staffDir in-memory cache if Firestore is unavailable.
-  async function loadPeople() {
-    try {
-      const snap = await db.collection("staff_public").where("active", "==", true).get();
-      if (!snap.empty) {
-        const people = [];
-        snap.forEach(doc => people.push({ id: doc.id, uid: doc.id, ...doc.data() }));
-        return people;
-      }
-    } catch (_) {}
-    // Fallback: use in-memory staffDir cache (populated during pullFromFirestore)
-    return staffDir.active();
-  }
+  const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
 
-  loadPeople().then(people => {
+  function buildUserList(people) {
     userList.innerHTML = "";
-    const roleMap = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
     for (const u of people) {
       const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
       const branchLabel = u.role === "barista" ? "rotates" : (u.role === "accountant" ? "all branches" : (u.branches || []).join(", "));
@@ -2418,7 +2409,20 @@ function loginView() {
         el("div", { class: "pill" }, "Tap"),
       ]));
     }
-  });
+  }
+
+  // Real-time listener — list updates immediately when a barista is deactivated.
+  try {
+    _loginPeopleUnsub = db.collection("staff_public")
+      .where("active", "==", true)
+      .onSnapshot(snap => {
+        buildUserList(snap.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() })));
+      }, () => {
+        buildUserList(staffDir.active());
+      });
+  } catch (_) {
+    buildUserList(staffDir.active());
+  }
 
   function selectUser(u) {
     pick = u; pin = "";
@@ -7680,7 +7684,7 @@ routes.users = function (u) {
     budget_inventory: "\ud83d\udcb0 Budget & Inventory",
   };
 
-  const allStaff = staffDir.all().sort((a,b) => a.name.localeCompare(b.name));
+  const allStaff = staffDir.active().sort((a,b) => a.name.localeCompare(b.name));
   for (const usr of allStaff) {
     const branchLabel = usr.role === "barista"
       ? "rotates (Maadi + Zawya)"
@@ -7839,7 +7843,59 @@ routes.users = function (u) {
       sheet.appendChild(delBtn);
     }
 
-    sheet.appendChild(el("button", { class: "btn ghost", style: { width: "100%" }, onClick: () => closeSheet() }, "Close"));
+    // PIN change (self only)
+    if (isSelf) {
+      const pw = el("div", { style: { marginTop: "16px", padding: "14px", background: "var(--surface-2,var(--surface-alt,#f8f8f8))", borderRadius: "12px" } });
+      pw.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "2px" } }, "Change PIN"));
+      pw.appendChild(el("div", { class: "muted small", style: { marginBottom: "12px" } }, "4-digit code used to sign in to the app."));
+
+      const pinFieldStyle = { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid var(--border,#ddd)", background: "var(--surface,#fff)", color: "var(--ink,#222)", boxSizing: "border-box", fontSize: "22px", letterSpacing: "10px", textAlign: "center" };
+
+      let curPinInp = null;
+      if (!isOwner) {
+        pw.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "4px" } }, "Current PIN"));
+        curPinInp = el("input", { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "4", placeholder: "••••", style: pinFieldStyle });
+        pw.appendChild(curPinInp);
+        pw.appendChild(el("div", { style: { height: "10px" } }));
+      }
+
+      pw.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "4px" } }, "New PIN"));
+      const newPinInp = el("input", { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "4", placeholder: "••••", style: pinFieldStyle });
+      pw.appendChild(newPinInp);
+      pw.appendChild(el("div", { style: { height: "10px" } }));
+
+      pw.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "4px" } }, "Confirm new PIN"));
+      const cfmPinInp = el("input", { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "4", placeholder: "••••", style: pinFieldStyle });
+      pw.appendChild(cfmPinInp);
+
+      const pinBtn = el("button", { class: "btn", style: { width: "100%", marginTop: "12px" } }, "Update PIN");
+      pinBtn.addEventListener("click", async () => {
+        const newPin = newPinInp.value.trim();
+        const cfmPin = cfmPinInp.value.trim();
+        if (!/^\d{4}$/.test(newPin))  { toast("PIN must be exactly 4 digits", "error"); return; }
+        if (newPin !== cfmPin)        { toast("PINs don't match", "error"); return; }
+        if (!isOwner && !curPinInp.value.trim()) { toast("Enter your current PIN", "error"); return; }
+        pinBtn.disabled = true; pinBtn.textContent = "Updating…";
+        try {
+          await functions.httpsCallable("updateStaffPin")({
+            targetUid: usr.uid,
+            newPin,
+            ...(curPinInp ? { currentPin: curPinInp.value.trim() } : {}),
+          });
+          if (curPinInp) curPinInp.value = "";
+          newPinInp.value = ""; cfmPinInp.value = "";
+          toast("PIN updated ✓");
+        } catch (e) {
+          const msg = e.code === "functions/unauthenticated" ? "Current PIN is incorrect" : (e.message || "Failed to update PIN");
+          toast(msg, "error");
+        }
+        pinBtn.disabled = false; pinBtn.textContent = "Update PIN";
+      });
+      pw.appendChild(pinBtn);
+      sheet.appendChild(pw);
+    }
+
+    sheet.appendChild(el("button", { class: "btn ghost", style: { width: "100%", marginTop: "8px" }, onClick: () => closeSheet() }, "Close"));
     openSheet(sheet);
   }
 
@@ -14656,6 +14712,10 @@ routes.training_quiz_take = function(u) {
   const questions = quiz.question_ids.map(id => TRAINING_QUESTIONS.find(q => q.id === id)).filter(Boolean);
   let currentIdx = 0;
   const answers  = { ...quiz.answers };
+  // revealed[qId] = true once the barista has tapped an answer and seen the feedback
+  const revealed = {};
+  // Pre-mark already-answered questions as revealed (resumed quiz)
+  for (const qId of Object.keys(answers)) revealed[qId] = true;
 
   function buildQuestion() {
     wrap.innerHTML = "";
@@ -14685,25 +14745,80 @@ routes.training_quiz_take = function(u) {
     body.appendChild(el("div", { class: "muted small", style: { marginBottom: "16px" } }, q.en));
 
     // Answer options
-    const selected = answers[q.id];
+    const selected  = answers[q.id];
+    const isRevealed = !!revealed[q.id];
+
     for (const opt of q.opts) {
+      const isSelected = selected === opt.id;
+      const isCorrect  = opt.id === q.correct;
+
+      // Colour logic: only apply green/red after the barista has answered
+      let borderColor = "var(--border)";
+      let bgColor     = "var(--surface)";
+      let badge       = "";
+
+      if (isRevealed) {
+        if (isCorrect) {
+          borderColor = "#16a34a";
+          bgColor     = "#f0fdf4";
+          badge       = isSelected ? " ✓" : " ← الإجابة الصحيحة";
+        } else if (isSelected) {
+          borderColor = "#dc2626";
+          bgColor     = "#fff1f2";
+          badge       = " ✗";
+        }
+      } else if (isSelected) {
+        borderColor = "var(--accent)";
+        bgColor     = "var(--accent-soft, #fef3c7)";
+      }
+
       const btn = el("div", {
         style: {
-          border: `2px solid ${selected === opt.id ? "var(--accent)" : "var(--border)"}`,
-          background: selected === opt.id ? "var(--accent-soft, #fef3c7)" : "var(--surface)",
-          borderRadius: "10px", padding: "12px 14px", marginBottom: "8px", cursor: "pointer",
+          border: `2px solid ${borderColor}`,
+          background: bgColor,
+          borderRadius: "10px", padding: "12px 14px", marginBottom: "8px",
+          cursor: isRevealed ? "default" : "pointer",
           transition: "all .15s",
+          opacity: isRevealed && !isCorrect && !isSelected ? "0.5" : "1",
         }
       });
-      btn.appendChild(el("div", { style: { fontWeight: "600", direction: "rtl", textAlign: "right", marginBottom: "2px" } }, opt.ar));
-      btn.appendChild(el("div", { class: "muted small" }, opt.en));
-      btn.addEventListener("click", () => {
-        answers[q.id] = opt.id;
-        quiz.answers  = answers;
-        saveState({});
-        buildQuestion();
-      });
+      const optRow = el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } });
+      const optText = el("div", {});
+      optText.appendChild(el("div", { style: { fontWeight: "600", direction: "rtl", textAlign: "right", marginBottom: "2px" } }, opt.ar));
+      optText.appendChild(el("div", { class: "muted small" }, opt.en));
+      optRow.appendChild(optText);
+      if (badge) {
+        optRow.appendChild(el("div", { style: {
+          fontWeight: "800", fontSize: "13px", flexShrink: 0, marginLeft: "8px",
+          color: isCorrect ? "#16a34a" : "#dc2626",
+        }}, badge));
+      }
+      btn.appendChild(optRow);
+
+      if (!isRevealed) {
+        btn.addEventListener("click", () => {
+          answers[q.id]  = opt.id;
+          revealed[q.id] = true;
+          quiz.answers   = answers;
+          saveState({});
+          buildQuestion();
+        });
+      }
       body.appendChild(btn);
+    }
+
+    // Feedback banner (shown after answering)
+    if (isRevealed && selected) {
+      const isRight = selected === q.correct;
+      const fb = el("div", { style: {
+        borderRadius: "10px", padding: "10px 14px", marginTop: "4px", marginBottom: "8px",
+        background: isRight ? "#f0fdf4" : "#fff1f2",
+        border: `1px solid ${isRight ? "#16a34a" : "#dc2626"}`,
+        fontWeight: "700", fontSize: "14px",
+        color: isRight ? "#15803d" : "#b91c1c",
+      }});
+      fb.appendChild(document.createTextNode(isRight ? "✓ إجابة صحيحة! · Correct!" : "✗ إجابة خاطئة · Wrong answer"));
+      body.appendChild(fb);
     }
 
     // Navigation buttons
@@ -14715,11 +14830,13 @@ routes.training_quiz_take = function(u) {
     }
     nav.appendChild(el("div", { style: { flex: 1 } }));
     if (currentIdx < questions.length - 1) {
-      const next = el("button", { class: "btn primary" }, !answers[q.id] ? "تخطى · Skip →" : "التالي →");
+      // Only show Next after answering; Skip if not answered
+      const nextLabel = isRevealed ? "التالي →" : "تخطى · Skip →";
+      const next = el("button", { class: isRevealed ? "btn primary" : "btn ghost" }, nextLabel);
       next.addEventListener("click", () => { currentIdx++; buildQuestion(); });
       nav.appendChild(next);
     } else {
-      // Last question — show Submit
+      // Last question — show Submit (only enabled once answered or skipped)
       const answered = questions.filter(q2 => answers[q2.id]).length;
       const submitBtn = el("button", { class: "btn primary" }, `إرسال الاختبار · Submit (${answered}/${questions.length})`);
       submitBtn.addEventListener("click", () => {
