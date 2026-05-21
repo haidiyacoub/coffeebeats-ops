@@ -4923,10 +4923,22 @@ routes.salaries = function (u) {
 
   function drawBody() {
     body.innerHTML = "";
-    const month = monthInput.value || new Date().toISOString().slice(0,7);
+    const month    = monthInput.value || new Date().toISOString().slice(0,7);
+    const nowMonth = new Date().toISOString().slice(0,7);
+    const isPast   = month < nowMonth;
+    const monthFn  = x => (x.month || (x.date||"").slice(0,7)) === month;
 
-    // All active baristas + head baristas
-    const staff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
+    // Active baristas + archived baristas visible in past months (salary history must never disappear)
+    const staff = state.users.filter(x => {
+      if (!["barista","head_barista"].includes(x.role)) return false;
+      if (x.active) return true;
+      if (!isPast)  return false;
+      return !!(state.salary_config[x.id])
+        || state.penalties.some(r => r.user_id === x.id && monthFn(r))
+        || state.overtime_logs.some(r => r.user_id === x.id && monthFn(r))
+        || state.salary_loans.some(r => r.user_id === x.id && monthFn(r))
+        || state.salaries.some(r => r.user_id === x.id && monthFn(r));
+    });
 
     // ---- 1) Per-barista salary config card ----
     const cfgCard = el("div", { class: "card", style: { marginTop: "12px" } });
@@ -4936,14 +4948,15 @@ routes.salaries = function (u) {
     } else {
       for (const p of staff) {
         const cfg = state.salary_config[p.id] || { monthly_salary: 0 };
-        const salaryBox = el("div", { class: "kv" }, [
+        const nameLabel = p.name + (p.active ? "" : " (archived)");
+        const salaryBox = el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
           el("div", { class: "k" }, [
-            el("div", {}, `${p.name}`),
-            el("div", { class: "muted small" }, `${p.role === "head_barista" ? "Head barista" : "Barista"} · ${p.branches.join(", ")}`),
+            el("div", {}, nameLabel),
+            el("div", { class: "muted small" }, `${p.role === "head_barista" ? "Head barista" : "Barista"} · ${(p.branches||[]).join(", ")}`),
           ]),
           el("div", { class: "v" }, money(cfg.monthly_salary || 0)),
         ]);
-        if (u.role === "owner" || u.role === "accountant") {
+        if (p.active && (u.role === "owner" || u.role === "accountant")) {
           salaryBox.appendChild(el("button", {
             class: "btn ghost",
             style: { marginLeft: "8px" },
@@ -5033,9 +5046,9 @@ routes.salaries = function (u) {
                                          .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const due = Math.max(0, salary + otSum - penSum - loanSum);
       grandDue += due;
-      dueCard.appendChild(el("div", { class: "kv" }, [
+      dueCard.appendChild(el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
         el("div", { class: "k" }, [
-          el("div", {}, p.name),
+          el("div", {}, p.name + (p.active ? "" : " (archived)")),
           el("div", { class: "muted small" }, `Salary ${money(salary)} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}`),
         ]),
         el("div", { class: "v" }, money(due)),
@@ -5167,8 +5180,12 @@ routes.salaries = function (u) {
   }
 
   function addSalary() {
-    const staff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
-    const options = staff.map(p => ({ label: p.name, value: p.id }));
+    // Include archived staff so a final paycheck can still be logged after deactivation
+    const staff = state.users.filter(x =>
+      ["barista","head_barista"].includes(x.role) &&
+      (x.active || !!(state.salary_config[x.id]))
+    );
+    const options = staff.map(p => ({ label: p.name + (p.active ? "" : " (archived)"), value: p.id }));
     openPrompt({
       title: "Log salary payout",
       fields: [
@@ -7832,7 +7849,7 @@ routes.users = function (u) {
     if (isOwner && !isSelf) {
       const delBtn = el("button", { class: "btn bad", style: { width: "100%", marginBottom: "10px" } }, "Deactivate & remove access");
       delBtn.addEventListener("click", async () => {
-        if (!confirm("Deactivate " + usr.name + "? They cannot log in but historical records are kept.")) return;
+        if (!confirm("Deactivate " + usr.name + "?\n\nThey will be removed from the sign-in screen immediately. All historical records (KPI, salaries, penalties, attendance) are preserved and will remain visible in past months. They can be re-activated at any time.")) return;
         delBtn.disabled = true; delBtn.textContent = "Removing...";
         try {
           await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: false });
@@ -8230,7 +8247,12 @@ routes.dashboard = function (u, params) {
     const overheadsTotal = ohRows.reduce((s,o) => s + (Number(o.amount)||0), 0);
     // Salaries: multiply by number of months in range
     const _numMonths = rangeMonths.length || 1;
-    const _activeStaff = (state.users || []).filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+    // Use all baristas with a salary configured (active + archived) so deactivating
+    // someone doesn't retroactively change historical overhead numbers.
+    const _activeStaff = (state.users || []).filter(x =>
+      ["barista","head_barista"].includes(x.role) &&
+      (x.active || !!(state.salary_config || {})[x.id])
+    );
     const _totalStaffSalary = _activeStaff.reduce((sum, p) => {
       const cfg = (state.salary_config || {})[p.id] || {};
       return sum + (Number(cfg.monthly_salary) || 0);
@@ -12053,9 +12075,17 @@ routes.scorecard = function(u) {
       : "😊 No customer reviews yet — they'll appear here automatically once customers submit on coffeebeats.art"
   ));
 
-  const allU = state.users.filter(x=>["barista","head_barista"].includes(x.role)&&x.active);
+  // Compute scores first (kpiGetAllScores already covers ALL users, including archived).
   const allScores = kpiGetAllScores();
   const cats = Object.keys(KPI_W());
+  // Show active baristas + archived baristas who still have score data in the 30-day window
+  // (e.g. someone deactivated this month — their logs are still recent).
+  const allU = state.users.filter(x => {
+    if (!["barista","head_barista"].includes(x.role)) return false;
+    if (x.active) return true;
+    const s = allScores[x.id];
+    return s && cats.some(k => s[k] != null); // archived: only show if data exists
+  });
   const hasSomeData = allU.some(x => {
     const s = allScores[x.id];
     return s && cats.some(k=>s[k]!=null);
@@ -12087,7 +12117,7 @@ routes.scorecard = function(u) {
     row.appendChild(el("div",{style:{width:"32px",height:"32px",borderRadius:"50%",background:"var(--accent-2)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700",fontSize:"12px"}},
       (m.name||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)));
     const info = el("div",{style:{flex:"1"}});
-    info.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},m.name));
+    info.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},m.name+(m.active===false?" (archived)":"")));
     info.appendChild(el("div",{class:"muted small"},m.role==="head_barista"?"⭐ Head Barista":"Barista"));
     row.appendChild(info);
     const bar = el("div",{style:{flex:"2"}});
@@ -12116,8 +12146,8 @@ routes.scorecard = function(u) {
     const s = allScores[x.id];
     const total = s && cats.some(k=>s[k]!=null) ? kpiCalcTotal(s) : null;
     const row = el("tr",{});
-    const nameCell = el("td",{});
-    nameCell.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},x.name));
+    const nameCell = el("td",{ style: x.active===false ? { opacity:".6",fontStyle:"italic" } : {} });
+    nameCell.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},x.name+(x.active===false?" (archived)":"")));
     if (x.role==="head_barista") nameCell.appendChild(el("div",{class:"small muted"},"⭐ Head"));
     row.appendChild(nameCell);
     cats.forEach(k=>{
@@ -12146,7 +12176,7 @@ routes.scorecard = function(u) {
   diveCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"🔍 Individual Deep-Dive"));
   const sel = el("select",{style:{marginBottom:"12px"}});
   sel.appendChild(el("option",{value:""},"— Select a barista —"));
-  allU.forEach(x=>sel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
+  allU.forEach(x=>sel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":"")+(x.active===false?" (archived)":""))));
   diveCard.appendChild(sel);
   const diveBody = el("div",{});
   diveCard.appendChild(diveBody);
@@ -12166,7 +12196,7 @@ routes.scorecard = function(u) {
     const summRow = el("div",{style:{display:"flex",alignItems:"center",gap:"14px",marginBottom:"14px",flexWrap:"wrap"}});
     summRow.appendChild(el("div",{style:{fontWeight:"800",fontSize:"2rem",color:kpiScoreColor(total)}},total.toFixed(0)));
     const summInfo = el("div",{});
-    summInfo.appendChild(el("div",{style:{fontWeight:"700"}},person.name));
+    summInfo.appendChild(el("div",{style:{fontWeight:"700"}},person.name+(person.active===false?" (archived)":"")));
     summInfo.appendChild(el("div",{class:"muted small"},kpiGradeEn(total)+" · Target: "+tgt+"+"));
     summRow.appendChild(summInfo);
     diveBody.appendChild(summRow);
@@ -12214,7 +12244,7 @@ routes.scorecard = function(u) {
     manSelWrap.appendChild(el("label",{},"Barista"));
     const manSel = el("select",{});
     manSel.appendChild(el("option",{value:""},"— Select barista —"));
-    allU.forEach(x=>manSel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
+    allU.forEach(x=>manSel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":"")+(x.active===false?" (archived)":""))));
     manSelWrap.appendChild(manSel);
     manCard.appendChild(manSelWrap);
     const manFields = el("div",{id:"man-fields-wrap",style:{display:"none"}});
@@ -12265,7 +12295,7 @@ routes.scorecard = function(u) {
     cfSelWrap.appendChild(el("label",{},"Barista"));
     const cfSel = el("select",{});
     cfSel.appendChild(el("option",{value:""},"— Select barista —"));
-    allU.forEach(x=>cfSel.appendChild(el("option",{value:x.id},x.name)));
+    allU.forEach(x=>cfSel.appendChild(el("option",{value:x.id},x.name+(x.active===false?" (archived)":""))));
     cfSelWrap.appendChild(cfSel);
     cfCard.appendChild(cfSelWrap);
     cfCard.appendChild(el("label",{},"Star Rating (1–5)"));
@@ -12715,7 +12745,7 @@ routes.my_hr = function(u, params) {
 // ─── STAFF HR OVERVIEW (owner / head_barista / accountant) ────────────────────
 routes.staff_hr = function(u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Staff HR Overview", "Monthly payroll, penalties, loans, KPI and leave summary for all active staff."));
+  wrap.appendChild(header("Staff HR Overview", "Monthly payroll, penalties, loans, KPI and leave summary. Archived staff remain visible in past months."));
 
   if (!["owner", "accountant", "head_barista"].includes(u.role)) {
     wrap.appendChild(el("div", { class: "card" }, "Access restricted."));
@@ -12758,7 +12788,21 @@ routes.staff_hr = function(u) {
   function drawBody() {
     body.innerHTML = "";
     const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
-    const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+    const isPast  = selMonth < nowMonth;
+
+    // Active baristas + archived baristas who have any payroll record in this month
+    // (or any salary configured, when viewing a past month — preserves full history)
+    const staff = state.users.filter(x => {
+      if (!["barista","head_barista"].includes(x.role)) return false;
+      if (x.active) return true;
+      if (!isPast)  return false; // never show archived for current month
+      return !!(state.salary_config[x.id])
+        || state.penalties.some(r => r.user_id === x.id && monthFn(r))
+        || state.overtime_logs.some(r => r.user_id === x.id && monthFn(r))
+        || state.salary_loans.some(r => r.user_id === x.id && monthFn(r))
+        || state.salaries.some(r => r.user_id === x.id && monthFn(r));
+    });
+    const archivedCount = staff.filter(x => !x.active).length;
 
     // Summary stat cards
     let totalPayroll = 0, totalPen = 0, totalOT = 0;
@@ -12782,7 +12826,7 @@ routes.staff_hr = function(u) {
 
     const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
     [
-      ["👥 Active Staff", String(staff.length)],
+      ["👥 Staff" + (archivedCount ? ` (${archivedCount} archived)` : ""), String(staff.length)],
       ["💰 Total Payroll", money(totalPayroll)],
       ["⚖ Total Penalties", money(totalPen)],
       ["⏱ Total Overtime", money(totalOT)],
@@ -12813,8 +12857,9 @@ routes.staff_hr = function(u) {
     staffData.forEach(({ p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays }) => {
       grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
       const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
-      const tr = el("tr", { style: { cursor: "pointer" }, onClick: () => go("my_hr", { user_id: p.id }) }, [
-        el("td", { style: { fontWeight: "600" } }, p.name),
+      const archivedStyle = p.active ? "" : "opacity:.55;font-style:italic";
+      const tr = el("tr", { style: { cursor: "pointer" + (archivedStyle ? ";" + archivedStyle : "") }, onClick: () => go("my_hr", { user_id: p.id }) }, [
+        el("td", { style: { fontWeight: "600" } }, p.name + (p.active ? "" : " (archived)")),
         el("td", { class: "muted small" }, p.role === "head_barista" ? "Head" : "Barista"),
         el("td", { class: "num" }, money(salary)),
         el("td", { class: "num", style: { color: "var(--ok)" } }, otSum ? "+" + money(otSum) : "—"),
