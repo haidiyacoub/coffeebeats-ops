@@ -12180,7 +12180,7 @@ routes.scorecard = function(u) {
   });
   // Dropdowns only show active baristas — archived stay in the heatmap/leaderboard tables only
   const activeU = allU.filter(x => x.active !== false);
-  const hasSomeData = allU.some(x => {
+  const hasSomeData = activeU.some(x => {
     const s = allScores[x.id];
     return s && cats.some(k=>s[k]!=null);
   });
@@ -12199,7 +12199,7 @@ routes.scorecard = function(u) {
   // ── Leaderboard card ──
   const lbCard = el("div",{class:"card",style:{marginBottom:"12px"}});
   lbCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"🏆 Achievers Board"));
-  const sorted = allU.map(x=>{
+  const sorted = activeU.map(x=>{
     const s = allScores[x.id];
     const total = s && cats.some(k=>s[k]!=null) ? kpiCalcTotal(s) : null;
     return {...x,total};
@@ -12211,7 +12211,7 @@ routes.scorecard = function(u) {
     row.appendChild(el("div",{style:{width:"32px",height:"32px",borderRadius:"50%",background:"var(--accent-2)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700",fontSize:"12px"}},
       (m.name||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)));
     const info = el("div",{style:{flex:"1"}});
-    info.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},m.name+(m.active===false?" (archived)":"")));
+    info.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},m.name));
     info.appendChild(el("div",{class:"muted small"},m.role==="head_barista"?"⭐ Head Barista":"Barista"));
     row.appendChild(info);
     const bar = el("div",{style:{flex:"2"}});
@@ -12236,12 +12236,12 @@ routes.scorecard = function(u) {
   thead.appendChild(hrow);
   tbl.appendChild(thead);
   const tbody = el("tbody",{});
-  allU.forEach(x=>{
+  activeU.forEach(x=>{
     const s = allScores[x.id];
     const total = s && cats.some(k=>s[k]!=null) ? kpiCalcTotal(s) : null;
     const row = el("tr",{});
-    const nameCell = el("td",{ style: x.active===false ? { opacity:".6",fontStyle:"italic" } : {} });
-    nameCell.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},x.name+(x.active===false?" (archived)":"")));
+    const nameCell = el("td",{});
+    nameCell.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px"}},x.name));
     if (x.role==="head_barista") nameCell.appendChild(el("div",{class:"small muted"},"⭐ Head"));
     row.appendChild(nameCell);
     cats.forEach(k=>{
