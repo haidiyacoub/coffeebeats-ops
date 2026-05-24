@@ -12446,9 +12446,9 @@ routes.scorecard = function(u) {
     const rstCard = el("div", { class: "card", style: { marginTop: "12px", borderTop: "2px solid var(--bad)" } });
     rstCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "4px", color: "var(--bad)" } }, "🔄 Reset KPI Score"));
     rstCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-      "Clears manually entered scores (craft, upselling, customer, teamwork) for a barista in a selected month. Auto-calculated scores (punctuality, waste, cleanliness, hygiene, training, leadership) are not affected."));
+      "Select a barista and month, then choose what to reset."));
 
-    const rstRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "10px" } });
+    const rstRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" } });
 
     const rstSel = el("select", { style: { flex: "1", minWidth: "140px" } });
     rstSel.appendChild(el("option", { value: "" }, "— Select barista —"));
@@ -12459,19 +12459,53 @@ routes.scorecard = function(u) {
     rstRow.appendChild(rstMonth);
     rstCard.appendChild(rstRow);
 
-    const rstBtn = el("button", { class: "btn", style: { background: "var(--bad)", color: "#fff" }, onClick: () => {
+    function getResetTarget() {
       const uid = rstSel.value;
       const mon = rstMonth.value;
-      if (!uid || !mon) { toast("Select a barista and month first", "error"); return; }
-      const person = allU.find(x => x.id === uid);
-      const has = (state.kpi_manual || []).some(m => m.user_id === uid && m.month === mon);
-      if (!has) { toast("No manual KPI entry found for " + (person?.name || uid) + " in " + mon, "warn"); return; }
-      if (!confirm("Reset manual KPI scores for " + (person?.name || uid) + " (" + mon + ")? This cannot be undone.")) return;
-      state.kpi_manual = (state.kpi_manual || []).filter(m => !(m.user_id === uid && m.month === mon));
+      if (!uid || !mon) { toast("Select a barista and month first", "error"); return null; }
+      return { uid, mon, person: activeU.find(x => x.id === uid) };
+    }
+
+    // ── Button A: manual scores only ──────────────────────────────────────────
+    const rstBtnManual = el("button", { class: "btn ghost", style: { marginBottom: "8px", display: "block", width: "100%" }, onClick: () => {
+      const t = getResetTarget(); if (!t) return;
+      if (!confirm("Reset manually entered KPI scores for " + (t.person?.name || t.uid) + " (" + t.mon + ")?\n\nClears: craft, upselling, customer, teamwork overrides.\nAuto-calculated scores remain.")) return;
+      state.kpi_manual = (state.kpi_manual || []).filter(m => !(m.user_id === t.uid && m.month === t.mon));
       save();
-      toast("✅ KPI scores reset for " + (person?.name || uid) + " — " + mon);
-    } }, "Reset KPI Scores");
-    rstCard.appendChild(rstBtn);
+      toast("✅ Manual KPI scores cleared for " + (t.person?.name || t.uid) + " — " + t.mon);
+    } }, "Reset Manual Scores Only");
+    rstCard.appendChild(rstBtnManual);
+
+    // ── Button B: full reset ──────────────────────────────────────────────────
+    const rstBtnAll = el("button", { class: "btn", style: { background: "var(--bad)", color: "#fff", display: "block", width: "100%" }, onClick: () => {
+      const t = getResetTarget(); if (!t) return;
+      if (!confirm(
+        "Reset ALL KPI data for " + (t.person?.name || t.uid) + " (" + t.mon + ")?\n\n" +
+        "This will permanently delete:\n" +
+        "• Manual KPI entries (craft, upselling, customer, teamwork)\n" +
+        "• Waste log entries\n" +
+        "• Cleaning log entries\n" +
+        "• Customer feedback entries\n" +
+        "• Hygiene & uniform penalties\n\n" +
+        "Sign-in stamps, financial penalties, payroll, and training scores are NOT deleted."
+      )) return;
+      const { uid, mon } = t;
+      const inMonth = x => (x.month || (x.date || "").slice(0, 7)) === mon;
+      state.kpi_manual        = (state.kpi_manual        || []).filter(m => !(m.user_id === uid && m.month === mon));
+      state.waste_new         = (state.waste_new         || []).filter(x => !(x.user_id === uid && inMonth(x)));
+      state.cleaning_log      = (state.cleaning_log      || []).filter(x => !(x.user_id === uid && inMonth(x)));
+      state.customer_feedback = (state.customer_feedback || []).filter(x => !(x.user_id === uid && inMonth(x)));
+      state.penalties         = (state.penalties         || []).filter(x => !(
+        x.user_id === uid && inMonth(x) &&
+        (x.reason_code === "no_uniform" || x.reason_code === "hygiene")
+      ));
+      save();
+      toast("✅ All KPI data reset for " + (t.person?.name || uid) + " — " + mon);
+    } }, "Reset All KPI Scores");
+    rstCard.appendChild(rstBtnAll);
+
+    rstCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
+      "\"All\" clears waste logs, cleaning logs, customer feedback, and hygiene penalties for the selected month. Sign-in stamps and financial penalties are never touched."));
     wrap.appendChild(rstCard);
   }
 
