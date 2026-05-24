@@ -7701,8 +7701,13 @@ routes.users = function (u) {
     budget_inventory: "\ud83d\udcb0 Budget & Inventory",
   };
 
+  // Active members first (all roles), then archived baristas below
   const allStaff = staffDir.active().sort((a,b) => a.name.localeCompare(b.name));
-  for (const usr of allStaff) {
+  const archivedBaristas = staffDir.all()
+    .filter(x => ["barista","head_barista"].includes(x.role) && !x.active)
+    .sort((a,b) => a.name.localeCompare(b.name));
+
+  function renderStaffRow(usr) {
     const branchLabel = usr.role === "barista"
       ? "rotates (Maadi + Zawya)"
       : (usr.branches && usr.branches.length ? usr.branches.join(", ") : "\u2014");
@@ -7734,14 +7739,94 @@ routes.users = function (u) {
     if ((usr.id_photo_urls || []).length > 0) {
       rowChildren.push(el("span", { class: "pill ok", style: { fontSize: "11px" } }, "\ud83e\udeb9 ID"));
     }
-    // Owner can edit anyone; any user can edit their own entry (emergency number)
     const rowOpts = (u.role === "owner" || u.uid === usr.uid)
       ? { class: "row", onClick: () => editUser(usr) }
       : { class: "row" };
     list.appendChild(el("div", rowOpts, rowChildren));
-
   }
+
+  for (const usr of allStaff) renderStaffRow(usr);
+
+  // \u2500\u2500 Archived baristas section (owner-only) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  if (archivedBaristas.length) {
+    list.appendChild(el("div", {
+      style: { marginTop: "18px", marginBottom: "6px", fontWeight: "700", fontSize: "11px",
+               textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)" }
+    }, "Archived"));
+    for (const usr of archivedBaristas) {
+      const row = el("div", { class: "row", style: { opacity: ".6" } });
+      const info = el("div", { class: "grow" });
+      info.appendChild(el("div", { class: "title" }, usr.name));
+      info.appendChild(el("div", { class: "sub" }, `${usr.role} \u00b7 archived`));
+      row.appendChild(info);
+      if (u.role === "owner") {
+        const actBtn = el("button", {
+          class: "btn secondary",
+          style: { padding: "5px 12px", fontSize: "12px", minHeight: "unset" },
+        }, "Activate");
+        actBtn.addEventListener("click", (e) => { e.stopPropagation(); activateBarista(usr); });
+        row.appendChild(actBtn);
+      }
+      list.appendChild(row);
+    }
+  }
+
   wrap.appendChild(list); wrap.appendChild(btnBack());
+
+  function activateBarista(usr) {
+    const sheet = el("div", {});
+    sheet.appendChild(el("h2", {}, "Activate " + usr.name + "?"));
+    sheet.appendChild(el("div", { class: "muted", style: { marginBottom: "20px", fontSize: "13px" } },
+      "Choose how to restore this barista. This cannot be undone."));
+
+    // Option A \u2014 Keep old data
+    const keepCard = el("div", { class: "card", style: { marginBottom: "12px", cursor: "pointer", border: "2px solid var(--border)" } });
+    keepCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } }, "\u2705 Keep old data"));
+    keepCard.appendChild(el("div", { class: "muted small" },
+      "Restores the barista with all past records intact \u2014 penalties, leaves, KPI scores, payroll, and overtime history are preserved exactly as before."));
+    keepCard.addEventListener("click", async () => {
+      closeSheet();
+      try {
+        await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: true });
+        toast("\u2705 " + usr.name + " reactivated with all history");
+        go("users");
+      } catch (e) { toast(e.message || "Failed to activate", "error"); }
+    });
+    sheet.appendChild(keepCard);
+
+    // Option B \u2014 Reset & start fresh
+    const resetCard = el("div", { class: "card", style: { marginBottom: "12px", cursor: "pointer", border: "2px solid var(--bad)" } });
+    resetCard.appendChild(el("div", { style: { fontWeight: "700", color: "var(--bad)", marginBottom: "4px" } }, "\ud83d\udd04 Reset & start fresh"));
+    resetCard.appendChild(el("div", { class: "muted small" },
+      "Activates the barista as a clean slate. Clears penalties, leaves, overtime, loans, KPI scores, sign-in stamps, waste logs, and cleaning logs. Payroll payout history is kept for accounting."));
+    resetCard.addEventListener("click", async () => {
+      if (!confirm("Reset all operational data for " + usr.name + "? This permanently deletes their penalties, leaves, KPI history, stamps, waste, and cleaning logs. Payroll records are kept.")) return;
+      closeSheet();
+      try {
+        await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: true });
+        // Match by Firebase UID (usr.id === usr.uid) or legacy UUID
+        const matchId = x => x.user_id === usr.uid || (usr.legacy_id && x.user_id === usr.legacy_id);
+        const matchBy = x => x.by === usr.uid || (usr.legacy_id && x.by === usr.legacy_id);
+        state.kpi_manual        = (state.kpi_manual        || []).filter(x => !matchId(x));
+        state.kpi_logs          = (state.kpi_logs          || []).filter(x => !matchId(x));
+        state.penalties         = (state.penalties         || []).filter(x => !matchId(x));
+        state.overtime_logs     = (state.overtime_logs     || []).filter(x => !matchId(x));
+        state.salary_loans      = (state.salary_loans      || []).filter(x => !matchId(x));
+        state.leaves            = (state.leaves            || []).filter(x => !matchId(x));
+        state.customer_feedback = (state.customer_feedback || []).filter(x => !matchId(x) && x.barista_id !== usr.uid && (!usr.legacy_id || x.barista_id !== usr.legacy_id));
+        state.signin_stamps     = (state.signin_stamps     || []).filter(x => !matchBy(x));
+        state.waste_new         = (state.waste_new         || []).filter(x => !matchId(x));
+        state.cleaning_log      = (state.cleaning_log      || []).filter(x => !matchId(x));
+        saveState();
+        toast("\u2705 " + usr.name + " reactivated with a clean slate");
+        go("users");
+      } catch (e) { toast(e.message || "Failed to activate", "error"); }
+    });
+    sheet.appendChild(resetCard);
+
+    sheet.appendChild(el("button", { class: "btn ghost", style: { width: "100%" }, onClick: () => closeSheet() }, "Cancel"));
+    openSheet(sheet);
+  }
 
   function editUser(usr) {
     const isSelf  = u.uid === usr.uid;
@@ -11419,7 +11504,14 @@ const CLEAN_EN = [
 
 function kpiCalcTotal(scores) {
   const w = KPI_W();
-  return Object.keys(w).reduce((sum, k) => sum + ((scores||{})[k]||0) * w[k] / 100, 0);
+  const s = scores || {};
+  if (s.leadership == null) {
+    const lw = w.leadership;
+    const others = Object.keys(w).filter(k => k !== 'leadership');
+    const bonus = lw / others.length;
+    return others.reduce((sum, k) => sum + (s[k] || 0) * (w[k] + bonus) / 100, 0);
+  }
+  return Object.keys(w).reduce((sum, k) => sum + (s[k] || 0) * w[k] / 100, 0);
 }
 function kpiScoreColor(n) { return n>=85?"var(--ok)":n>=65?"var(--warn)":"var(--bad)"; }
 function kpiGrade(n, isHead) {
@@ -11720,7 +11812,7 @@ function kpiLeadershipScore(userId, month) {
   const assignment = getLeadershipAssignment(month);
   const ROLES = ["weekly_schedule","budget_inventory","inventory_management","cash_status"];
   const myRole = assignment ? (ROLES.find(r => assignment[r] === userId) || null) : null;
-  if (!myRole) return 100;
+  if (!myRole) return null;
 
   if (myRole === "weekly_schedule") {
     const [yr, mo] = month.split("-").map(Number);
@@ -12084,8 +12176,10 @@ routes.scorecard = function(u) {
     if (!["barista","head_barista"].includes(x.role)) return false;
     if (x.active) return true;
     const s = allScores[x.id];
-    return s && cats.some(k => s[k] != null); // archived: only show if data exists
+    return s && cats.some(k => s[k] != null); // archived: only show in tables if data exists
   });
+  // Dropdowns only show active baristas — archived stay in the heatmap/leaderboard tables only
+  const activeU = allU.filter(x => x.active !== false);
   const hasSomeData = allU.some(x => {
     const s = allScores[x.id];
     return s && cats.some(k=>s[k]!=null);
@@ -12176,7 +12270,7 @@ routes.scorecard = function(u) {
   diveCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}},"🔍 Individual Deep-Dive"));
   const sel = el("select",{style:{marginBottom:"12px"}});
   sel.appendChild(el("option",{value:""},"— Select a barista —"));
-  allU.forEach(x=>sel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":"")+(x.active===false?" (archived)":""))));
+  activeU.forEach(x=>sel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
   diveCard.appendChild(sel);
   const diveBody = el("div",{});
   diveCard.appendChild(diveBody);
@@ -12244,7 +12338,7 @@ routes.scorecard = function(u) {
     manSelWrap.appendChild(el("label",{},"Barista"));
     const manSel = el("select",{});
     manSel.appendChild(el("option",{value:""},"— Select barista —"));
-    allU.forEach(x=>manSel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":"")+(x.active===false?" (archived)":""))));
+    activeU.forEach(x=>manSel.appendChild(el("option",{value:x.id},x.name+(x.role==="head_barista"?" ⭐":""))));
     manSelWrap.appendChild(manSel);
     manCard.appendChild(manSelWrap);
     const manFields = el("div",{id:"man-fields-wrap",style:{display:"none"}});
@@ -12295,7 +12389,7 @@ routes.scorecard = function(u) {
     cfSelWrap.appendChild(el("label",{},"Barista"));
     const cfSel = el("select",{});
     cfSel.appendChild(el("option",{value:""},"— Select barista —"));
-    allU.forEach(x=>cfSel.appendChild(el("option",{value:x.id},x.name+(x.active===false?" (archived)":""))));
+    activeU.forEach(x=>cfSel.appendChild(el("option",{value:x.id},x.name)));
     cfSelWrap.appendChild(cfSel);
     cfCard.appendChild(cfSelWrap);
     cfCard.appendChild(el("label",{},"Star Rating (1–5)"));
@@ -12345,6 +12439,40 @@ routes.scorecard = function(u) {
       cfCard.appendChild(cft);
     }
     wrap.appendChild(cfCard);
+  }
+
+  // ── KPI Reset (owner only) ─────────────────────────────────────────────────
+  if (u.role === "owner") {
+    const rstCard = el("div", { class: "card", style: { marginTop: "12px", borderTop: "2px solid var(--bad)" } });
+    rstCard.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", marginBottom: "4px", color: "var(--bad)" } }, "🔄 Reset KPI Score"));
+    rstCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+      "Clears manually entered scores (craft, upselling, customer, teamwork) for a barista in a selected month. Auto-calculated scores (punctuality, waste, cleanliness, hygiene, training, leadership) are not affected."));
+
+    const rstRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "10px" } });
+
+    const rstSel = el("select", { style: { flex: "1", minWidth: "140px" } });
+    rstSel.appendChild(el("option", { value: "" }, "— Select barista —"));
+    activeU.forEach(x => rstSel.appendChild(el("option", { value: x.id }, x.name + (x.role === "head_barista" ? " ⭐" : ""))));
+    rstRow.appendChild(rstSel);
+
+    const rstMonth = el("input", { type: "month", value: new Date().toISOString().slice(0, 7), style: { flex: "1", minWidth: "130px", fontSize: "14px", padding: "6px 8px", borderRadius: "8px", border: "1px solid var(--border)" } });
+    rstRow.appendChild(rstMonth);
+    rstCard.appendChild(rstRow);
+
+    const rstBtn = el("button", { class: "btn", style: { background: "var(--bad)", color: "#fff" }, onClick: () => {
+      const uid = rstSel.value;
+      const mon = rstMonth.value;
+      if (!uid || !mon) { toast("Select a barista and month first", "error"); return; }
+      const person = allU.find(x => x.id === uid);
+      const has = (state.kpi_manual || []).some(m => m.user_id === uid && m.month === mon);
+      if (!has) { toast("No manual KPI entry found for " + (person?.name || uid) + " in " + mon, "warn"); return; }
+      if (!confirm("Reset manual KPI scores for " + (person?.name || uid) + " (" + mon + ")? This cannot be undone.")) return;
+      state.kpi_manual = (state.kpi_manual || []).filter(m => !(m.user_id === uid && m.month === mon));
+      save();
+      toast("✅ KPI scores reset for " + (person?.name || uid) + " — " + mon);
+    } }, "Reset KPI Scores");
+    rstCard.appendChild(rstBtn);
+    wrap.appendChild(rstCard);
   }
 
   wrap.appendChild(btnBack());
