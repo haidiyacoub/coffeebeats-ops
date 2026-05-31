@@ -1014,9 +1014,10 @@ function migrateState(s) {
   }
 
   // Ensure new collections exist
-  s.salary_config  = s.salary_config  || {};
-  s.salary_loans   = s.salary_loans   || [];
-  s.salaries       = s.salaries       || [];
+  s.salary_config           = s.salary_config           || {};
+  s.salary_loans            = s.salary_loans            || [];
+  s.sick_leave_deductions   = s.sick_leave_deductions   || [];
+  s.salaries                = s.salaries                || [];
   s.overtime_logs  = s.overtime_logs  || [];
   s.penalties      = s.penalties      || [];
   s.maadi_deposits = s.maadi_deposits || [];
@@ -1235,7 +1236,7 @@ const STATE_CHUNKS = {
   sales:       ["sales", "shifts", "order_items", "orders"],
   operations:  ["shift_closes", "cleaning_logs", "signin_stamps", "suggestions"],
   roster:      ["rosters", "roaster_schedules", "maadi_deposits", "special_dates"],
-  hr:          ["salaries", "salary_loans", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
+  hr:          ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
   overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:       ["photo_log", "assets"],
   kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
@@ -2286,7 +2287,7 @@ const ROLE_ACCESS = {
                  "my_hr","staff_hr","leaderboard","notifications","suggestions",
                  "my_training","training_quiz_take"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","my_hr","leaderboard","notifications","suggestions",
+  barista: ["home","my_id","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","my_hr","leaderboard","notifications","suggestions",
             "my_training","training_quiz_take"],
   // Zawya-only support roles — minimal access: home screen + own profile
   manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook","notifications","suggestions"],
@@ -4988,10 +4989,33 @@ routes.salaries = function (u) {
     }
     body.appendChild(loansCard);
 
+    // ---- 2.25) Sick leave deductions card ----
+    state.sick_leave_deductions = state.sick_leave_deductions || [];
+    const sickCard = el("div", { class: "card", style: { marginTop: "12px" } });
+    sickCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, "Sick leaves (¼ day deducted per leave)"));
+    if (u.role === "owner" || u.role === "accountant" || u.role === "head_barista") {
+      sickCard.appendChild(el("button", { class: "btn secondary", style: { marginTop: "8px" }, onClick: addSickLeave }, "➕ Record sick leave"));
+    }
+    const monthSick = state.sick_leave_deductions.filter(l => (l.month || (l.date||"").slice(0,7)) === month);
+    if (monthSick.length === 0) {
+      sickCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } }, "No sick leaves recorded for this month."));
+    } else {
+      for (const r of monthSick.slice().sort((a,b) => (b.at||"").localeCompare(a.at||""))) {
+        sickCard.appendChild(el("div", { class: "kv" }, [
+          el("div", { class: "k" }, [
+            el("div", {}, `${r.barista || "—"} · ${r.days} sick day${r.days !== 1 ? "s" : ""}`),
+            el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || r.by || "—"}${r.note ? " · " + r.note : ""}`),
+          ]),
+          el("div", { class: "v" }, `−${money(r.amount)}`),
+        ]));
+      }
+    }
+    body.appendChild(sickCard);
+
     // ---- 2.5) Overtime card ----
     state.overtime_logs = state.overtime_logs || [];
     const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
-    otCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", marginBottom:"10px" } }, "Overtime — extra hours per day"));
+    otCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", marginBottom:"10px" } }, "Overtime — extra hours beyond 8 h shift"));
     // Hourly rates display
     for (const p of staff) {
       const cfg = state.salary_config[p.id] || { monthly_salary: 0 };
@@ -4999,10 +5023,12 @@ routes.salaries = function (u) {
       const hrRate = sal > 0 ? (sal / 30 / 8) : 0;
       const otHrs  = (state.overtime_logs).filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month).reduce((s,r)=>s+(Number(r.hours)||0),0);
       const otAmt  = (state.overtime_logs).filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month).reduce((s,r)=>s+(Number(r.amount)||0),0);
+      const otRate15 = money(Math.round(hrRate * 1.5 * 100) / 100);
+      const otRate2  = money(Math.round(hrRate * 2   * 100) / 100);
       otCard.appendChild(el("div", { class: "kv" }, [
         el("div", { class: "k" }, [
           el("div", {}, p.name),
-          el("div", { class: "muted small" }, `Rate: ${money(Math.round(hrRate*100)/100)}/hr · This month: ${otHrs}h = +${money(Math.round(otAmt*100)/100)}`),
+          el("div", { class: "muted small" }, `Base: ${money(Math.round(hrRate*100)/100)}/hr · OT ×1.5: ${otRate15} · Holiday ×2: ${otRate2} · This month: ${otHrs}h = +${money(Math.round(otAmt*100)/100)}`),
         ]),
         el("div", { class: "v" }, ""),
       ]));
@@ -5018,9 +5044,10 @@ routes.salaries = function (u) {
         const statusPill = r.approved
           ? el("span", { class: "pill ok", style: { fontSize:"11px" } }, "✓ Approved")
           : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, "⏳ Pending");
+        const rateLabel = r.multiplier === 2 ? "×2 Holiday" : r.multiplier === 1.5 ? "×1.5 OT" : r.multiplier ? `×${r.multiplier}` : "×1.5 OT";
         otCard.appendChild(el("div", { class: "kv" }, [
           el("div", { class: "k" }, [
-            el("div", {}, `${r.barista || "—"} · ${r.date || ""} · ${r.hours}h`),
+            el("div", {}, `${r.barista || "—"} · ${r.date || ""} · ${r.hours}h · ${rateLabel}`),
             el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || "—"}${r.note ? " · " + r.note : ""} · +${money(Math.round((r.amount||0)*100)/100)}`),
           ]),
           el("div", { class: "v", style: { display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"4px" } }, [
@@ -5042,14 +5069,16 @@ routes.salaries = function (u) {
                                      .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const loanSum = state.salary_loans.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
                                         .reduce((s,r)=>s+(Number(r.amount)||0),0);
+      const sickSum = (state.sick_leave_deductions || []).filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
+                                        .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
                                          .reduce((s,r)=>s+(Number(r.amount)||0),0);
-      const due = Math.max(0, salary + otSum - penSum - loanSum);
+      const due = Math.max(0, salary + otSum - penSum - loanSum - sickSum);
       grandDue += due;
       dueCard.appendChild(el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
         el("div", { class: "k" }, [
           el("div", {}, p.name + (p.active ? "" : " (archived)")),
-          el("div", { class: "muted small" }, `Salary ${money(salary)} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}`),
+          el("div", { class: "muted small" }, `Salary ${money(salary)} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}`),
         ]),
         el("div", { class: "v" }, money(due)),
       ]));
@@ -5133,15 +5162,53 @@ routes.salaries = function (u) {
     });
   }
 
-  function addOvertime() {
+  function addSickLeave() {
     const staff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
     const options = staff.map(p => ({ label: p.name, value: p.id }));
     openPrompt({
-      title: "Log overtime hours",
+      title: "Record sick leave",
       fields: [
         { key: "user_id", label: "Barista", type: "select", options, value: options[0] ? options[0].value : "" },
+        { key: "days",    label: "Number of sick days", type: "number", value: 1 },
         { key: "date",    label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
-        { key: "hours",   label: "Overtime hours (e.g. 2.5)", type: "number", value: 1 },
+        { key: "month",   label: "Deduct from month (YYYY-MM)", type: "text", value: monthInput.value },
+        { key: "note",    label: "Note", type: "text", value: "" },
+      ],
+      onSubmit: (vals) => {
+        const days = Number(vals.days) || 0;
+        if (days <= 0) return toast("Enter a positive number of sick days", "error");
+        const person = state.users.find(x => x.id === vals.user_id);
+        if (!person) return toast("Pick a barista", "error");
+        const sal = Number((state.salary_config[person.id] || {}).monthly_salary || 0);
+        const quarterDay = Math.round((sal / 30 / 4) * 100) / 100;
+        const amount = Math.round(quarterDay * days * 100) / 100;
+        const s = stamp();
+        state.sick_leave_deductions = state.sick_leave_deductions || [];
+        state.sick_leave_deductions.push({
+          id: uuid(), user_id: person.id, barista: person.name,
+          days, amount, date: vals.date,
+          month: vals.month || (vals.date||"").slice(0,7),
+          note: vals.note || "", by: s.by, by_name: s.by_name, at: s.at,
+        });
+        saveState(); toast(`Sick leave recorded · ${days} day${days !== 1 ? "s" : ""} · −${money(amount)} for ${person.name}`); drawBody();
+      }
+    });
+  }
+
+  function addOvertime() {
+    const staff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
+    const options = staff.map(p => ({ label: p.name, value: p.id }));
+    const otTypeOptions = [
+      { label: "Regular OT (×1.5)", value: "regular" },
+      { label: "Holiday (×2)",      value: "holiday" },
+    ];
+    openPrompt({
+      title: "Log overtime hours",
+      fields: [
+        { key: "user_id", label: "Barista",   type: "select", options,        value: options[0] ? options[0].value : "" },
+        { key: "ot_type", label: "OT type",   type: "select", options: otTypeOptions, value: "regular" },
+        { key: "date",    label: "Date",       type: "date",   value: new Date().toISOString().slice(0,10) },
+        { key: "hours",   label: "Extra hours (beyond 8 h shift)", type: "number", value: 1 },
         { key: "note",    label: "Reason / note", type: "text", value: "" },
       ],
       onSubmit: (vals) => {
@@ -5151,24 +5218,26 @@ routes.salaries = function (u) {
         if (!person) return toast("Pick a barista", "error");
         const sal = Number((state.salary_config[person.id] || {}).monthly_salary || 0);
         const hrRate = sal > 0 ? sal / 30 / 8 : 0;
-        const amount = Math.round(hrRate * hrs * 100) / 100;
+        const multiplier = vals.ot_type === "holiday" ? 2 : 1.5;
+        const amount = Math.round(hrRate * hrs * multiplier * 100) / 100;
         const s = stamp();
         const mon = monthInput.value || new Date().toISOString().slice(0,7);
         state.overtime_logs = state.overtime_logs || [];
         state.overtime_logs.push({
           id: uuid(), user_id: person.id, barista: person.name,
-          date: vals.date, hours: hrs, rate: hrRate, amount,
+          date: vals.date, hours: hrs, rate: hrRate, multiplier, amount,
           month: mon || (vals.date||"").slice(0,7),
           note: vals.note || "", by: s.by, by_name: s.by_name, at: s.at,
           approved: false,
         });
         saveState();
         // Send approval email
-        const subj = encodeURIComponent(`[OT Approval Needed] ${person.name} · ${vals.date} · ${hrs}h · EGP ${amount.toFixed(2)}`);
+        const otTypeLabel = multiplier === 2 ? "Holiday (×2)" : "Regular OT (×1.5)";
+        const subj = encodeURIComponent(`[OT Approval Needed] ${person.name} · ${vals.date} · ${hrs}h · ${otTypeLabel} · EGP ${amount.toFixed(2)}`);
         const bod  = encodeURIComponent(
           `Overtime submitted for your approval:\n\n` +
           `Barista: ${person.name}\nDate: ${vals.date}\nHours: ${hrs}\n` +
-          `Hourly rate: EGP ${hrRate.toFixed(2)}\nTotal OT pay: EGP ${amount.toFixed(2)}\n` +
+          `OT type: ${otTypeLabel}\nHourly rate: EGP ${hrRate.toFixed(2)} × ${multiplier} = EGP ${(hrRate * multiplier).toFixed(2)}/hr\nTotal OT pay: EGP ${amount.toFixed(2)}\n` +
           `Month: ${mon}\nNote: ${vals.note || "—"}\nSubmitted by: ${s.by_name}\n\n` +
           `Log in to the Operations app > Salaries to approve.`
         );
@@ -6346,6 +6415,17 @@ routes.sales_import = function (u) {
       importedBranches.add(br);
       if (r.date && r.date.length >= 7) importedMonths.add(r.date.slice(0,7));
     }
+    // Save excluded revenue so dashboard can compute CB% of total venue sales
+    if ((parsed.zawyaExcludedNet || 0) > 0 || (parsed.zawyaExcludedGross || 0) > 0) {
+      state.sales_meta = state.sales_meta || [];
+      for (const m of [...importedMonths]) {
+        state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
+      }
+      if (importedMonths.size === 0) {
+        const m = monthFallback.value || new Date().toISOString().slice(0,7);
+        state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
+      }
+    }
     saveState();
     const branchList = [...importedBranches].join(", ") || branchDefault;
     const monthList = [...importedMonths].sort().join(", ") || "—";
@@ -6378,6 +6458,14 @@ routes.sales_import = function (u) {
         if (r.date && r.date.length >= 7) importedMonths.add(r.date.slice(0,7));
       }
       parts.push(`File 1: ${parsed.rows.length} sales rows`);
+      // Save excluded revenue so dashboard can compute CB% of total venue sales
+      if ((parsed.zawyaExcludedNet || 0) > 0 || (parsed.zawyaExcludedGross || 0) > 0) {
+        state.sales_meta = state.sales_meta || [];
+        const metaMonths = importedMonths.size > 0 ? [...importedMonths] : [monthFallback.value || new Date().toISOString().slice(0,7)];
+        for (const m of metaMonths) {
+          state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
+        }
+      }
     }
 
     // File 2 — order items
@@ -6440,17 +6528,17 @@ function parseBranchSalesSheet(wb, branch, isoMonth) {
   const fbDate = isoMonth + "-15";
   const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
   const rows = [];
-  let droppedNoItem = 0, droppedZawya = 0;
+  let droppedNoItem = 0, droppedZawya = 0, zawyaExcludedNet = 0, zawyaExcludedGross = 0;
   for (const r of dataRows) {
     const item     = String(r[0] || "").trim();   // Col A — product name
     const category = String(r[2] || "").trim();   // Col C — category
     const net      = toNum(r[6]);                 // Col G — net sales with tax
     const discount = toNum(r[8]);                 // Col I — discount amount
     if (!item) { droppedNoItem++; continue; }
-    if (branch === "zawya" && isZawyaExcluded(category, item)) { droppedZawya++; continue; }
+    if (branch === "zawya" && isZawyaExcluded(category, item)) { droppedZawya++; zawyaExcludedNet += net; zawyaExcludedGross += net + discount; continue; }
     rows.push({ date: fbDate, item, sku: "", qty: 1, net, gross: net + discount, discount, discount_name: "", category, branch });
   }
-  return { rows, warnings: [], droppedZawya, droppedNoItem, droppedModifier: 0, usedFallbackDate: rows.length, mapping: {}, headerRaw: [], rawLines: [], detectedBranch: branch, detectedMonth: isoMonth };
+  return { rows, warnings: [], droppedZawya, zawyaExcludedNet, zawyaExcludedGross, droppedNoItem, droppedModifier: 0, usedFallbackDate: rows.length, mapping: {}, headerRaw: [], rawLines: [], detectedBranch: branch, detectedMonth: isoMonth };
 }
 
 // Returns { branch, isoMonth } if filename matches "{Branch} order items {Month} {Year}"
@@ -6584,7 +6672,7 @@ function parseSalesCSVFromMapping(lines, headerRaw, defaultBranch, fallbackMonth
   const fbMonth = (fallbackMonth && /^\d{4}-\d{2}$/.test(fallbackMonth)) ? fallbackMonth : new Date().toISOString().slice(0,7);
   const fbDate = fbMonth + "-15"; // mid-month placeholder
 
-  let droppedZawya = 0, droppedNoItem = 0, droppedModifier = 0, usedFallbackDate = 0;
+  let droppedZawya = 0, zawyaExcludedNet = 0, zawyaExcludedGross = 0, droppedNoItem = 0, droppedModifier = 0, usedFallbackDate = 0;
   for (let i = 1; i < lines.length; i++) {
     const r = _csvParseLine(lines[i]);
     if (r.length < 1) continue;
@@ -6603,7 +6691,15 @@ function parseSalesCSVFromMapping(lines, headerRaw, defaultBranch, fallbackMonth
 
     // Branch exclusions for Zawya
     const isZawyaRow = branch === "zawya" || defaultBranch === "zawya";
-    if (isZawyaRow && isZawyaExcluded(category, item)) { droppedZawya++; continue; }
+    if (isZawyaRow && isZawyaExcluded(category, item)) {
+      droppedZawya++;
+      // Accumulate excluded revenue so dashboard can show CB% of total venue sales
+      const excGross = c.gross >= 0 ? toNum(r[c.gross]) : 0;
+      const excNet   = c.net   >= 0 ? toNum(r[c.net])   : Math.max(0, excGross - (c.disc >= 0 ? toNum(r[c.disc]) : 0));
+      zawyaExcludedNet   += excNet;
+      zawyaExcludedGross += excGross;
+      continue;
+    }
 
     // Date handling — use fallback if we can't parse, or if the user forced it
     let dateIso = "";
@@ -6647,7 +6743,7 @@ function parseSalesCSVFromMapping(lines, headerRaw, defaultBranch, fallbackMonth
     });
   }
 
-  return { rows, warnings: warns, droppedZawya, droppedNoItem, droppedModifier, usedFallbackDate, mapping, headerRaw, rawLines: lines };
+  return { rows, warnings: warns, droppedZawya, zawyaExcludedNet, zawyaExcludedGross, droppedNoItem, droppedModifier, usedFallbackDate, mapping, headerRaw, rawLines: lines };
 }
 
 // ==============================================================
@@ -6808,7 +6904,7 @@ routes.roster = function (u) {
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Sign-in stamps are checked against these times. >15 min = ½ day · >60 min = 1 day · >120 min = 2 days · No stamp = 3 days. If the same barista is late 3+ times in a month, the penalty doubles. Deductions show automatically in each barista's salary."));
+    "Sign-in stamps are checked against these times. >15 min = ½ day · >60 min = 1 day · >120 min = 2 days · No stamp = 3 days. If the same barista is late 2+ times in a month, the penalty doubles. Deductions show automatically in each barista's salary."));
   for (const otBranch of ["maadi", "zawya"]) {
     const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
@@ -7326,15 +7422,16 @@ routes.roster = function (u) {
                   const _person = (state.users || []).find(p => p.id === _uid);
                   const _sal = Number(((state.salary_config || {})[_uid] || {}).monthly_salary || 0);
                   const _hrRate = _sal > 0 ? _sal / 30 / 8 : 0;
-                  const _otHours = 4;
-                  const _otAmt = Math.round(_hrRate * _otHours * 100) / 100;
+                  // 2nd shift = 8 h at 1.5× hourly rate
+                  const _otHours = 8;
+                  const _otAmt = Math.round(_hrRate * _otHours * 1.5 * 100) / 100;
                   if (_otAmt > 0) {
                     const _sb = stamp();
                     state.overtime_logs.push({
-                      id: uuid(), user_id: _uid, user_name: _person ? _person.name : _uid,
+                      id: uuid(), user_id: _uid, barista: _person ? _person.name : _uid,
                       date: dayDateStr, month: dayDateStr.slice(0, 7),
-                      hours: _otHours, amount: _otAmt, kind: "double_shift",
-                      note: `⏰ Double shift — morning + night on ${dayDateStr}`,
+                      hours: _otHours, rate: _hrRate, multiplier: 1.5, amount: _otAmt, kind: "double_shift",
+                      note: `⏰ Double shift — 8 h × 1.5× rate on ${dayDateStr}`,
                       approved: true,
                       by: _sb.by, by_name: _sb.by_name, at: _sb.at,
                     });
@@ -8353,13 +8450,23 @@ routes.dashboard = function (u, params) {
     const gmPct = revenue ? (grossProfit / revenue) * 100 : 0;
     const npPct = revenue ? (netProfit / revenue) * 100 : 0;
 
+    // CB Sales % — only meaningful for Zawya (third-party concessions exist at that venue)
+    const salesMetaInRange = (state.sales_meta || []).filter(m => m.branch === branch && m.month >= monthFrom && m.month <= monthTo);
+    const excludedNet = salesMetaInRange.reduce((s, m) => s + (Number(m.excluded_net) || 0), 0);
+    const totalVenueNet = revenue + excludedNet;
+    const cbPct = totalVenueNet > 0 ? (revenue / totalVenueNet) * 100 : null;
+
     // ---------- top KPI cards ----------
-    body.appendChild(el("div", { class: "grid c2" }, [
+    const topKpis = [
       kpi("Revenue (Net)", money(revenue), sales.length + " rows"),
       kpi("Discount", money(discount), (revenue + discount) ? ((discount/(revenue+discount))*100).toFixed(1)+"%" : "—"),
       kpi("Purchases", money(purchTotal), purch.length + " invoices"),
       kpi("Waste events", String(waste.length), money(wasteCost) + " valued"),
-    ]));
+    ];
+    if (cbPct !== null) {
+      topKpis.push(kpi("CB Sales %", cbPct.toFixed(1) + "%", `CB ${money(revenue)} of ${money(totalVenueNet)} venue total`));
+    }
+    body.appendChild(el("div", { class: "grid c2" }, topKpis));
 
     // ---------- PROFITABILITY % CARDS ----------
     body.appendChild(el("div", { class: "card", style: { marginTop: "14px" } }, [
@@ -8861,36 +8968,36 @@ routes.cleaning_log_new = function (u) {
     "الأرضية: كنس وتمسيح منطقة البار",
     "الأكواب والأدوات: إعادة تعبئة وتلميع",
   ];
-  const cleanItems = isAR_clean ? CLEAN_ITEMS_AR_LOC : CLEAN_ITEMS_EN_LOC;
-  let checkedItems = new Array(cleanItems.length).fill(false);
+  let checkedItems = new Array(CLEAN_ITEMS_EN_LOC.length).fill(false);
 
   const checklistCard = el("div", { class: "card", style: { marginBottom: "14px" } });
-  checklistCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "8px", fontSize: "15px" } },
-    isAR_clean ? "🧹 قائمة مهام النظافة" : "🧹 Cleaning Checklist"));
+  checklistCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px", fontSize: "15px" } },
+    "🧹 Cleaning Checklist / قائمة مهام النظافة"));
   checklistCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    isAR_clean
-      ? "✅ كل بند محقق = نقاط في بطاقة أدائك. إكمال ١٠٠٪ يُحقق شارة 'نظافة مثالية'!"
-      : "✅ Each checked item scores points. 100% earns a Clean Sweep badge!"));
+    "✅ Each checked item scores points. 100% earns a Clean Sweep badge! — كل بند محقق = نقاط في بطاقة أدائك."));
 
   const scoreDisplay = el("div", { style: { fontWeight: "700", marginBottom: "10px", color: "var(--accent)" } },
-    isAR_clean ? "النقاط: ٠/١٠٠" : "Score: 0/100");
+    "Score / النقاط: 0/100");
 
-  cleanItems.forEach((item, i) => {
+  CLEAN_ITEMS_EN_LOC.forEach((itemEN, i) => {
+    const itemAR = CLEAN_ITEMS_AR_LOC[i];
     const lbl = el("label", { style: {
       display: "flex", alignItems: "flex-start", gap: "10px",
       padding: "9px 0", borderBottom: "1px solid var(--border)",
-      fontSize: "13.5px", cursor: "pointer", lineHeight: "1.5",
-      direction: isAR_clean ? "rtl" : "ltr",
+      cursor: "pointer",
     }});
-    const chk = el("input", { type: "checkbox", style: { width: "18px", height: "18px", marginTop: "2px", flexShrink: "0", accentColor: "var(--accent)" } });
+    const chk = el("input", { type: "checkbox", style: { width: "18px", height: "18px", marginTop: "4px", flexShrink: "0", accentColor: "var(--accent)" } });
     chk.addEventListener("change", () => {
       checkedItems[i] = chk.checked;
-      const pct = Math.round(checkedItems.filter(Boolean).length / cleanItems.length * 100);
-      scoreDisplay.textContent = isAR_clean ? `النقاط: ${pct}/١٠٠` : `Score: ${pct}/100`;
+      const pct = Math.round(checkedItems.filter(Boolean).length / CLEAN_ITEMS_EN_LOC.length * 100);
+      scoreDisplay.textContent = `Score / النقاط: ${pct}/100`;
       scoreDisplay.style.color = pct >= 80 ? "var(--ok)" : pct >= 50 ? "var(--warn)" : "var(--bad)";
     });
+    const textWrap = el("div", { style: { display: "flex", flexDirection: "column", gap: "2px" } });
+    textWrap.appendChild(el("span", { style: { fontSize: "13.5px", lineHeight: "1.5" } }, itemEN));
+    textWrap.appendChild(el("span", { style: { fontSize: "12.5px", lineHeight: "1.4", color: "var(--muted)", direction: "rtl", textAlign: "right" } }, itemAR));
     lbl.appendChild(chk);
-    lbl.appendChild(el("span", {}, item));
+    lbl.appendChild(textWrap);
     checklistCard.appendChild(lbl);
   });
   checklistCard.appendChild(scoreDisplay);
@@ -9017,7 +9124,7 @@ routes.signin_stamp_new = function (u) {
                                  || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
         const _stampOpeningMs  = new Date(_stampTodayStr + "T" + _stampOpenStr + ":00").getTime();
         const _stampMinsLate   = Math.round((_stampSubmitTime.getTime() - _stampOpeningMs) / 60000);
-        const _earlyBonus      = _stampMinsLate <= -30;
+        const _earlyBonus      = _stampMinsLate <= -15;
 
         state.signin_stamps.push({
           id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
@@ -9075,17 +9182,17 @@ routes.signin_stamp_new = function (u) {
           const salary = Number(((state.salary_config || {})[u.id] || {}).monthly_salary || 0);
           let amount   = penaltyAmount(kind, salary);
 
-          // Doubling rule: >2 late incidents from the same barista this month → double the penalty
+          // Doubling rule: 2nd+ late incident from the same barista this month → double the penalty
           const thisMonth      = todayStr.slice(0, 7);
           const priorLateCount = (state.penalties || []).filter(p =>
             p.auto_late && p.user_id === u.id && p.month === thisMonth
           ).length;
-          const doubled = priorLateCount >= 2;
+          const doubled = priorLateCount >= 1;
           if (doubled) amount = amount * 2;
 
           const kLabels = { half_day: "Half day", full_day: "Full day", two_days: "2 days" };
           const kLabel  = kLabels[kind] || kind;
-          const doubleNote = doubled ? " (×2 — 3rd+ late this month)" : "";
+          const doubleNote = doubled ? " (×2 — 2nd+ late this month)" : "";
 
           state.penalties = state.penalties || [];
           state.penalties.push({
@@ -9166,7 +9273,7 @@ routes.signin_stamp_list = function (u) {
         minsLate = Math.round((new Date(s.at).getTime() - openMs) / 60000);
       } catch(e) { minsLate = 0; }
     }
-    const isEarly   = minsLate <= -30;
+    const isEarly   = minsLate <= -15;
     const isOnTime  = minsLate <= 15;
     const isHalfDay = minsLate > 15  && minsLate <= 60;
     const isFullDay = minsLate > 60  && minsLate <= 120;
@@ -9654,8 +9761,7 @@ routes.leave_list = function (u) {
     }
   }
 
-  draw();           // render schedule immediately — no waiting for calendar
-  loadCalEvents(); // fetch calendar in background, calls draw() again when done
+  draw();
   wrap.appendChild(btnBack());
   return wrap;
 };
@@ -10025,9 +10131,11 @@ routes.handbook = function (u) {
         { type: "subheader", text: "How to Submit a Sign-In Stamp" },
         { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or Zawya).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
         { type: "subheader", text: "Automatic Deduction Rules" },
-        { type: "bullets", items: ["Late 15 min – 60 min: ½ day deducted.", "Late 60 min – 120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 3 or more times in a calendar month, every subsequent penalty in that month is doubled automatically."] },
+        { type: "bullets", items: ["Late 15 min – 60 min: ½ day deducted.", "Late 60 min – 120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 2 or more times in a calendar month, every subsequent penalty in that month is doubled automatically."] },
+        { type: "subheader", text: "Punctuality KPI Impact" },
+        { type: "para", text: "Your Punctuality KPI starts at 100 each month. Late arrivals deduct points directly from that score — not added as a fixed number. Late 16–120 min: −20 pts. Late more than 120 min: −50 pts. No stamp: −100 pts. If deductions exceed your Punctuality score (below 0), the overflow is subtracted from your overall KPI total." },
         { type: "subheader", text: "Early Arrival Bonus" },
-        { type: "para", text: "If your clock-in photo is submitted 30 minutes or more before the scheduled opening time, the system records an Early Arrival Bonus automatically, reflected in the Punctuality KPI." },
+        { type: "para", text: "Arriving 15–30 min before opening adds +5 pts to your Punctuality KPI. Arriving 30+ min early adds +10 pts. Both trigger an automatic bonus on clock-in and are reflected in your monthly KPI score." },
       ],
       ar_content: [
         { type: "para", text: "بصمة الحضور هي سجل الحضور اليومي الرسمي لجميع بريستا الشيفت الصباحي. يجب أن يبدأ كل شيفت صباحي بصورة حضور مُقدَّمة عبر تطبيق العمليات." },
@@ -11117,7 +11225,8 @@ routes.app_guide = function (u) {
         "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
         "Tap <strong>Submit clock-in</strong>.",
         "<strong>⚠ Automatic penalty rules:</strong> Late 1–60 min = <strong>½ day deducted</strong>. Late 61–120 min = <strong>1 full day deducted</strong>. Late more than 120 min = <strong>2 days deducted</strong>. No stamp at all = <strong>3 days deducted</strong>.",
-        "<strong>Repeat offender rule:</strong> If the same barista is late 3 or more times in one calendar month, every further penalty that month is <strong>doubled automatically</strong>.",
+        "<strong>Repeat offender rule:</strong> If the same barista is late 2 or more times in one calendar month, every further penalty that month is <strong>doubled automatically</strong>.",
+        "<strong>Punctuality KPI:</strong> Your score starts at 100 each month. Late 16–120 min = <strong>−20 pts</strong>. Late 120+ min = <strong>−50 pts</strong>. No stamp = <strong>−100 pts</strong>. If deductions exceed your Punctuality score, the overflow reduces your overall KPI total. Arriving 15–30 min early = <strong>+5 pts</strong>. Arriving 30+ min early = <strong>+10 pts</strong>.",
         "<strong>Notifications:</strong> Any stamp 15+ minutes late triggers an immediate in-app alert and email to the owner and head barista. If no stamp is recorded within 1 hour of opening, a second alert is sent automatically.",
       ],
       ar_steps: [
@@ -11505,13 +11614,18 @@ const CLEAN_EN = [
 function kpiCalcTotal(scores) {
   const w = KPI_W();
   const s = scores || {};
+  let total;
   if (s.leadership == null) {
     const lw = w.leadership;
     const others = Object.keys(w).filter(k => k !== 'leadership');
     const bonus = lw / others.length;
-    return others.reduce((sum, k) => sum + (s[k] || 0) * (w[k] + bonus) / 100, 0);
+    total = others.reduce((sum, k) => sum + (s[k] || 0) * (w[k] + bonus) / 100, 0);
+  } else {
+    total = Object.keys(w).reduce((sum, k) => sum + (s[k] || 0) * w[k] / 100, 0);
   }
-  return Object.keys(w).reduce((sum, k) => sum + (s[k] || 0) * w[k] / 100, 0);
+  // Late-penalty overflow: deductions that exceeded the punctuality score spill into the total
+  total = Math.max(0, total - (s._lateOverflow || 0));
+  return total;
 }
 function kpiScoreColor(n) { return n>=85?"var(--ok)":n>=65?"var(--warn)":"var(--bad)"; }
 function kpiGrade(n, isHead) {
@@ -11535,24 +11649,28 @@ function kpiLocalDateStr(ts) {
   const d = new Date(ts);
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
+// Returns { score, overflow } where score is punctuality KPI clamped to [0,110],
+// and overflow is any excess deduction that couldn't be absorbed (spills into total KPI).
+// Logic: start at 100, each shift adds/deducts based on arrival time.
+//   early ≥30 min: +10 | early 15–30 min: +5 | on time: 0 | late ≤120 min: −20 | late >120 min: −50 | no stamp: −100
 function kpiPunctualityScore(userId, cutoff) {
-  const bot    = state.branch_opening_times || {};
-  const today  = new Date();
+  const bot      = state.branch_opening_times || {};
+  const today    = new Date();
   const todayStr = localISODate(today);
 
-  // Build a map of stamp date+branch → stamp record for quick lookup
   const stampMap = {};
   (state.signin_stamps||[]).filter(s => s.by === userId).forEach(s => {
     const key = localISODate(new Date(s.at)) + "|" + (s.branch||"maadi").toLowerCase();
-    if (!stampMap[key]) stampMap[key] = s; // keep earliest stamp per day/branch
+    if (!stampMap[key]) stampMap[key] = s;
   });
 
-  // Find all morning shifts scheduled for this user in the scoring window
-  const dayScores = [];
+  let delta    = 0;
+  let shiftsFound = 0;
   const cutoffDate = new Date(cutoff);
+
   for (let d = new Date(cutoffDate); ; d.setDate(d.getDate() + 1)) {
     const dateStr = localISODate(d);
-    if (dateStr >= todayStr) break; // don't score future/today (stamp may not be due yet)
+    if (dateStr >= todayStr) break;
     const dayIndex = (d.getDay() + 6) % 7;
     const dayKey   = ROSTER_DAYS[dayIndex];
     const weekOf   = mondayOf(dateStr);
@@ -11561,38 +11679,48 @@ function kpiPunctualityScore(userId, cutoff) {
       r.shift === "morning" && r.user_id === userId
     );
     for (const entry of entries) {
+      shiftsFound++;
       const branch  = (entry.branch||"maadi").toLowerCase();
       const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
       const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
       const st      = stampMap[dateStr + "|" + branch];
       if (!st) {
-        dayScores.push(0); // no stamp = worst score
+        delta -= 100;
       } else {
         const diff = Math.round((new Date(st.at).getTime() - openMs) / 60000);
-        // early (≥30 min before): full score; on-time (<15 min late): full; half-day late: 50; full-day: 20
-        dayScores.push(diff <= -30 ? 100 : diff <= 15 ? 100 : diff <= 120 ? 50 : 20);
+        if      (diff <= -30) delta += 10;
+        else if (diff <= -15) delta +=  5;
+        else if (diff <=  15) delta +=  0;
+        else if (diff <= 120) delta -= 20;
+        else                  delta -= 50;
       }
     }
   }
 
-  // If no roster data, fall back to scoring stamps directly (no missing-stamp penalty)
-  if (dayScores.length === 0) {
+  // Fallback when no roster data: score only from submitted stamps, no missing-stamp penalty
+  if (shiftsFound === 0) {
     const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
     if (!stamps.length) return null;
-    const scores = stamps.map(s => {
+    stamps.forEach(s => {
       try {
         const submitTime  = new Date(s.at);
         const branch      = (s.branch||"maadi").toLowerCase();
         const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
         const scheduledMs = new Date(localISODate(submitTime) + "T" + openStr + ":00").getTime();
         const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
-        return diff <= -30 ? 100 : diff <= 15 ? 100 : diff <= 120 ? 50 : 20;
-      } catch(e) { return 70; }
+        if      (diff <= -30) delta += 10;
+        else if (diff <= -15) delta +=  5;
+        else if (diff <=  15) delta +=  0;
+        else if (diff <= 120) delta -= 20;
+        else                  delta -= 50;
+      } catch(e) {}
     });
-    return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
   }
 
-  return Math.round(dayScores.reduce((a,b)=>a+b,0)/dayScores.length);
+  const raw      = 100 + delta;
+  const score    = Math.min(110, Math.max(0, raw));
+  const overflow = Math.max(0, -raw); // excess deduction beyond 0 → spills into total KPI
+  return { score, overflow };
 }
 // Applies 3-day deductions for morning-shift baristas who submitted no stamp on a given date.
 // Returns the number of new penalties created.
@@ -11999,7 +12127,9 @@ function kpiGetUserScores(userId) {
   const month  = new Date().toISOString().slice(0,7);
 
   // ── AUTO from source tiles ──────────────────────────────────────────────
-  const punctuality  = kpiPunctualityScore(userId, cutoff);
+  const _punctResult = kpiPunctualityScore(userId, cutoff);
+  const punctuality  = _punctResult != null ? _punctResult.score : null;
+  const _lateOverflow = _punctResult != null ? _punctResult.overflow : 0;
   const waste        = kpiWasteScore(userId, cutoff);           // ← waste_new entries
   const cleanliness  = kpiCleanlinessScore(userId, cutoff);    // ← cleaning_log entries
   const customer     = kpiCustomerScore(userId);
@@ -12018,9 +12148,10 @@ function kpiGetUserScores(userId) {
     customer:  customer ?? (manual.customer ?? null),
     // Teamwork: auto-calculated from reorder compliance; manual override by owner only
     teamwork:   teamworkAuto ?? (manual.teamwork ?? null),
-    leadership: kpiLeadershipScore(userId, month) ?? null,
-    hygiene:    kpiHygieneScore(userId, month),
-    training:   kpiTrainingScore(userId),
+    leadership:    kpiLeadershipScore(userId, month) ?? null,
+    hygiene:       kpiHygieneScore(userId, month),
+    training:      kpiTrainingScore(userId),
+    _lateOverflow: _lateOverflow,
   };
 
   const cats = Object.keys(KPI_W());
@@ -13432,7 +13563,8 @@ routes.suggestions = function(u) {
         const meta = el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } });
         const right = el("div", { style: { display: "flex", gap: "8px", alignItems: "center" } });
         right.appendChild(el("span", { class: "muted small" }, e.date));
-        right.appendChild(el("span", { style: { fontSize: "12px", fontWeight: "600", color: "var(--ink-dim)" } }, `— ${e.author_name}`));
+        const ownerNameLabel = e.anonymous ? `— Anonymous (${e.author_name})` : `— ${e.author_name}`;
+        right.appendChild(el("span", { style: { fontSize: "12px", fontWeight: "600", color: "var(--ink-dim)" } }, ownerNameLabel));
         meta.appendChild(el("span", { style: { fontWeight: "700", fontSize: "13px", opacity: ".5" } }, e.public ? "✓ public" : "private"));
         meta.appendChild(right);
         row.appendChild(meta);
@@ -13487,14 +13619,24 @@ routes.suggestions = function(u) {
     const textArea = el("textarea", { placeholder: "Describe your idea or issue…", rows: "5", style: { marginBottom: "12px" } });
     formCard.appendChild(textArea);
 
+    const anonRow = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" } });
+    const anonCheck = el("input", { type: "checkbox", id: "sg_anon" });
+    const anonLabel = el("label", { for: "sg_anon", style: { margin: "0", cursor: "pointer", fontSize: "14px", color: "var(--ink-dim)" } });
+    anonLabel.appendChild(document.createTextNode("Submit anonymously"));
+    anonRow.appendChild(anonCheck);
+    anonRow.appendChild(anonLabel);
+    formCard.appendChild(anonRow);
+
     const submitBtn = el("button", { class: "btn" }, "Submit");
     submitBtn.addEventListener("click", () => {
       const text = textArea.value.trim();
       if (!text) { toast("Please write something first.", "error"); return; }
+      const isAnon = anonCheck.checked;
       const entry = {
         id: uuid(),
         author_uid: u.uid || u.id,
         author_name: u.name,
+        anonymous: isAnon,
         type: selectedType,
         text,
         date: new Date().toISOString().slice(0, 10),
@@ -13503,15 +13645,17 @@ routes.suggestions = function(u) {
       state.suggestions.push(entry);
       saveState();
       textArea.value = "";
+      anonCheck.checked = false;
       radSugg.checked = true;
       selectedType = "suggestion";
       toast("Submitted — thank you! The owner has been notified.");
       renderPublicBoard();
       // Email owner
       const ownerEmail = (state.settings.owner_email || "coffeebeats@haidiyacoub.com").trim();
-      const typeLabel  = selectedType === "complaint" ? "Complaint" : "Suggestion";
-      const subj = encodeURIComponent(`New ${typeLabel} from ${u.name}`);
-      const body = encodeURIComponent(`${typeLabel} submitted by ${u.name}\nDate: ${entry.date}\n\n${text}\n\n— Coffee Beats Operations App`);
+      const typeLabel  = entry.type === "complaint" ? "Complaint" : "Suggestion";
+      const displayName = isAnon ? `Anonymous (${u.name})` : u.name;
+      const subj = encodeURIComponent(`New ${typeLabel} from ${isAnon ? "Anonymous" : u.name}`);
+      const body = encodeURIComponent(`${typeLabel} submitted by ${displayName}\nDate: ${entry.date}\n\n${text}\n\n— Coffee Beats Operations App`);
       try { window.open(`mailto:${encodeURIComponent(ownerEmail)}?subject=${subj}&body=${body}`, "_blank"); } catch(e) {}
     });
     formCard.appendChild(submitBtn);
