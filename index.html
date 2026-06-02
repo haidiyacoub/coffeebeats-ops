@@ -1083,6 +1083,7 @@ function migrateState(s) {
   };
   s.inv_engine_sales_data = s.inv_engine_sales_data || [];
   s.inv_engine_recipes    = s.inv_engine_recipes    || [];
+  s.events_config         = s.events_config         || [];
   s.training_quizzes      = s.training_quizzes      || [];
   if (Object.keys(s.inv_engine.thresholds).length === 0 && Array.isArray(s.items) && s.items.length > 0) {
     _seedInvEngineThresholds(s);
@@ -6064,27 +6065,92 @@ routes.overheads = function (u) {
 // ==============================================================
 routes.bank = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Bank ledger (owner)", "Every owner-paid purchase + petty cash top-ups."));
-  const rows = state.bank_ledger.slice().sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
-  const total = rows.reduce((s,r) => s + (Number(r.amount)||0), 0);
-  wrap.appendChild(el("div", { class: "card" }, [
-    el("div", { class: "muted" }, "Net outflow (last 200 entries)"),
-    el("div", { style: { fontSize: "26px", fontWeight: "700" } }, money(total)),
+  wrap.appendChild(header("Bank ledger (owner)", "Bank & card payments only. Petty cash is tracked separately below."));
+
+  // ── Petty Cash Summary (completely separate from bank) ──────
+  const pcMaadi   = pettyCashBalance("maadi");
+  const pcZawya   = pettyCashBalance("zawya");
+  const pcCombined = pcMaadi + pcZawya;
+  const pcCard = el("div", { class: "card", style: { borderColor: "var(--accent)", marginBottom: "16px" } });
+  pcCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" } }, "💵 Petty Cash — both branches"));
+  pcCard.appendChild(el("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "flex-end" } }, [
+    el("div", {}, [
+      el("div", { class: "muted small" }, "Maadi"),
+      el("div", { style: { fontSize: "22px", fontWeight: "700", color: pcMaadi < 0 ? "var(--bad)" : "var(--ink)" } }, money(pcMaadi)),
+    ]),
+    el("div", { style: { color: "var(--border)", fontSize: "20px", paddingBottom: "2px" } }, "+"),
+    el("div", {}, [
+      el("div", { class: "muted small" }, "Zawya"),
+      el("div", { style: { fontSize: "22px", fontWeight: "700", color: pcZawya < 0 ? "var(--bad)" : "var(--ink)" } }, money(pcZawya)),
+    ]),
+    el("div", { style: { color: "var(--border)", fontSize: "20px", paddingBottom: "2px" } }, "="),
+    el("div", {}, [
+      el("div", { class: "muted small" }, "Combined"),
+      el("div", { style: { fontSize: "26px", fontWeight: "700", color: pcCombined < PETTY_CASH_ALERT ? "var(--bad)" : "var(--ok)" } }, money(pcCombined)),
+    ]),
   ]));
-  wrap.appendChild(el("button", { class: "btn secondary", style: { marginTop:"12px" }, onClick: addManualBank }, "➕ Log manual bank entry"));
-  const list = el("div", { class: "list" });
-  for (const r of rows) {
-    list.appendChild(el("div", { class: "row" }, [
-      el("div", { class: "grow" }, [
-        el("div", { class: "title" }, `${r.supplier} — ${money(r.amount)}`),
-        el("div", { class: "sub" }, `${r.date} · ${r.type}${r.note?` · ${r.note}`:""}`),
-        el("div", { class: "sub" }, `by ${r.by_name} · ${fmtDate(r.at)}`),
-      ]),
-    ]));
+  if (pcCombined < PETTY_CASH_ALERT) {
+    pcCard.appendChild(el("div", { class: "muted small", style: { color: "var(--bad)", marginTop: "6px" } }, `⚠ Combined below ${money(PETTY_CASH_ALERT)} — top-up needed`));
   }
-  if (rows.length === 0) list.appendChild(el("div", { class: "muted" }, "No entries yet."));
-  wrap.appendChild(list);
+  wrap.appendChild(pcCard);
+
+  // ── Bank entries only (exclude petty_cash_topup) ────────────
+  const BANK_TYPES = new Set(["purchase_payment","purchase_credit_card","manual","maadi_deposit"]);
+  const allSorted  = state.bank_ledger.slice().sort((a,b) => b.at.localeCompare(a.at));
+  const bankRows   = allSorted.filter(r => r.type !== "petty_cash_topup").slice(0, 200);
+  const topupRows  = allSorted.filter(r => r.type === "petty_cash_topup").slice(0, 200);
+  const bankTotal  = bankRows.reduce((s,r) => s + (Number(r.amount)||0), 0);
+
+  wrap.appendChild(el("div", { class: "card", style: { marginBottom: "8px" } }, [
+    el("div", { class: "muted" }, "🏦 Bank — net outflow (last 200 entries)"),
+    el("div", { style: { fontSize: "26px", fontWeight: "700" } }, money(bankTotal)),
+  ]));
+
+  wrap.appendChild(el("button", { class: "btn secondary", style: { marginTop:"12px", marginBottom:"8px" }, onClick: addManualBank }, "➕ Log manual bank entry"));
+
+  // toggle to show petty cash top-ups
+  let showTopups = false;
+  const toggleBtn = el("button", { class: "btn ghost small", style: { marginLeft: "8px", marginTop:"12px", marginBottom:"8px" }, onClick: () => {
+    showTopups = !showTopups;
+    toggleBtn.textContent = showTopups ? "Hide petty cash top-ups" : "Show petty cash top-ups";
+    topupSection.style.display = showTopups ? "" : "none";
+  }}, "Show petty cash top-ups");
+  wrap.appendChild(toggleBtn);
+
+  function makeEntryRow(r) {
+    const typeLabel = {
+      purchase_payment: "Bank transfer",
+      purchase_credit_card: "Credit card",
+      petty_cash_topup: "Petty cash top-up",
+      maadi_deposit: "Maadi ATM deposit",
+      manual: "Manual",
+    }[r.type] || r.type;
+    return el("div", { class: "row" }, [
+      el("div", { class: "grow" }, [
+        el("div", { class: "title" }, `${r.supplier || "—"} — ${money(r.amount)}`),
+        el("div", { class: "sub" }, `${r.date} · ${typeLabel}${r.note ? ` · ${r.note}` : ""}`),
+        el("div", { class: "sub" }, `by ${r.by_name || "—"} · ${fmtDate(r.at)}`),
+      ]),
+    ]);
+  }
+
+  const bankList = el("div", { class: "list" });
+  for (const r of bankRows) bankList.appendChild(makeEntryRow(r));
+  if (bankRows.length === 0) bankList.appendChild(el("div", { class: "muted" }, "No bank entries yet."));
+  wrap.appendChild(bankList);
+
+  // Petty cash top-ups section (hidden by default)
+  const topupTotal = topupRows.reduce((s,r) => s + (Number(r.amount)||0), 0);
+  const topupSection = el("div", { style: { display: "none", marginTop: "16px" } });
+  topupSection.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, `💵 Petty cash top-ups — ${money(topupTotal)}`));
+  const topupList = el("div", { class: "list" });
+  for (const r of topupRows) topupList.appendChild(makeEntryRow(r));
+  if (topupRows.length === 0) topupList.appendChild(el("div", { class: "muted" }, "No top-up entries yet."));
+  topupSection.appendChild(topupList);
+  wrap.appendChild(topupSection);
+
   wrap.appendChild(btnBack());
+
   function addManualBank() {
     openPrompt({
       title: "Manual bank entry",
@@ -8042,8 +8108,8 @@ routes.users = function (u) {
       sheet.appendChild(delBtn);
     }
 
-    // PIN change (self only)
-    if (isSelf) {
+    // PIN change (self or owner)
+    if (isSelf || isOwner) {
       const pw = el("div", { style: { marginTop: "16px", padding: "14px", background: "var(--surface-2,var(--surface-alt,#f8f8f8))", borderRadius: "12px" } });
       pw.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "2px" } }, "Change PIN"));
       pw.appendChild(el("div", { class: "muted small", style: { marginBottom: "12px" } }, "4-digit code used to sign in to the app."));
@@ -8226,8 +8292,36 @@ routes.dashboard = function (u, params) {
   let monthFrom = (params && params.month) || _defaultMonth;
   let monthTo   = (params && params.month) || _defaultMonth;
 
-  const nav = makeBranchPicker(["maadi","zawya"], () => branch, b => { branch = b; draw(); });
+  const nav = makeBranchPicker(["maadi","zawya","events"], () => branch, b => { branch = b; eventCard.style.display = b === "events" ? "" : "none"; draw(); });
   wrap.appendChild(nav);
+
+  // ---- Events config card (only visible when Events tab is active) ----
+  const eventCard = el("div", { class: "card", style: { marginTop: "10px", display: branch === "events" ? "" : "none", borderColor: "var(--accent-2)" } });
+  eventCard.appendChild(el("h2", {}, "🎪 External Event"));
+  eventCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    "Sales data is pulled from Maadi for the dates you specify. Enter one date per line (YYYY-MM-DD)."));
+  const _ec = (state.events_config && state.events_config[0]) || {};
+  const evNameIn = el("input", { type: "text", placeholder: "Event name (e.g. Alma Market, El Gouna Festival)", value: _ec.name || "",
+    style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border)", boxSizing: "border-box", marginBottom: "8px" } });
+  const evDaysIn = el("textarea", { placeholder: "Event dates — one per line:\n2026-03-15\n2026-03-16\n2026-03-17", rows: 4,
+    style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border)", boxSizing: "border-box", fontFamily: "monospace", marginBottom: "8px" } });
+  evDaysIn.value = _ec.days || "";
+  const evNotesIn = el("textarea", { placeholder: "Notes (optional) — location, organiser, anything useful", rows: 2,
+    style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border)", boxSizing: "border-box", marginBottom: "8px" } });
+  evNotesIn.value = _ec.notes || "";
+  const saveEvBtn = el("button", { class: "btn", onClick: () => {
+    state.events_config = [{ name: evNameIn.value.trim(), days: evDaysIn.value.trim(), notes: evNotesIn.value.trim() }];
+    saveState();
+    toast("Event config saved");
+    draw();
+  }}, "Save & apply");
+  eventCard.appendChild(evNameIn);
+  eventCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, "Event dates (one per line, YYYY-MM-DD):"));
+  eventCard.appendChild(evDaysIn);
+  eventCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, "Notes:"));
+  eventCard.appendChild(evNotesIn);
+  eventCard.appendChild(saveEvBtn);
+  wrap.appendChild(eventCard);
 
   // ---- Date range picker ----
   const rangeCard = el("div", { class: "card", style: { marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "14px", alignItems: "flex-end" } });
@@ -8313,24 +8407,40 @@ routes.dashboard = function (u, params) {
     diag.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "Sales data in the app"));
     const rangeMonths = monthsInRange(monthFrom, monthTo);
     const rangeLabel = monthFrom === monthTo ? monthFrom : `${monthFrom} → ${monthTo} (${rangeMonths.length} months)`;
-    diag.appendChild(el("div", { style: { fontSize: "20px", fontWeight: "700" } },
-      `${state.sales.length} total rows · ${branchSet.size} branches · ${currentMonths.length} months stored`));
-    diag.appendChild(el("div", { class: "muted small", style: { marginTop: "4px" } }, `Showing: ${rangeLabel}`));
-    if (currentMonths.length) {
-      const combos = [...salesIndex.entries()].map(([k,count]) => { const [b,m]=k.split("|"); return { b, m, count }; })
-        .sort((a,bb) => bb.m.localeCompare(a.m) || a.b.localeCompare(bb.b));
-      const pills = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" } });
-      for (const c of combos.slice(0, 24)) {
-        const inSel = (c.b === branch && c.m >= monthFrom && c.m <= monthTo);
-        pills.appendChild(el("button", {
-          class: "chip",
-          style: inSel ? { background: "var(--accent)", color: "#2b1810", fontWeight: "700" } : {},
-          onClick: () => { branch = c.b; monthFrom = c.m; monthTo = c.m; mFromInput.value = c.m; mToInput.value = c.m; draw(); },
-        }, `${c.b} · ${c.m} (${c.count})`));
+    if (branch === "events") {
+      const evName = _evCfg.name || "Unnamed event";
+      const evDayCount = _evDays.size;
+      diag.appendChild(el("div", { style: { fontSize: "20px", fontWeight: "700" } }, `🎪 ${evName}`));
+      diag.appendChild(el("div", { class: "muted small", style: { marginTop: "4px" } },
+        evDayCount ? `${evDayCount} event day(s) · sourced from Maadi sales data` : "No dates configured — add dates in the event config above"));
+      if (_evCfg.notes) diag.appendChild(el("div", { class: "muted small" }, _evCfg.notes));
+      if (evDayCount) {
+        const pills = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" } });
+        [..._evDays].sort().forEach(d => pills.appendChild(el("span", { class: "chip" }, d)));
+        diag.appendChild(pills);
       }
-      diag.appendChild(pills);
     } else {
-      diag.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, "No sales uploaded yet. Use Upload Sales (POS) to add a CSV."));
+      diag.appendChild(el("div", { style: { fontSize: "20px", fontWeight: "700" } },
+        `${state.sales.length} total rows · ${branchSet.size} branches · ${currentMonths.length} months stored`));
+      diag.appendChild(el("div", { class: "muted small", style: { marginTop: "4px" } }, `Showing: ${rangeLabel}`));
+    }
+    if (branch !== "events") {
+      if (currentMonths.length) {
+        const combos = [...salesIndex.entries()].map(([k,count]) => { const [b,m]=k.split("|"); return { b, m, count }; })
+          .sort((a,bb) => bb.m.localeCompare(a.m) || a.b.localeCompare(bb.b));
+        const pills = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" } });
+        for (const c of combos.slice(0, 24)) {
+          const inSel = (c.b === branch && c.m >= monthFrom && c.m <= monthTo);
+          pills.appendChild(el("button", {
+            class: "chip",
+            style: inSel ? { background: "var(--accent)", color: "#2b1810", fontWeight: "700" } : {},
+            onClick: () => { branch = c.b; monthFrom = c.m; monthTo = c.m; mFromInput.value = c.m; mToInput.value = c.m; draw(); },
+          }, `${c.b} · ${c.m} (${c.count})`));
+        }
+        diag.appendChild(pills);
+      } else {
+        diag.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, "No sales uploaded yet. Use Upload Sales (POS) to add a CSV."));
+      }
     }
 
     body.innerHTML = "";
@@ -8339,19 +8449,30 @@ routes.dashboard = function (u, params) {
 
     // filter — case-insensitive branch + date range
     const inRange = (d) => { const nd = normalizeDate(d).slice(0,7); return nd >= monthFrom && nd <= monthTo; };
+
+    // Events branch: use Maadi sales filtered to specific event days
+    const _evCfg = (state.events_config && state.events_config[0]) || {};
+    const _evDays = new Set((_evCfg.days || "").split(/[\n,]+/).map(d => d.trim()).filter(Boolean));
+    const _isEventDay = (d) => _evDays.has(normalizeDate(d).slice(0,10));
+
     // Filter by branch + date, and strip Zawya concession items from all calculations at runtime
-    const sales = state.sales.filter(s =>
-      branchKey(s.branch) === branch &&
-      inRange(s.date) &&
-      !(branch === "zawya" && isZawyaExcluded(s.category, s.item))
-    );
-    const waste = state.waste.filter(w => branchKey(w.branch) === branch && (w.at||"").slice(0,7) >= monthFrom && (w.at||"").slice(0,7) <= monthTo);
-    const purch = state.purchases.filter(p => branchKey(p.branch) === branch && inRange(p.date));
+    const sales = state.sales.filter(s => {
+      if (branch === "events") return branchKey(s.branch) === "maadi" && _isEventDay(s.date);
+      return branchKey(s.branch) === branch && inRange(s.date) && !(branch === "zawya" && isZawyaExcluded(s.category, s.item));
+    });
+    const waste = branch === "events"
+      ? state.waste.filter(w => branchKey(w.branch) === "maadi" && _isEventDay((w.at||"").slice(0,10)))
+      : state.waste.filter(w => branchKey(w.branch) === branch && (w.at||"").slice(0,7) >= monthFrom && (w.at||"").slice(0,7) <= monthTo);
+    const purch = branch === "events"
+      ? state.purchases.filter(p => branchKey(p.branch) === "maadi" && _isEventDay(p.date))
+      : state.purchases.filter(p => branchKey(p.branch) === branch && inRange(p.date));
 
     // Empty-state: tell the user exactly what went wrong if their current filter has no data
     if (sales.length === 0 && state.sales.length > 0) {
-      body.appendChild(el("div", { class: "banner-arch", style: { borderColor: "var(--bad)", color: "var(--bad)", fontWeight: "700" } },
-        `No sales for ${branch} · ${rangeLabel}. Tap one of the pills above to jump to data you have.`));
+      const emptyMsg = branch === "events"
+        ? (_evDays.size === 0 ? "No event dates configured. Enter dates in the event config above and click Save & apply." : `No Maadi sales found for the configured event date(s). Check that the dates match imported Maadi sales.`)
+        : `No sales for ${branch} · ${rangeLabel}. Tap one of the pills above to jump to data you have.`;
+      body.appendChild(el("div", { class: "banner-arch", style: { borderColor: "var(--bad)", color: "var(--bad)", fontWeight: "700" } }, emptyMsg));
     }
 
     const revenue = sales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
@@ -8421,10 +8542,11 @@ routes.dashboard = function (u, params) {
     state.salaries = state.salaries || [];
     // Only PAID overheads impact net profit. Unpaid recurring bills (electricity, etc.)
     // are shown in the Overheads screen but excluded here until marked paid.
-    const ohRows = state.overheads.filter(o =>
-      (o.branch ? branchKey(o.branch) === branch : true) &&
+    const _ohBranch = branch === "events" ? "maadi" : branch;
+    const ohRows = branch === "events" ? [] : state.overheads.filter(o =>
+      (o.branch ? branchKey(o.branch) === _ohBranch : true) &&
       ((o.month || "") >= monthFrom && (o.month || "") <= monthTo) &&
-      (o.paid !== false) // legacy rows without the flag count as paid
+      (o.paid !== false)
     );
     const overheadsTotal = ohRows.reduce((s,o) => s + (Number(o.amount)||0), 0);
     // Salaries: multiply by number of months in range
