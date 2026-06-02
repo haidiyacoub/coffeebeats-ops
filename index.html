@@ -6946,6 +6946,53 @@ function getCalendarContext(dateStr) {
   return { holidays, inRamadan };
 }
 
+// ── Coffee Beats Events Calendar — shared constants/helpers ─────────────
+const CB_CAL_ID = "c_2f564847884c6daa36066faf75962669f717c476550c0e8acc94c19120aa8c6b@group.calendar.google.com";
+
+function calItemDate(item) {
+  if (item.start.date) return item.start.date;
+  const dt = item.start.dateTime;
+  if (!dt) return "";
+  const utcMs = new Date(dt).getTime();
+  return new Date(utcMs + 2 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+function calApiHour(dtStr) {
+  if (!dtStr || dtStr.length < 16) return 10;
+  const utcMs = new Date(dtStr).getTime();
+  const cairoMs = utcMs + 2 * 3600 * 1000;
+  const d = new Date(cairoMs);
+  return d.getUTCHours() + d.getUTCMinutes() / 60;
+}
+
+/** Fetch all CB Events calendar entries between isoFrom and isoTo (YYYY-MM-DD).
+ *  Returns [{date, summary, startHour}] or throws. */
+async function fetchCalEventsRange(isoFrom, isoTo) {
+  const apiKey = (state.gcal_api_key || "").trim();
+  if (!apiKey) throw new Error("No Google Calendar API key — add it in the Schedule page → Connect Calendar.");
+  const tMax = new Date(isoTo + "T00:00:00");
+  tMax.setDate(tMax.getDate() + 1);
+  const tMaxStr = tMax.toISOString().slice(0,10) + "T00:00:00+02:00";
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CB_CAL_ID)}/events`
+    + `?key=${encodeURIComponent(apiKey)}&singleEvents=true&orderBy=startTime`
+    + `&timeMin=${encodeURIComponent(isoFrom + "T00:00:00+02:00")}`
+    + `&timeMax=${encodeURIComponent(tMaxStr)}`;
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), 10000);
+  const res = await fetch(url, { signal: ctrl.signal });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return (data.items || []).map(item => ({
+    date: calItemDate(item),
+    summary: item.summary || "Event",
+    startHour: item.start.dateTime ? calApiHour(item.start.dateTime) : 10,
+  })).filter(e => e.date);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 routes.roster = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Weekly schedule", "Morning & night shifts for Maadi, Zawya and Coffee Beats Events."));
@@ -7275,25 +7322,7 @@ routes.roster = function (u) {
   // ── Coffee Beats Events — Google Calendar API v3 ────────────
   let calEvents = []; // [{ date: "YYYY-MM-DD", summary: string, startHour: number }]
   let calStatus = "idle";
-  const CB_CAL_ID = "c_2f564847884c6daa36066faf75962669f717c476550c0e8acc94c19120aa8c6b@group.calendar.google.com";
-
-  // Convert a Google Calendar API dateTime string to Cairo local date "YYYY-MM-DD"
-  function calItemDate(item) {
-    if (item.start.date) return item.start.date; // all-day event — already a local date
-    const dt = item.start.dateTime;
-    if (!dt) return "";
-    // Parse to UTC ms, then add Cairo offset (UTC+2) to get local midnight date
-    const utcMs = new Date(dt).getTime();
-    return new Date(utcMs + 2 * 3600 * 1000).toISOString().slice(0, 10);
-  }
-
-  function calApiHour(dtStr) {
-    if (!dtStr || dtStr.length < 16) return 10;
-    const utcMs = new Date(dtStr).getTime();
-    const cairoMs = utcMs + 2 * 3600 * 1000;
-    const d = new Date(cairoMs);
-    return d.getUTCHours() + d.getUTCMinutes() / 60;
-  }
+  // CB_CAL_ID, calItemDate, calApiHour defined at module scope above
 
   async function loadCalEvents() {
     const apiKey = (state.gcal_api_key || "").trim();
@@ -8382,29 +8411,81 @@ routes.dashboard = function (u, params) {
   // ---- Events config card (only visible when Events tab is active) ----
   const eventCard = el("div", { class: "card", style: { marginTop: "10px", display: branch === "events" ? "" : "none", borderColor: "var(--accent-2)" } });
   eventCard.appendChild(el("h2", {}, "🎪 External Event"));
-  eventCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Sales data is pulled from Maadi for the dates you specify. Enter one date per line (YYYY-MM-DD)."));
   const _ec = (state.events_config && state.events_config[0]) || {};
-  const evNameIn = el("input", { type: "text", placeholder: "Event name (e.g. Alma Market, El Gouna Festival)", value: _ec.name || "",
+  const evNameIn = el("input", { type: "text", placeholder: "Display name (e.g. Alma Market, El Gouna Festival)", value: _ec.name || "",
     style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border)", boxSizing: "border-box", marginBottom: "8px" } });
-  const evDaysIn = el("textarea", { placeholder: "Event dates — one per line:\n2026-03-15\n2026-03-16\n2026-03-17", rows: 4,
-    style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border)", boxSizing: "border-box", fontFamily: "monospace", marginBottom: "8px" } });
-  evDaysIn.value = _ec.days || "";
   const evNotesIn = el("textarea", { placeholder: "Notes (optional) — location, organiser, anything useful", rows: 2,
     style: { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border)", boxSizing: "border-box", marginBottom: "8px" } });
   evNotesIn.value = _ec.notes || "";
+
+  // Dates display — auto-pulled from state.special_dates (branch="events") in the selected range
+  const evDatesDisplay = el("div", { style: { marginBottom: "8px" } });
+
+  // Sync from Google Calendar button
+  const calSyncStatus = el("div", { class: "muted small", style: { marginTop: "6px" } });
+  const calSyncBtn = el("button", { class: "btn ghost", style: { marginTop: "6px" } }, "📅 Sync from Google Calendar");
+  calSyncBtn.addEventListener("click", async () => {
+    calSyncBtn.disabled = true;
+    calSyncStatus.textContent = "⏳ Fetching…";
+    try {
+      const from = monthFrom + "-01";
+      const toDate = new Date(monthTo + "-01"); toDate.setMonth(toDate.getMonth() + 1); toDate.setDate(toDate.getDate() - 1);
+      const to = toDate.toISOString().slice(0,10);
+      const fetched = await fetchCalEventsRange(from, to);
+      let added = 0;
+      for (const ev of fetched) {
+        const exists = (state.special_dates || []).some(e => e.branch === "events" && e.date === ev.date && e.title === ev.summary);
+        if (!exists) {
+          const s = stamp();
+          state.special_dates.push({ id: uuid(), date: ev.date, branch: "events", title: ev.summary, note: "", by: s.by, by_name: s.by_name, at: s.at });
+          added++;
+        }
+      }
+      saveState();
+      calSyncStatus.textContent = fetched.length === 0 ? "✅ No events found in this date range on the calendar." : `✅ ${fetched.length} event day(s) found · ${added} new added.`;
+      renderEvDates();
+      draw();
+    } catch (e) {
+      calSyncStatus.textContent = `❌ ${e.message}`;
+    }
+    calSyncBtn.disabled = false;
+  });
+
+  function renderEvDates() {
+    evDatesDisplay.innerHTML = "";
+    const evDates = (state.special_dates || []).filter(e => e.branch === "events").sort((a,b) => a.date.localeCompare(b.date));
+    if (evDates.length === 0) {
+      evDatesDisplay.appendChild(el("div", { class: "muted small" }, "No event dates found. Click \"Sync from Google Calendar\" or add them via the Schedule page → Special dates."));
+      return;
+    }
+    evDatesDisplay.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } },
+      `${evDates.length} event day(s) in the app (showing all — date range filter applies on the dashboard):`));
+    const pills = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
+    for (const e of evDates) {
+      const chip = el("span", { class: "chip" }, `${e.date}${e.title ? " · " + e.title : ""}`);
+      pills.appendChild(chip);
+    }
+    evDatesDisplay.appendChild(pills);
+  }
+
   const saveEvBtn = el("button", { class: "btn", onClick: () => {
-    state.events_config = [{ name: evNameIn.value.trim(), days: evDaysIn.value.trim(), notes: evNotesIn.value.trim() }];
+    state.events_config = [{ name: evNameIn.value.trim(), notes: evNotesIn.value.trim() }];
     saveState();
     toast("Event config saved");
     draw();
-  }}, "Save & apply");
+  }}, "Save label & notes");
+
+  eventCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } },
+    "Event dates are pulled automatically from the Calendar in the Schedule page. Use the button below to sync any new dates."));
   eventCard.appendChild(evNameIn);
-  eventCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, "Event dates (one per line, YYYY-MM-DD):"));
-  eventCard.appendChild(evDaysIn);
   eventCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } }, "Notes:"));
   eventCard.appendChild(evNotesIn);
   eventCard.appendChild(saveEvBtn);
+  eventCard.appendChild(el("div", { class: "hr", style: { margin: "12px 0" } }));
+  eventCard.appendChild(evDatesDisplay);
+  eventCard.appendChild(calSyncBtn);
+  eventCard.appendChild(calSyncStatus);
+  renderEvDates();
   wrap.appendChild(eventCard);
 
   // ---- Date range picker ----
@@ -8492,15 +8573,19 @@ routes.dashboard = function (u, params) {
     const rangeMonths = monthsInRange(monthFrom, monthTo);
     const rangeLabel = monthFrom === monthTo ? monthFrom : `${monthFrom} → ${monthTo} (${rangeMonths.length} months)`;
     if (branch === "events") {
-      const evName = _evCfg.name || "Unnamed event";
+      const evName = _evCfg.name || "Events";
       const evDayCount = _evDays.size;
+      // Get full event entries for display (with titles)
+      const _evEntries = (state.special_dates || [])
+        .filter(e => e.branch === "events" && e.date >= monthFrom + "-01" && e.date <= monthTo + "-31")
+        .sort((a,b) => a.date.localeCompare(b.date));
       diag.appendChild(el("div", { style: { fontSize: "20px", fontWeight: "700" } }, `🎪 ${evName}`));
       diag.appendChild(el("div", { class: "muted small", style: { marginTop: "4px" } },
-        evDayCount ? `${evDayCount} event day(s) · sourced from Maadi sales data` : "No dates configured — add dates in the event config above"));
+        evDayCount ? `${evDayCount} event day(s) in range · sourced from Maadi sales data` : "No event dates in this range — sync from Calendar or add them in Schedule → Special Dates"));
       if (_evCfg.notes) diag.appendChild(el("div", { class: "muted small" }, _evCfg.notes));
       if (evDayCount) {
         const pills = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" } });
-        [..._evDays].sort().forEach(d => pills.appendChild(el("span", { class: "chip" }, d)));
+        _evEntries.forEach(e => pills.appendChild(el("span", { class: "chip" }, `${e.date}${e.title ? " · " + e.title : ""}`)));
         diag.appendChild(pills);
       }
     } else {
@@ -8534,9 +8619,14 @@ routes.dashboard = function (u, params) {
     // filter — case-insensitive branch + date range
     const inRange = (d) => { const nd = normalizeDate(d).slice(0,7); return nd >= monthFrom && nd <= monthTo; };
 
-    // Events branch: use Maadi sales filtered to specific event days
+    // Events branch: use Maadi sales filtered to special_dates where branch="events"
     const _evCfg = (state.events_config && state.events_config[0]) || {};
-    const _evDays = new Set((_evCfg.days || "").split(/[\n,]+/).map(d => d.trim()).filter(Boolean));
+    // Collect all event dates from special_dates (branch="events") within the selected range
+    const _evDays = new Set(
+      (state.special_dates || [])
+        .filter(e => e.branch === "events" && e.date >= monthFrom + "-01" && e.date <= monthTo + "-31")
+        .map(e => e.date)
+    );
     const _isEventDay = (d) => _evDays.has(normalizeDate(d).slice(0,10));
 
     // Filter by branch + date, and strip Zawya concession items from all calculations at runtime
@@ -8554,7 +8644,7 @@ routes.dashboard = function (u, params) {
     // Empty-state: tell the user exactly what went wrong if their current filter has no data
     if (sales.length === 0 && state.sales.length > 0) {
       const emptyMsg = branch === "events"
-        ? (_evDays.size === 0 ? "No event dates configured. Enter dates in the event config above and click Save & apply." : `No Maadi sales found for the configured event date(s). Check that the dates match imported Maadi sales.`)
+        ? (_evDays.size === 0 ? "No event dates in this range. Sync from Google Calendar or add them in Schedule → Special Dates." : `No Maadi sales found for the event date(s) in this range. Make sure Maadi sales are imported for those days.`)
         : `No sales for ${branch} · ${rangeLabel}. Tap one of the pills above to jump to data you have.`;
       body.appendChild(el("div", { class: "banner-arch", style: { borderColor: "var(--bad)", color: "var(--bad)", fontWeight: "700" } }, emptyMsg));
     }
@@ -11551,14 +11641,18 @@ routes.app_guide = function (u) {
       ar_title: "الجدول الأسبوعي",
       en_steps: [
         "Tap <strong>Weekly Schedule</strong> to see your shifts for the week.",
-        "The schedule shows Maadi and Zawya shifts side by side, day by day.",
+        "The schedule shows three tabs: <strong>Maadi</strong>, <strong>Zawya</strong>, and <strong>Coffee Beats Events</strong> — side by side, day by day.",
+        "The <strong>Events tab</strong> pulls live from the Coffee Beats Events Google Calendar. Only days with events appear. An events shift earns an automatic <strong>events bonus</strong> added to your overtime.",
         "You can see who's working the morning and night shifts each day.",
+        "Owners can add <strong>Special Dates & Events</strong> directly in the schedule page — these appear as badges on day cards and signal high-demand days.",
         "If you see an error in your schedule, contact the head barista or owner.",
       ],
       ar_steps: [
         "اضغط على <strong>الجدول الأسبوعي</strong> لمعرفة شيفتاتك خلال الأسبوع.",
-        "الجدول يُظهر شيفتات المعادي وزاوية جنباً إلى جنب، يوماً بيوم.",
+        "الجدول يُظهر ثلاثة تبويبات: <strong>المعادي</strong>، <strong>زاوية</strong>، و<strong>Coffee Beats Events</strong> — جنباً إلى جنب، يوماً بيوم.",
+        "تبويب <strong>الفعاليات</strong> يسحب البيانات مباشرةً من تقويم Google الخاص بالفعاليات. تظهر فقط أيام الفعاليات. تُضيف شيفت الفعاليات <strong>بونص تلقائي</strong> إلى الأوفر تايم.",
         "يمكنك رؤية من يعمل في الشيفت الصباحي والليلي كل يوم.",
+        "يمكن للملاك إضافة <strong>تواريخ ومناسبات خاصة</strong> مباشرةً من صفحة الجدول — تظهر كشارات على بطاقات الأيام لتنبيه الفريق بأيام الطلب المرتفع.",
         "إذا لاحظت خطأ في جدولك، تواصل مع رئيس البريستا أو المالك.",
       ],
     },
@@ -11648,15 +11742,19 @@ routes.app_guide = function (u) {
       ar_title: "الموارد البشرية الخاصة بي",
       en_steps: [
         "Tap <strong>My HR</strong> to see your personal salary dashboard for the current month.",
-        "Shows: <strong>Base Salary</strong>, <strong>Overtime</strong>, <strong>Penalties</strong> (with date, reason, and amount for each), <strong>Loans</strong>, and <strong>Net Due</strong> — the final amount to be paid.",
-        "Your <strong>KPI Reward Tier</strong> appears at month end: Gold (90+), Silver (80+), Bronze (70+), or Development (below 70).",
+        "Shows: <strong>Base Salary</strong>, <strong>Overtime</strong> (with the multiplier label for each entry), <strong>Penalties</strong> (with date, reason, and amount for each), <strong>Sick Leave Deductions</strong>, <strong>Loans</strong>, and <strong>Net Due</strong> — the final amount to be paid.",
+        "<strong>Overtime multipliers</strong> are shown next to each overtime entry (e.g. ×1.5 for regular overtime, ×2 for events shifts).",
+        "<strong>Sick Leave Deductions:</strong> approved sick leave days are deducted from your salary at the daily rate and listed as a separate line item.",
+        "Your <strong>KPI Reward Tier</strong> appears at month end: Gold (90+), Silver (80+), Bronze (70+), or Rising (below 70).",
         "Use the <strong>month navigation</strong> to review any previous month.",
         "Tap <strong>Emergency Contact</strong> at the top to add or update your emergency contact name, relationship, and phone number.",
       ],
       ar_steps: [
         "اضغط على <strong>الموارد البشرية الخاصة بي</strong> لعرض لوحة راتبك الشهرية.",
-        "تعرض: <strong>الراتب الأساسي</strong>، <strong>العمل الإضافي</strong>، <strong>الخصومات</strong> (مع التاريخ والسبب والمبلغ)، <strong>القروض</strong>، و<strong>صافي المستحق</strong>.",
-        "يظهر <strong>مستوى مكافأة الأداء</strong> في نهاية الشهر: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو تطوير (أقل من 70).",
+        "تعرض: <strong>الراتب الأساسي</strong>، <strong>العمل الإضافي</strong> (مع تصنيف المضاعف لكل إدخال)، <strong>الخصومات</strong> (مع التاريخ والسبب والمبلغ)، <strong>خصومات الإجازة المرضية</strong>، <strong>القروض</strong>، و<strong>صافي المستحق</strong>.",
+        "<strong>مضاعفات الأوفر تايم:</strong> تُعرض بجانب كل إدخال (مثل ×1.5 للأوفر تايم العادي، ×2 لشيفتات الفعاليات).",
+        "<strong>خصومات الإجازة المرضية:</strong> أيام الإجازة المرضية المعتمدة تُخصم من الراتب بمعدل اليوم وتظهر كبند منفصل.",
+        "يظهر <strong>مستوى مكافأة الأداء</strong> في نهاية الشهر: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو في تطور (أقل من 70).",
         "استخدم <strong>التنقل بين الأشهر</strong> لمراجعة أي شهر سابق.",
         "اضغط <strong>جهة الاتصال الطارئ</strong> في أعلى الصفحة لإضافة أو تحديث بيانات الطوارئ.",
       ],
@@ -11703,17 +11801,84 @@ routes.app_guide = function (u) {
       ar_title: "بطاقة تقييم الأداء",
       en_steps: [
         "Tap <strong>My Scorecard</strong> to see your personal KPI score for the current month.",
-        "9 categories: Punctuality (5%), Waste Control (15%), Cleanliness (10%), Coffee Craft (15%), Upselling (10%), Customer Score (15%), Teamwork (15%), Leadership (20%), Hygiene (5%).",
-        "Scores are calculated automatically from recorded app activity — stamps, waste logs, penalties, cleaning logs, restock actions, and customer feedback.",
-        "At month end your total score determines your <strong>KPI Reward Tier</strong>: Gold (90+), Silver (80+), Bronze (70+), or Development (below 70) — reflected in your HR payout.",
-        "Owners and head baristas can view <strong>Staff Scorecard</strong> to see the full team's scores side by side.",
+        "<strong>10 categories:</strong> Punctuality (5%), Waste Control (15%), Cleanliness (10%), Coffee Craft (15%), Upselling (10%), Customer Score (15%), Teamwork (5%), Leadership (15%), Hygiene (5%), <strong>Training Test (10%)</strong>.",
+        "Scores are calculated automatically from recorded app activity — stamps, waste logs, penalties, cleaning logs, restock actions, customer feedback, and monthly quiz results.",
+        "If a barista has no <strong>Leadership</strong> role assigned, the 15% leadership weight is distributed proportionally across all other categories.",
+        "At month end your total score determines your <strong>KPI Reward Tier</strong>: Gold (90+), Silver (80+), Bronze (70+), or Rising (below 70) — reflected in your HR payout.",
+        "Owners and head baristas can view <strong>Staff Scorecard</strong> to see the full team's scores side by side, and can perform a full KPI reset (manual scores, auto-calculated sources, or both) if needed.",
       ],
       ar_steps: [
         "اضغط على <strong>تقييم الأداء الخاص بي</strong> لعرض درجاتك للشهر الحالي.",
-        "9 محاور: الانضباط (5%)، ترشيد الهدر (15%)، النظافة (10%)، جودة صنع القهوة (15%)، البيع الإضافي (10%)، رضا العملاء (15%)، العمل الجماعي (15%)، القيادة (20%)، النظافة الشخصية (5%).",
-        "تُحسَب الدرجات تلقائياً من النشاط المُسجَّل — البصمات والهدر والخصومات والنظافة وإجراءات الطلب وآراء العملاء.",
-        "في نهاية الشهر تُحدد درجتك <strong>مستوى مكافأة الأداء</strong>: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو تطوير (أقل من 70) — ينعكس على راتبك.",
-        "يمكن للملاك ورؤساء البريستا عرض <strong>تقييمات الفريق</strong> لمقارنة جميع الدرجات.",
+        "<strong>10 محاور:</strong> الانضباط (5%)، ترشيد الهدر (15%)، النظافة (10%)، جودة صنع القهوة (15%)، البيع الإضافي (10%)، رضا العملاء (15%)، العمل الجماعي (5%)، القيادة (15%)، النظافة الشخصية (5%)، <strong>الاختبار الشهري (10%)</strong>.",
+        "تُحسَب الدرجات تلقائياً من النشاط المُسجَّل — البصمات والهدر والخصومات والنظافة وإجراءات الطلب وآراء العملاء ونتائج الاختبار الشهري.",
+        "إذا لم يُعيَّن للبريستا <strong>دور قيادي</strong>، يُوزَّع وزن القيادة (15%) بالتناسب على باقي المحاور.",
+        "في نهاية الشهر تُحدد درجتك <strong>مستوى مكافأة الأداء</strong>: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو في تطور (أقل من 70) — ينعكس على راتبك.",
+        "يمكن للملاك ورؤساء البريستا عرض <strong>تقييمات الفريق</strong> لمقارنة جميع الدرجات، وإجراء إعادة تعيين كاملة للـ KPI (الدرجات اليدوية، أو المصادر التلقائية، أو كليهما) عند الحاجة.",
+      ],
+    },
+    {
+      icon: "📝",
+      en_title: "Monthly Training Quiz",
+      ar_title: "الاختبار الشهري",
+      en_steps: [
+        "Each month the owner or head barista issues a training quiz for each barista. You will see a notification tile on your home screen when your quiz is ready.",
+        "Tap the <strong>Training</strong> tile (or <strong>My Training</strong>) to open your quiz.",
+        "Quizzes are <strong>adaptive</strong> — the level (Beginner / Intermediate / Advanced) is set based on your previous scores and weak topics.",
+        "Answer each question. Once you select an answer, it <strong>locks immediately</strong> and the correct answer is revealed — you cannot change it.",
+        "Your score is submitted automatically when all questions are answered.",
+        "Your result shows your <strong>overall score %</strong> and a <strong>by-topic breakdown</strong>. Topics where you scored below 80% are flagged as weak topics to study before next month.",
+        "The quiz score feeds directly into your <strong>Training Test KPI (10%)</strong>.",
+        "Tap <strong>My Training</strong> any time to see your quiz history and past scores.",
+      ],
+      ar_steps: [
+        "كل شهر يُصدر المالك أو رئيس البريستا اختباراً تدريبياً لكل بريستا. ستظهر لك بلاطة إشعار في الشاشة الرئيسية عندما يكون الاختبار جاهزاً.",
+        "اضغط على بلاطة <strong>التدريب</strong> (أو <strong>اختباراتي</strong>) لفتح اختبارك.",
+        "الاختبارات <strong>تكيّفية</strong> — يُحدَّد المستوى (مبتدئ / متوسط / متقدم) بناءً على درجاتك السابقة ونقاط ضعفك.",
+        "أجب على كل سؤال. فور اختيار إجابة، <strong>تُقفل فوراً</strong> وتظهر الإجابة الصحيحة — لا يمكن تغييرها.",
+        "تُرسَل نتيجتك تلقائياً عند الإجابة على جميع الأسئلة.",
+        "تعرض نتيجتك <strong>الدرجة الإجمالية %</strong> وتفصيلاً <strong>حسب الموضوع</strong>. المواضيع التي سجّلت فيها أقل من 80% تُحدَّد كنقاط ضعف للدراسة قبل الشهر القادم.",
+        "تُغذِّي درجة الاختبار مباشرةً <strong>محور الاختبار الشهري في تقييم الأداء (10%)</strong>.",
+        "اضغط <strong>اختباراتي</strong> في أي وقت لعرض سجل اختباراتك ودرجاتك السابقة.",
+      ],
+    },
+    {
+      icon: "🪪",
+      en_title: "My ID",
+      ar_title: "هويتي",
+      en_steps: [
+        "Tap <strong>My ID</strong> to upload and manage your ID documents (national ID, residence card, etc.).",
+        "Tap <strong>Choose photos</strong> to select one or more images from your phone.",
+        "Tap <strong>Upload</strong> to save them. Your uploads are <strong>private</strong> — visible only to the owner and accountant.",
+        "You can tap any uploaded image to view it full-size, or tap ✕ to remove it.",
+        "Keep your ID documents up to date — the owner may request them for payroll or HR records.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>هويتي</strong> لرفع وإدارة وثائق هويتك (بطاقة قومية، إقامة، إلخ).",
+        "اضغط <strong>اختر صوراً</strong> لتحديد صورة واحدة أو أكثر من هاتفك.",
+        "اضغط <strong>رفع</strong> لحفظها. مرفقاتك <strong>خاصة</strong> — لا يراها إلا المالك والمحاسب.",
+        "يمكنك الضغط على أي صورة مرفوعة لعرضها بالحجم الكامل، أو الضغط على ✕ لحذفها.",
+        "احرص على تحديث وثائق هويتك — قد يطلبها المالك لأغراض الرواتب أو سجلات الموارد البشرية.",
+      ],
+    },
+    {
+      icon: "🔔",
+      en_title: "Notifications & Alerts",
+      ar_title: "الإشعارات والتنبيهات",
+      en_steps: [
+        "Tap <strong>Notifications</strong> from the home screen to open the Alerts Center.",
+        "Three tabs: <strong>⚡ Engine Alerts</strong> — smart inventory alerts (Low Stock, Critical Stock, Dead Stock, Supplier Risk, Spike). <strong>📦 Inventory Actions</strong> — restock action log from alert triggers. <strong>🔔 System</strong> — leadership and operational notifications.",
+        "<strong>Engine Alerts</strong> are fired automatically by the inventory engine. Critical and low-stock alerts have a red/orange badge count. Tap an alert to dismiss it once actioned.",
+        "<strong>Inventory Actions</strong> shows all restock alerts that have been triggered. Unresolved items (not yet purchased or actioned) are highlighted.",
+        "<strong>System notifications</strong> include leadership role assignments, KPI threshold warnings, and other operational messages.",
+        "All roles can see the Notifications page. Owners and head baristas see the full alert list; baristas see alerts relevant to their branch and shifts.",
+      ],
+      ar_steps: [
+        "اضغط على <strong>الإشعارات</strong> من الشاشة الرئيسية لفتح مركز التنبيهات.",
+        "ثلاثة تبويبات: <strong>⚡ تنبيهات النظام</strong> — تنبيهات المخزون الذكية (نقص، حرج، مخزون راكد، خطر مورد، ارتفاع مفاجئ). <strong>📦 إجراءات المخزون</strong> — سجل إجراءات الطلب من تنبيهات المخزون. <strong>🔔 النظام</strong> — إشعارات القيادة والعمليات.",
+        "<strong>تنبيهات النظام</strong> تُطلَق تلقائياً من محرك المخزون. تنبيهات الحرج والنقص لها عدّاد بالشارة الحمراء/البرتقالية. اضغط على التنبيه لإغلاقه بعد التصرف.",
+        "<strong>إجراءات المخزون</strong> تُظهر جميع تنبيهات إعادة الطلب التي تم تفعيلها. العناصر غير المُحلَّة (لم تُشتر أو لم يُتصرف بشأنها) تُبرز بشكل خاص.",
+        "<strong>إشعارات النظام</strong> تشمل تعيينات الأدوار القيادية وتحذيرات نسب الأداء ورسائل تشغيلية أخرى.",
+        "جميع الأدوار يمكنها رؤية صفحة الإشعارات. الملاك ورؤساء البريستا يرون القائمة الكاملة؛ البريستا يرون التنبيهات المتعلقة بفرعهم وشيفتاتهم.",
       ],
     },
     {
@@ -11726,7 +11891,9 @@ routes.app_guide = function (u) {
         "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
         "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
         "<strong>📦 Reorder Alerts</strong>: Act on every low-stock alert before your shift ends.",
+        "<strong>📝 Training Quiz</strong>: Complete your monthly quiz as soon as it appears — it counts for 10% of your KPI.",
         "<strong>💳 Emergency Contact</strong>: Keep your emergency contact up to date in My HR.",
+        "<strong>🪪 My ID</strong>: Upload and keep your ID documents current in the My ID section.",
         "<strong>🔐 PIN</strong>: Never share your PIN with anyone. Each person logs in with their own PIN only.",
       ],
       ar_steps: [
@@ -11735,7 +11902,9 @@ routes.app_guide = function (u) {
         "<strong>🔒 إغلاق الشيفت</strong>: أكمل إغلاق الشيفت دائماً قبل المغادرة. لا تتجاوزه أبداً.",
         "<strong>🧹 سجل النظافة</strong>: سجّل النظافة بصورة في كل شيفت.",
         "<strong>📦 تنبيهات الطلب</strong>: تصرف بشأن كل تنبيه نقص مخزون قبل انتهاء شيفتك.",
+        "<strong>📝 الاختبار الشهري</strong>: أكمل اختبارك الشهري فور ظهوره — يُحسَب 10% من تقييم أدائك.",
         "<strong>💳 جهة الاتصال الطارئ</strong>: احرص على تحديث بيانات جهة الطوارئ في الموارد البشرية.",
+        "<strong>🪪 هويتي</strong>: ارفع وثائق هويتك واحرص على تحديثها في قسم هويتي.",
         "<strong>🔐 الـ PIN</strong>: لا تشارك الـ PIN مع أحد. كل شخص يسجّل الدخول بـ PIN خاص به فقط.",
       ],
     },
