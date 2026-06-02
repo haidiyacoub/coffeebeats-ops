@@ -593,6 +593,7 @@ function startReviewsListener() {
       if (change.type !== "added") return;
       const doc = change.doc;
       if (existingIds.has(doc.id)) return;
+      if ((state.blocked_feedback_ids || []).includes(doc.id)) return;
       const d = doc.data();
       // Use staffDir.byName for review → barista matching (more reliable than state.users)
       const matchUser = staffDir.byName(d.barista);
@@ -1014,6 +1015,7 @@ function migrateState(s) {
   }
 
   // Ensure new collections exist
+  s.barista_dates           = s.barista_dates           || {}; // uid → [{type:"joined"|"left", date, note}]
   s.salary_config           = s.salary_config           || {};
   s.salary_loans            = s.salary_loans            || [];
   s.sick_leave_deductions   = s.sick_leave_deductions   || [];
@@ -1022,8 +1024,10 @@ function migrateState(s) {
   s.penalties      = s.penalties      || [];
   s.maadi_deposits = s.maadi_deposits || [];
   s.overheads     = s.overheads     || [];
-  s.overhead_presets       = s.overhead_presets       || {}; // category → default amount
-  s.overhead_monthly_amts  = s.overhead_monthly_amts  || {}; // branch|category|month → amount override
+  s.overhead_presets        = s.overhead_presets        || {}; // category → default amount
+  s.overhead_monthly_amts   = s.overhead_monthly_amts   || {}; // branch|category|month → amount override
+  s.overhead_preset_history = s.overhead_preset_history || {}; // pk → [{from_month, amount}]
+  s.salary_snapshots        = s.salary_snapshots        || {}; // userId → {month → amount}
   s.purchase_units         = s.purchase_units         || {}; // inv_item_id → { unit_label, pack_size_canonical }
   s.inventory_alerts = s.inventory_alerts || {}; // inv_item_id → { reorder_threshold_days }
   s.alert_log           = s.alert_log || [];
@@ -1034,6 +1038,7 @@ function migrateState(s) {
   s.kpi_logs      = s.kpi_logs      || []; // kept for migration only — scores now derived from source tiles
   s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork
   s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
+  s.blocked_feedback_ids = s.blocked_feedback_ids || []; // Firestore review IDs permanently deleted by owner
   s.kpi_settings  = s.kpi_settings  || {
     weights: { punctuality:5, waste:15, cleanliness:10, craft:15, upselling:10, customer:15, teamwork:5, leadership:15, hygiene:5, training:10 }
   };
@@ -4847,6 +4852,7 @@ function addBaristaQuick(onDone) {
       ], value: "barista" },
       { key: "pin",  label: "4-digit PIN", type: "text", value: "" },
       { key: "branches", label: "If head barista — branches (maadi,zawya)", type: "text", value: "maadi,zawya" },
+      { key: "joined_date", label: "Start date", type: "date", value: new Date().toISOString().slice(0,10) },
     ],
     onSubmit: async (v) => {
       const name = (v.name || "").trim();
@@ -4860,6 +4866,13 @@ function addBaristaQuick(onDone) {
         await functions.httpsCallable("createStaffUser")({ name, role, branches, pin: v.pin });
         // Refresh the in-memory staff directory so the new member appears immediately
         await staffDir.load();
+        const newUser = staffDir.all().find(x => x.name === name);
+        if (newUser && v.joined_date) {
+          state.barista_dates = state.barista_dates || {};
+          state.barista_dates[newUser.uid] = state.barista_dates[newUser.uid] || [];
+          state.barista_dates[newUser.uid].push({ type: "joined", date: v.joined_date, at: now() });
+          saveState();
+        }
         toast(`${name} added \u2713`);
         if (typeof onDone === "function") onDone();
         else render();
@@ -4949,14 +4962,13 @@ routes.salaries = function (u) {
       cfgCard.appendChild(el("div", { class: "muted small" }, "No active baristas."));
     } else {
       for (const p of staff) {
-        const cfg = state.salary_config[p.id] || { monthly_salary: 0 };
         const nameLabel = p.name + (p.active ? "" : " (archived)");
         const salaryBox = el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
           el("div", { class: "k" }, [
             el("div", {}, nameLabel),
             el("div", { class: "muted small" }, `${p.role === "head_barista" ? "Head barista" : "Barista"} · ${(p.branches||[]).join(", ")}`),
           ]),
-          el("div", { class: "v" }, money(cfg.monthly_salary || 0)),
+          el("div", { class: "v" }, money(getSalaryForMonth(p.id, month))),
         ]);
         if (p.active && (u.role === "owner" || u.role === "accountant")) {
           salaryBox.appendChild(el("button", {
@@ -5019,8 +5031,7 @@ routes.salaries = function (u) {
     otCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", marginBottom:"10px" } }, "Overtime — extra hours beyond 8 h shift"));
     // Hourly rates display
     for (const p of staff) {
-      const cfg = state.salary_config[p.id] || { monthly_salary: 0 };
-      const sal = Number(cfg.monthly_salary) || 0;
+      const sal = getSalaryForMonth(p.id, month);
       const hrRate = sal > 0 ? (sal / 30 / 8) : 0;
       const otHrs  = (state.overtime_logs).filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month).reduce((s,r)=>s+(Number(r.hours)||0),0);
       const otAmt  = (state.overtime_logs).filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month).reduce((s,r)=>s+(Number(r.amount)||0),0);
@@ -5065,7 +5076,7 @@ routes.salaries = function (u) {
     dueCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, `Total due · ${month}`));
     let grandDue = 0;
     for (const p of staff) {
-      const salary  = Number((state.salary_config[p.id] || {}).monthly_salary || 0);
+      const salary  = getSalaryForMonth(p.id, month);
       const penSum  = state.penalties.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
                                      .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const loanSum = state.salary_loans.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
@@ -5130,6 +5141,10 @@ routes.salaries = function (u) {
         if (amt < 0) return toast("Enter a non-negative amount", "error");
         const s = stamp();
         state.salary_config[person.id] = { monthly_salary: amt, updated_at: s.at, updated_by: s.by_name };
+        // Snapshot so past months are not retroactively affected
+        state.salary_snapshots = state.salary_snapshots || {};
+        state.salary_snapshots[person.id] = state.salary_snapshots[person.id] || {};
+        state.salary_snapshots[person.id][month] = amt;
         saveState(); toast(`${person.name}: salary set to ${money(amt)}`); render();
       }
     });
@@ -5180,7 +5195,7 @@ routes.salaries = function (u) {
         if (days <= 0) return toast("Enter a positive number of sick days", "error");
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
-        const sal = Number((state.salary_config[person.id] || {}).monthly_salary || 0);
+        const sal = getSalaryForMonth(person.id, vals.month || (vals.date||"").slice(0,7) || month);
         const quarterDay = Math.round((sal / 30 / 4) * 100) / 100;
         const amount = Math.round(quarterDay * days * 100) / 100;
         const s = stamp();
@@ -5217,7 +5232,7 @@ routes.salaries = function (u) {
         if (hrs <= 0) return toast("Enter a positive number of hours", "error");
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
-        const sal = Number((state.salary_config[person.id] || {}).monthly_salary || 0);
+        const sal = getSalaryForMonth(person.id, (vals.date||"").slice(0,7) || month);
         const hrRate = sal > 0 ? sal / 30 / 8 : 0;
         const multiplier = vals.ot_type === "holiday" ? 2 : 1.5;
         const amount = Math.round(hrRate * hrs * multiplier * 100) / 100;
@@ -5477,7 +5492,7 @@ routes.penalties = function (u) {
       onSubmit: (vals) => {
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
-        const salary = Number((state.salary_config[person.id] || {}).monthly_salary || 0);
+        const salary = getSalaryForMonth(person.id, (vals.date||"").slice(0,7) || month);
         const kindSpec = PENALTY_KINDS.find(k => k.value === vals.kind) || PENALTY_KINDS[0];
         const reasonSpec = PENALTY_REASONS.find(r => r.value === vals.reason_code) || PENALTY_REASONS[0];
 
@@ -5634,6 +5649,21 @@ const OVERHEAD_CATEGORIES = [
 function presetKey(branch, category) { return `${branch}|${category}`; }
 function monthlyKey(branch, category, month) { return `${branch}|${category}|${month}`; }
 
+function getSalaryForMonth(uid, month) {
+  const snaps = (state.salary_snapshots || {})[uid] || {};
+  const months = Object.keys(snaps).filter(m => m <= month).sort();
+  if (months.length > 0) return Number(snaps[months[months.length - 1]]) || 0;
+  return Number((state.salary_config[uid] || {}).monthly_salary || 0);
+}
+
+function getPresetAmtForMonth(pk, month) {
+  const hist = ((state.overhead_preset_history || {})[pk] || [])
+    .filter(e => e.from_month <= month)
+    .sort((a, b) => a.from_month.localeCompare(b.from_month));
+  if (hist.length > 0) return Number(hist[hist.length - 1].amount) || 0;
+  return Number((state.overhead_presets[pk] || {}).amount || 0);
+}
+
 routes.overheads = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Monthly overheads", "Edit fixed amounts for both branches, then track payments month by month."));
@@ -5697,6 +5727,10 @@ routes.overheads = function (u) {
             note: (state.overhead_presets[pk] || {}).note || "",
             updated_at: s.at, updated_by: s.by_name
           };
+          // Snapshot so past months are not retroactively affected
+          state.overhead_preset_history = state.overhead_preset_history || {};
+          state.overhead_preset_history[pk] = (state.overhead_preset_history[pk] || []).filter(e => e.from_month !== month);
+          state.overhead_preset_history[pk].push({ from_month: month, amount: amt });
           // Propagate to the CURRENT month's unpaid row (if any). This is what
           // makes editing the fixed amount visibly flow into Section 2. Paid
           // rows are locked — they keep the amount the user actually paid.
@@ -5764,14 +5798,13 @@ routes.overheads = function (u) {
     for (const cat of OVERHEAD_CATEGORIES.filter(c => c.recurring)) {
       const pk = presetKey(br, cat.value);
       const mk = monthlyKey(br, cat.value, month);
-      const preset = state.overhead_presets[pk] || null;
       const monthlyOverride = state.overhead_monthly_amts[mk] != null ? state.overhead_monthly_amts[mk] : null;
       const existing = state.overheads.find(o =>
         o.branch === br && o.category === cat.value &&
         ((o.month || (o.date||"").slice(0,7)) === month));
       const amount = existing ? Number(existing.amount)
                    : monthlyOverride != null ? Number(monthlyOverride)
-                   : (preset ? Number(preset.amount) : 0);
+                   : getPresetAmtForMonth(pk, month);
       const isPaid = !!(existing && existing.paid);
       const paidOn = existing ? (existing.paid_on || "") : "";
 
@@ -5838,10 +5871,7 @@ routes.overheads = function (u) {
   function drawSalaryCard() {
     const numBranches = 2;
     const allBaristas = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
-    const totalSalary = allBaristas.reduce((s, p) => {
-      const cfg = (state.salary_config || {})[p.id] || {};
-      return s + (Number(cfg.monthly_salary) || 0);
-    }, 0);
+    const totalSalary = allBaristas.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
     const salaryShare = totalSalary > 0 ? Math.round(totalSalary / numBranches) : 0;
 
     const card = el("div", { class:"card", style:{ marginTop:"12px" } });
@@ -5860,10 +5890,7 @@ routes.overheads = function (u) {
     ]));
     if (allBaristas.length > 0) {
       const detail = el("div", { class:"muted small", style:{ marginTop:"6px", fontSize:"12px" } });
-      detail.textContent = allBaristas.map(p => {
-        const cfg = (state.salary_config || {})[p.id] || {};
-        return `${p.name} ${money(Number(cfg.monthly_salary)||0)}`;
-      }).join(" · ");
+      detail.textContent = allBaristas.map(p => `${p.name} ${money(getSalaryForMonth(p.id, month))}`).join(" · ");
       card.appendChild(detail);
     }
     return card;
@@ -5872,10 +5899,7 @@ routes.overheads = function (u) {
   function drawTotalsCard() {
     const numBranches = 2;
     const allBaristas = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
-    const totalSalary = allBaristas.reduce((s, p) => {
-      const cfg = (state.salary_config || {})[p.id] || {};
-      return s + (Number(cfg.monthly_salary) || 0);
-    }, 0);
+    const totalSalary = allBaristas.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
     const salaryShare = totalSalary > 0 ? Math.round(totalSalary / numBranches) : 0;
 
     const card = el("div", { class:"card", style:{ marginTop:"12px" } });
@@ -5893,14 +5917,13 @@ routes.overheads = function (u) {
       const vals = ["maadi","zawya"].map(br => {
         const pk = presetKey(br, cat.value);
         const mk = monthlyKey(br, cat.value, month);
-        const preset = state.overhead_presets[pk] || null;
         const monthlyOverride = state.overhead_monthly_amts[mk] != null ? state.overhead_monthly_amts[mk] : null;
         const existing = state.overheads.find(o =>
           o.branch === br && o.category === cat.value &&
           ((o.month || (o.date||"").slice(0,7)) === month));
         return existing ? Number(existing.amount)
              : monthlyOverride != null ? Number(monthlyOverride)
-             : (preset ? Number(preset.amount) : 0);
+             : getPresetAmtForMonth(pk, month);
       });
       card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"13px", paddingBottom:"4px" } }, [
         el("div", {}, cat.label),
@@ -5931,7 +5954,7 @@ routes.overheads = function (u) {
         const pk = presetKey(br, cat.value);
         const ex = state.overheads.find(o=>o.branch===br&&o.category===cat.value&&((o.month||(o.date||"").slice(0,7))===month));
         const ov = state.overhead_monthly_amts[mk];
-        return ss + (ex ? Number(ex.amount) : ov != null ? Number(ov) : Number((state.overhead_presets[pk]||{}).amount||0));
+        return ss + (ex ? Number(ex.amount) : ov != null ? Number(ov) : getPresetAmtForMonth(pk, month));
       }, 0), 0);
     const zawyaBills = ["zawya"].reduce((s, br) =>
       s + OVERHEAD_CATEGORIES.filter(c=>c.recurring).reduce((ss, cat) => {
@@ -5939,7 +5962,7 @@ routes.overheads = function (u) {
         const pk = presetKey(br, cat.value);
         const ex = state.overheads.find(o=>o.branch===br&&o.category===cat.value&&((o.month||(o.date||"").slice(0,7))===month));
         const ov = state.overhead_monthly_amts[mk];
-        return ss + (ex ? Number(ex.amount) : ov != null ? Number(ov) : Number((state.overhead_presets[pk]||{}).amount||0));
+        return ss + (ex ? Number(ex.amount) : ov != null ? Number(ov) : getPresetAmtForMonth(pk, month));
       }, 0), 0);
     card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"14px", fontWeight:"700", borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px" } }, [
       el("div", {}, "Total overhead"),
@@ -5953,7 +5976,7 @@ routes.overheads = function (u) {
     openPrompt({
       title: `${cat.label} (${br === "maadi" ? "Maadi" : "Zawya"}) — override for ${month}`,
       fields: [
-        { key: "amount", label: `Amount for ${month} only (EGP)`, type: "number", value: current != null ? current : (state.overhead_presets[presetKey(br, cat.value)]?.amount || 0) },
+        { key: "amount", label: `Amount for ${month} only (EGP)`, type: "number", value: current != null ? current : getPresetAmtForMonth(presetKey(br, cat.value), month) },
         { key: "clear",  label: "Clear override (use default amount)", type: "select", options: [{ label: "No — keep this amount", value: "no" }, { label: "Yes — revert to default", value: "yes" }], value: "no" },
       ],
       onSubmit: (vals) => {
@@ -7449,7 +7472,7 @@ routes.roster = function (u) {
                   !(x.kind === "events_bonus" && x.date === dayDateStr && x.shift === shift)
                 );
                 if (user) {
-                  const salary = Number(((state.salary_config || {})[user.id] || {}).monthly_salary || 0);
+                  const salary = getSalaryForMonth(user.id, dayDateStr.slice(0, 7));
                   const bonus = Math.round((salary / 30) + (salary * 0.07));
                   if (bonus > 0) {
                     const sb = stamp();
@@ -7486,7 +7509,7 @@ routes.roster = function (u) {
                 );
                 if (_hasMorning && _hasNight) {
                   const _person = (state.users || []).find(p => p.id === _uid);
-                  const _sal = Number(((state.salary_config || {})[_uid] || {}).monthly_salary || 0);
+                  const _sal = getSalaryForMonth(_uid, dayDateStr.slice(0, 7));
                   const _hrRate = _sal > 0 ? _sal / 30 / 8 : 0;
                   // 2nd shift = 8 h at 1.5× hourly rate
                   const _otHours = 8;
@@ -7947,13 +7970,28 @@ routes.users = function (u) {
     keepCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } }, "\u2705 Keep old data"));
     keepCard.appendChild(el("div", { class: "muted small" },
       "Restores the barista with all past records intact \u2014 penalties, leaves, KPI scores, payroll, and overtime history are preserved exactly as before."));
-    keepCard.addEventListener("click", async () => {
-      closeSheet();
-      try {
-        await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: true });
-        toast("\u2705 " + usr.name + " reactivated with all history");
-        go("users");
-      } catch (e) { toast(e.message || "Failed to activate", "error"); }
+    keepCard.addEventListener("click", () => {
+      openPrompt({
+        title: "Reactivate " + usr.name,
+        fields: [
+          { key: "joined_date", label: "New start date", type: "date", value: new Date().toISOString().slice(0,10) },
+          { key: "note", label: "Note (optional)", type: "text", value: "" },
+        ],
+        onSubmit: async (v) => {
+          closeSheet();
+          try {
+            await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: true });
+            if (v.joined_date) {
+              state.barista_dates = state.barista_dates || {};
+              state.barista_dates[usr.uid] = state.barista_dates[usr.uid] || [];
+              state.barista_dates[usr.uid].push({ type: "joined", date: v.joined_date, note: v.note || "", at: now() });
+              saveState();
+            }
+            toast("\u2705 " + usr.name + " reactivated with all history");
+            go("users");
+          } catch (e) { toast(e.message || "Failed to activate", "error"); }
+        }
+      });
     });
     sheet.appendChild(keepCard);
 
@@ -7962,11 +8000,24 @@ routes.users = function (u) {
     resetCard.appendChild(el("div", { style: { fontWeight: "700", color: "var(--bad)", marginBottom: "4px" } }, "\ud83d\udd04 Reset & start fresh"));
     resetCard.appendChild(el("div", { class: "muted small" },
       "Activates the barista as a clean slate. Clears penalties, leaves, overtime, loans, KPI scores, sign-in stamps, waste logs, and cleaning logs. Payroll payout history is kept for accounting."));
-    resetCard.addEventListener("click", async () => {
-      if (!confirm("Reset all operational data for " + usr.name + "? This permanently deletes their penalties, leaves, KPI history, stamps, waste, and cleaning logs. Payroll records are kept.")) return;
-      closeSheet();
-      try {
-        await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: true });
+    resetCard.addEventListener("click", () => {
+      openPrompt({
+        title: "Reset & reactivate " + usr.name,
+        fields: [
+          { key: "joined_date", label: "New start date", type: "date", value: new Date().toISOString().slice(0,10) },
+          { key: "note", label: "Note (optional)", type: "text", value: "" },
+        ],
+        onSubmit: async (v) => {
+          if (!confirm("Reset all operational data for " + usr.name + "? This permanently deletes their penalties, leaves, KPI history, stamps, waste, and cleaning logs. Payroll records are kept.")) return;
+          closeSheet();
+          try {
+            await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: true });
+            if (v.joined_date) {
+              state.barista_dates = state.barista_dates || {};
+              state.barista_dates[usr.uid] = state.barista_dates[usr.uid] || [];
+              state.barista_dates[usr.uid].push({ type: "joined", date: v.joined_date, note: v.note || "", at: now() });
+              saveState();
+            }
         // Match by Firebase UID (usr.id === usr.uid) or legacy UUID
         const matchId = x => x.user_id === usr.uid || (usr.legacy_id && x.user_id === usr.legacy_id);
         const matchBy = x => x.by === usr.uid || (usr.legacy_id && x.by === usr.legacy_id);
@@ -7983,7 +8034,9 @@ routes.users = function (u) {
         saveState();
         toast("\u2705 " + usr.name + " reactivated with a clean slate");
         go("users");
-      } catch (e) { toast(e.message || "Failed to activate", "error"); }
+          } catch (e) { toast(e.message || "Failed to activate", "error"); }
+        }
+      });
     });
     sheet.appendChild(resetCard);
 
@@ -7998,6 +8051,23 @@ routes.users = function (u) {
 
     const sheet = el("div", {});
     sheet.appendChild(el("h2", {}, "Edit — " + usr.name));
+
+    // Join/leave history
+    const dateHistory = (state.barista_dates || {})[usr.uid] || [];
+    if (dateHistory.length > 0) {
+      const dh = el("div", { style: { marginBottom: "14px", background: "var(--surface-2)", borderRadius: "10px", padding: "10px 12px" } });
+      dh.appendChild(el("div", { class: "muted small", style: { fontWeight: "700", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "Employment dates"));
+      for (const entry of dateHistory.slice().sort((a,b) => a.date.localeCompare(b.date))) {
+        const icon = entry.type === "joined" ? "🟢" : "🔴";
+        const label = entry.type === "joined" ? "Joined" : "Left";
+        dh.appendChild(el("div", { style: { fontSize: "13px", display: "flex", gap: "6px", marginBottom: "3px" } }, [
+          el("span", {}, icon + " " + label + ":"),
+          el("span", { style: { fontWeight: "600" } }, entry.date),
+          ...(entry.note ? [el("span", { class: "muted small" }, "· " + entry.note)] : []),
+        ]));
+      }
+      sheet.appendChild(dh);
+    }
 
     // Role dropdown (owner only)
     let roleEl = null;
@@ -8096,14 +8166,28 @@ routes.users = function (u) {
     // Deactivate button (owner only, not self)
     if (isOwner && !isSelf) {
       const delBtn = el("button", { class: "btn bad", style: { width: "100%", marginBottom: "10px" } }, "Deactivate & remove access");
-      delBtn.addEventListener("click", async () => {
-        if (!confirm("Deactivate " + usr.name + "?\n\nThey will be removed from the sign-in screen immediately. All historical records (KPI, salaries, penalties, attendance) are preserved and will remain visible in past months. They can be re-activated at any time.")) return;
-        delBtn.disabled = true; delBtn.textContent = "Removing...";
-        try {
-          await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: false });
-          await staffDir.load();
-          toast(usr.name + " deactivated"); closeSheet(); render();
-        } catch (e) { toast(e.message || "Failed", "error"); delBtn.disabled = false; delBtn.textContent = "Deactivate & remove access"; }
+      delBtn.addEventListener("click", () => {
+        openPrompt({
+          title: "Deactivate " + usr.name,
+          fields: [
+            { key: "left_date", label: "Last working day", type: "date", value: new Date().toISOString().slice(0,10) },
+            { key: "note", label: "Note (optional)", type: "text", value: "" },
+          ],
+          onSubmit: async (v) => {
+            delBtn.disabled = true; delBtn.textContent = "Removing...";
+            try {
+              await functions.httpsCallable("setStaffActive")({ targetUid: usr.uid, active: false });
+              await staffDir.load();
+              if (v.left_date) {
+                state.barista_dates = state.barista_dates || {};
+                state.barista_dates[usr.uid] = state.barista_dates[usr.uid] || [];
+                state.barista_dates[usr.uid].push({ type: "left", date: v.left_date, note: v.note || "", at: now() });
+                saveState();
+              }
+              toast(usr.name + " deactivated"); closeSheet(); render();
+            } catch (e) { toast(e.message || "Failed", "error"); delBtn.disabled = false; delBtn.textContent = "Deactivate & remove access"; }
+          }
+        });
       });
       sheet.appendChild(delBtn);
     }
@@ -8549,19 +8633,16 @@ routes.dashboard = function (u, params) {
       (o.paid !== false)
     );
     const overheadsTotal = ohRows.reduce((s,o) => s + (Number(o.amount)||0), 0);
-    // Salaries: multiply by number of months in range
+    // Salaries: sum per-month snapshots across the range so historical changes are preserved.
     const _numMonths = rangeMonths.length || 1;
-    // Use all baristas with a salary configured (active + archived) so deactivating
-    // someone doesn't retroactively change historical overhead numbers.
     const _activeStaff = (state.users || []).filter(x =>
       ["barista","head_barista"].includes(x.role) &&
       (x.active || !!(state.salary_config || {})[x.id])
     );
-    const _totalStaffSalary = _activeStaff.reduce((sum, p) => {
-      const cfg = (state.salary_config || {})[p.id] || {};
-      return sum + (Number(cfg.monthly_salary) || 0);
+    const salariesTotal = rangeMonths.reduce((total, m) => {
+      const monthSum = _activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, m), 0);
+      return total + Math.round(monthSum / 2);
     }, 0);
-    const salariesTotal = _totalStaffSalary > 0 ? Math.round((_totalStaffSalary / 2) * _numMonths) : 0;
     const totalOpex = overheadsTotal + salariesTotal;
 
     // ---------- KEY METRICS ----------
@@ -8578,9 +8659,17 @@ routes.dashboard = function (u, params) {
     const totalVenueNet = revenue + excludedNet;
     const cbPct = totalVenueNet > 0 ? (revenue / totalVenueNet) * 100 : null;
 
+    // ---------- Zawya revenue after deductions ----------
+    const revenueAfterVat    = branch === "zawya" ? revenue / 1.14 : null;
+    const revenueAfterShares = revenueAfterVat   !== null ? revenueAfterVat * 0.90 : null;
+
     // ---------- top KPI cards ----------
     const topKpis = [
       kpi("Revenue (Net)", money(revenue), sales.length + " rows"),
+      ...(branch === "zawya" ? [
+        kpi("After 14% VAT", money(revenueAfterVat), `÷ 1.14 — ${money(revenue - revenueAfterVat)} VAT`),
+        kpi("After Zawya 10%", money(revenueAfterShares), `CB keeps 90% — ${money(revenueAfterVat - revenueAfterShares)} to Zawya`),
+      ] : []),
       kpi("Discount", money(discount), (revenue + discount) ? ((discount/(revenue+discount))*100).toFixed(1)+"%" : "—"),
       kpi("Purchases", money(purchTotal), purch.length + " invoices"),
       kpi("Waste events", String(waste.length), money(wasteCost) + " valued"),
@@ -8895,12 +8984,28 @@ routes.settings = function (u) {
       }
 
       const activeBtn = el("button", { class: s.active ? "btn ghost" : "btn secondary", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, s.active ? "Deactivate" : "Reactivate");
-      activeBtn.addEventListener("click", async () => {
-        activeBtn.disabled = true;
-        try {
-          await functions.httpsCallable("setStaffActive")({ targetUid: s.uid, active: !s.active });
-          renderTeam();
-        } catch (e) { toast(e.message || "Failed to update", "error"); activeBtn.disabled = false; }
+      activeBtn.addEventListener("click", () => {
+        const isDeactivating = s.active;
+        openPrompt({
+          title: (isDeactivating ? "Deactivate " : "Reactivate ") + s.name,
+          fields: [
+            { key: "date", label: isDeactivating ? "Last working day" : "New start date", type: "date", value: new Date().toISOString().slice(0,10) },
+            { key: "note", label: "Note (optional)", type: "text", value: "" },
+          ],
+          onSubmit: async (v) => {
+            activeBtn.disabled = true;
+            try {
+              await functions.httpsCallable("setStaffActive")({ targetUid: s.uid, active: !s.active });
+              if (v.date) {
+                state.barista_dates = state.barista_dates || {};
+                state.barista_dates[s.uid] = state.barista_dates[s.uid] || [];
+                state.barista_dates[s.uid].push({ type: isDeactivating ? "left" : "joined", date: v.date, note: v.note || "", at: now() });
+                saveState();
+              }
+              renderTeam();
+            } catch (e) { toast(e.message || "Failed to update", "error"); activeBtn.disabled = false; }
+          }
+        });
       });
       row.appendChild(activeBtn);
       teamBody.appendChild(row);
@@ -8923,6 +9028,8 @@ routes.settings = function (u) {
     const cbZawya = el("input", { type: "checkbox", id: "cb_zawya_new" });
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbMaadi, document.createTextNode(" Maadi")]));
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbZawya, document.createTextNode(" Zawya")]));
+    const dateLabel = el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "2px" } }, "Start date");
+    const dateIn = el("input", { type: "date", value: new Date().toISOString().slice(0,10), style: { marginBottom: "8px" } });
     const addBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "+ Add Staff Member");
     addBtn.addEventListener("click", async () => {
       const name = nameIn.value.trim();
@@ -8936,6 +9043,14 @@ routes.settings = function (u) {
       addBtn.disabled = true; addBtn.textContent = "Adding…";
       try {
         await functions.httpsCallable("createStaffUser")({ name, role: roleIn.value, branches, pin });
+        await staffDir.load();
+        const newUser = staffDir.all().find(x => x.name === name);
+        if (newUser && dateIn.value) {
+          state.barista_dates = state.barista_dates || {};
+          state.barista_dates[newUser.uid] = state.barista_dates[newUser.uid] || [];
+          state.barista_dates[newUser.uid].push({ type: "joined", date: dateIn.value, at: now() });
+          saveState();
+        }
         nameIn.value = ""; pinIn.value = "";
         toast(`${name} added ✓`);
         renderTeam();
@@ -8944,7 +9059,7 @@ routes.settings = function (u) {
         addBtn.disabled = false; addBtn.textContent = "+ Add Staff Member";
       }
     });
-    [nameIn, pinIn, roleIn, branchCheckboxes, addBtn].forEach(el2 => addCard.appendChild(el2));
+    [nameIn, pinIn, roleIn, branchCheckboxes, dateLabel, dateIn, addBtn].forEach(el2 => addCard.appendChild(el2));
     teamBody.appendChild(addCard);
   }
 
@@ -9301,7 +9416,7 @@ routes.signin_stamp_new = function (u) {
 
           // Penalty tier: >15 min = ½ day · >60 min = 1 day · >120 min = 2 days
           const kind   = minsLate > 120 ? "two_days" : minsLate > 60 ? "full_day" : "half_day";
-          const salary = Number(((state.salary_config || {})[u.id] || {}).monthly_salary || 0);
+          const salary = getSalaryForMonth(u.id, todayStr.slice(0, 7));
           let amount   = penaltyAmount(kind, salary);
 
           // Doubling rule: 2nd+ late incident from the same barista this month → double the penalty
@@ -11873,7 +11988,7 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
       p.auto_no_stamp && p.user_id === uid && p.date === dateStr
     );
     if (already) continue;
-    const salary = Number(((state.salary_config)[uid]||{}).monthly_salary || 0);
+    const salary = getSalaryForMonth(uid, dateStr.slice(0, 7));
     const amount = penaltyAmount("three_days", salary);
     state.penalties.push({
       id: uuid(), at: now(), by: appliedBy.by, by_name: appliedBy.by_name,
@@ -12423,16 +12538,12 @@ routes.scorecard = function(u) {
   // Compute scores first (kpiGetAllScores already covers ALL users, including archived).
   const allScores = kpiGetAllScores();
   const cats = Object.keys(KPI_W());
-  // Show active baristas + archived baristas who still have score data in the 30-day window
-  // (e.g. someone deactivated this month — their logs are still recent).
-  const allU = state.users.filter(x => {
-    if (!["barista","head_barista"].includes(x.role)) return false;
-    if (x.active) return true;
-    const s = allScores[x.id];
-    return s && cats.some(k => s[k] != null); // archived: only show in tables if data exists
-  });
-  // Dropdowns only show active baristas — archived stay in the heatmap/leaderboard tables only
-  const activeU = allU.filter(x => x.active !== false);
+  // Only show active baristas — archived/deactivated are hidden everywhere in KPI scorecard.
+  // Their historical data is preserved and will reappear if they are reactivated.
+  const allU = state.users.filter(x =>
+    ["barista","head_barista"].includes(x.role) && x.active !== false
+  );
+  const activeU = allU;
   const hasSomeData = activeU.some(x => {
     const s = allScores[x.id];
     return s && cats.some(k=>s[k]!=null);
@@ -12677,15 +12788,26 @@ routes.scorecard = function(u) {
     const recentCF = (state.customer_feedback||[]).sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,8);
     if (recentCF.length) {
       const cft = el("table",{style:{marginTop:"10px"}});
-      cft.appendChild(el("thead",{},[el("tr",{},[el("th",{},"Barista"),el("th",{},"Rating"),el("th",{},"Source"),el("th",{},"Date")])]));
+      cft.appendChild(el("thead",{},[el("tr",{},[el("th",{},"Barista"),el("th",{},"Rating"),el("th",{},"Source"),el("th",{},"Date"),el("th",{},"")])]));
       const cftb=el("tbody",{});
       recentCF.forEach(f=>{
-        const bName=(allU.find(x=>x.id===f.user_id)||{}).name||f.user_id;
+        const bName=(activeU.find(x=>x.id===f.user_id)||allU.find(x=>x.id===f.user_id)||{}).name||f.barista_name||f.user_id||"—";
+        const delBtn = el("button",{class:"btn ghost",style:{padding:"2px 8px",fontSize:"11px",color:"var(--bad)"}}, "✕");
+        delBtn.addEventListener("click",()=>{
+          if (!confirm("Delete this feedback entry? This cannot be undone.")) return;
+          if (f.by === "website" && f.id) {
+            state.blocked_feedback_ids = state.blocked_feedback_ids || [];
+            if (!state.blocked_feedback_ids.includes(f.id)) state.blocked_feedback_ids.push(f.id);
+          }
+          state.customer_feedback = (state.customer_feedback||[]).filter(x=>x.id!==f.id);
+          save(); render();
+        });
         cftb.appendChild(el("tr",{},[
           el("td",{},bName),
           el("td",{class:"num",style:{color:kpiScoreColor(f.rating*20)}},"★"+f.rating.toFixed(1)),
           el("td",{class:"muted"},f.source||""),
           el("td",{class:"muted"},fmtDay(f.at||0)),
+          el("td",{},delBtn),
         ]));
       });
       cft.appendChild(cftb);
@@ -12747,6 +12869,8 @@ routes.scorecard = function(u) {
       state.kpi_manual        = (state.kpi_manual        || []).filter(m => !(m.user_id === uid && m.month === mon));
       state.waste_new         = (state.waste_new         || []).filter(x => !(x.user_id === uid && inMonth(x)));
       state.cleaning_log      = (state.cleaning_log      || []).filter(x => !(x.user_id === uid && inMonth(x)));
+      const fbToRemove = (state.customer_feedback || []).filter(x => x.user_id === uid && inMonth(x));
+      fbToRemove.forEach(x => { if (x.by === "website" && x.id) { state.blocked_feedback_ids = state.blocked_feedback_ids || []; if (!state.blocked_feedback_ids.includes(x.id)) state.blocked_feedback_ids.push(x.id); } });
       state.customer_feedback = (state.customer_feedback || []).filter(x => !(x.user_id === uid && inMonth(x)));
       state.penalties         = (state.penalties         || []).filter(x => !(
         x.user_id === uid && inMonth(x) &&
@@ -12985,7 +13109,7 @@ routes.my_hr = function(u, params) {
   function drawBody() {
     body.innerHTML = "";
     const uid     = targetUser.id;
-    const salary  = Number((state.salary_config[uid] || {}).monthly_salary || 0);
+    const salary  = getSalaryForMonth(uid, selMonth);
     const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
     const penList  = state.penalties.filter(x => x.user_id === uid && monthFn(x));
     const otList   = state.overtime_logs.filter(x => x.user_id === uid && monthFn(x));
@@ -13222,7 +13346,7 @@ routes.staff_hr = function(u) {
     // Summary stat cards
     let totalPayroll = 0, totalPen = 0, totalOT = 0;
     const staffData = staff.map(p => {
-      const salary  = Number((state.salary_config[p.id] || {}).monthly_salary || 0);
+      const salary  = getSalaryForMonth(p.id, selMonth);
       const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
