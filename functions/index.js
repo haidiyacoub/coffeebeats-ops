@@ -1,6 +1,15 @@
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const admin  = require("firebase-admin");
-const bcrypt = require("bcryptjs");
+const { onCall, HttpsError }     = require("firebase-functions/v2/https");
+const { onSchedule }             = require("firebase-functions/v2/scheduler");
+const { onDocumentUpdated }      = require("firebase-functions/v2/firestore");
+const { defineSecret }           = require("firebase-functions/params");
+const admin      = require("firebase-admin");
+const bcrypt     = require("bcryptjs");
+const nodemailer = require("nodemailer");
+
+// Gmail app-password credentials (set via: firebase functions:secrets:set <NAME>)
+const GMAIL_USER = defineSecret("GMAIL_USER");   // your Gmail address
+const GMAIL_PASS = defineSecret("GMAIL_PASS");   // Gmail app password (16-char)
+const NOTIFY_TO  = defineSecret("NOTIFY_TO");    // recipient email (can be same as GMAIL_USER)
 
 // Initialize Admin SDK at module load time (correct pattern for Gen2 functions)
 admin.initializeApp();
@@ -149,6 +158,131 @@ exports.updateStaffProfile = onCall(async (request) => {
   return { ok: true };
 });
 
+
+// ─── shared helpers ───────────────────────────────────────────────────────────
+function _sumPayments(closes) {
+  return closes.reduce(
+    (s, c) => ({
+      cash:           s.cash           + (Number(c.cash)           || 0),
+      instapay:       s.instapay       + (Number(c.instapay)       || 0),
+      cc:             s.cc             + (Number(c.cc)             || 0),
+      talabat_credit: s.talabat_credit + (Number(c.talabat_credit) || 0),
+      talabat_cash:   s.talabat_cash   + (Number(c.talabat_cash)   || 0),
+    }),
+    { cash: 0, instapay: 0, cc: 0, talabat_credit: 0, talabat_cash: 0 }
+  );
+}
+function _rowTotal(s) { return s.cash + s.instapay + s.cc + s.talabat_credit + s.talabat_cash; }
+function _fmt(n)      { return `EGP ${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
+function _cap(s)      { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+async function _sendEmail(subject, text) {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: { user: GMAIL_USER.value(), pass: GMAIL_PASS.value() },
+  });
+  await transporter.sendMail({
+    from: `"Coffee Beats" <${GMAIL_USER.value()}>`,
+    to:   NOTIFY_TO.value(),
+    subject,
+    text,
+  });
+}
+
+// ─── sendDailyShiftSummary ────────────────────────────────────────────────────
+// Runs at 23:30 Cairo time (UTC+2 = 21:30 UTC) every day.
+exports.sendDailyShiftSummary = onSchedule(
+  { schedule: "30 21 * * *", timeZone: "UTC", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async () => {
+    const db = getDb();
+    const today = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const opSnap      = await db.collection("state").doc("operations").get();
+    const allCloses   = (opSnap.exists ? opSnap.data().shift_closes : null) || [];
+    const todayCloses = allCloses.filter(c => c.date === today);
+
+    const lines = [];
+    lines.push("☕ *Coffee Beats — Daily Shift Summary*");
+    lines.push(`📅 ${today}`);
+    lines.push("──────────────────────");
+
+    if (todayCloses.length === 0) {
+      lines.push("⚠️ No shift closes recorded today.");
+    } else {
+      const branches = [...new Set(todayCloses.map(c => c.branch))].sort();
+      for (const branch of branches) {
+        const bSums  = _sumPayments(todayCloses.filter(c => c.branch === branch));
+        const bTotal = _rowTotal(bSums);
+        lines.push(`📍 ${_cap(branch)}: *${_fmt(bTotal)}*`);
+        if (bSums.cash                             > 0) lines.push(`   💵 Cash: ${_fmt(bSums.cash)}`);
+        if (bSums.instapay                         > 0) lines.push(`   📲 Instapay: ${_fmt(bSums.instapay)}`);
+        if (bSums.cc                               > 0) lines.push(`   💳 Card: ${_fmt(bSums.cc)}`);
+        if (bSums.talabat_credit + bSums.talabat_cash > 0)
+          lines.push(`   🛵 Talabat: ${_fmt(bSums.talabat_credit + bSums.talabat_cash)}`);
+      }
+      lines.push("──────────────────────");
+      lines.push(`✅ *TOTAL TODAY: ${_fmt(_rowTotal(_sumPayments(todayCloses)))}*`);
+    }
+
+    await _sendEmail(`☕ Shift Summary — ${today}`, lines.join("\n"));
+    console.log("Daily email sent for", today);
+  }
+);
+
+// ─── salesReconciliation ──────────────────────────────────────────────────────
+// Fires whenever sales data is saved to Firestore (i.e. when you upload a sales file).
+// Compares each month present in the new sales data against shift closes totals.
+exports.salesReconciliation = onDocumentUpdated(
+  { document: "state/sales", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async (event) => {
+    const db       = getDb();
+    const newSales = (event.data.after.data().sales) || [];
+
+    if (newSales.length === 0) return;
+
+    // Detect which months are represented in the uploaded sales
+    const months = [...new Set(newSales.filter(s => s.date).map(s => s.date.slice(0, 7)))].sort();
+
+    const opSnap    = await db.collection("state").doc("operations").get();
+    const allCloses = (opSnap.exists ? opSnap.data().shift_closes : null) || [];
+
+    const lines = [];
+    lines.push("📊 *Coffee Beats — Sales Reconciliation*");
+    lines.push(`Triggered by sales file upload`);
+
+    for (const ym of months) {
+      const monthSales      = newSales.filter(s => s.date && s.date.startsWith(ym));
+      const dashboardRevenue = monthSales.reduce((s, r) => s + (Number(r.net_sales) || 0), 0);
+      const monthCloses     = allCloses.filter(c => c.date && c.date.startsWith(ym));
+      const monthShiftTotal = _rowTotal(_sumPayments(monthCloses));
+      const diff    = monthShiftTotal - dashboardRevenue;
+      const absDiff = Math.abs(diff);
+      const pct     = dashboardRevenue > 0 ? (absDiff / dashboardRevenue * 100).toFixed(1) : "N/A";
+
+      lines.push("");
+      lines.push(`📅 *${ym}*`);
+      lines.push(`🔒 Shift closes:     ${_fmt(monthShiftTotal)}`);
+      lines.push(`📈 Dashboard revenue: ${_fmt(dashboardRevenue)}`);
+      lines.push(`Δ Difference:        ${_fmt(absDiff)} (${pct}%)`);
+
+      if (absDiff < 100) {
+        lines.push("✅ Match — within tolerance.");
+      } else {
+        lines.push("⚠️ *DISCREPANCY*");
+        if (diff > 0) {
+          lines.push(`   Shift closes exceed dashboard by ${_fmt(absDiff)}.`);
+          lines.push(`   Possible cause: sales data incomplete for this month.`);
+        } else {
+          lines.push(`   Dashboard exceeds shift closes by ${_fmt(absDiff)}.`);
+          lines.push(`   Possible cause: a shift close was skipped or misrecorded.`);
+        }
+      }
+    }
+
+    await _sendEmail(`📊 Sales Reconciliation — ${months.join(", ")}`, lines.join("\n"));
+    console.log("Reconciliation email sent for months:", months.join(", "));
+  }
+);
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function _requireOwner(request) {
