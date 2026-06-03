@@ -5700,6 +5700,20 @@ const OVERHEAD_CATEGORIES = [
 function presetKey(branch, category) { return `${branch}|${category}`; }
 function monthlyKey(branch, category, month) { return `${branch}|${category}|${month}`; }
 
+function wasActiveInMonth(uid, month) {
+  const events = ((state.barista_dates || {})[uid] || [])
+    .filter(e => e.date && e.type)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (events.length === 0) return null; // no history, caller uses fallback
+  const relevant = events.filter(e => e.date.slice(0, 7) <= month);
+  if (relevant.length === 0) return false; // not yet hired in this month
+  return relevant[relevant.length - 1].type === "joined";
+}
+
+function fmtYearMonth(y, m) {
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
 function getSalaryForMonth(uid, month) {
   const snaps = (state.salary_snapshots || {})[uid] || {};
   const months = Object.keys(snaps).filter(m => m <= month).sort();
@@ -13728,11 +13742,12 @@ routes.my_hr = function(u, params) {
   wrap.appendChild(hdr);
 
   // Month selector
-  const nowMonth = new Date().toISOString().slice(0, 7);
+  const _nmNow = new Date();
+  const nowMonth = fmtYearMonth(_nmNow.getFullYear(), _nmNow.getMonth() + 1);
   let selMonth = nowMonth;
   const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
   const prevBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
-  const nextBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const nextBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" }, disabled: true }, "›");
   const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
   monthNav.appendChild(prevBtn);
   monthNav.appendChild(monthLbl);
@@ -13746,8 +13761,9 @@ routes.my_hr = function(u, params) {
   function shiftMonth(delta) {
     const [y, m] = selMonth.split("-").map(Number);
     const d = new Date(y, m - 1 + delta, 1);
-    selMonth = d.toISOString().slice(0, 7);
+    selMonth = fmtYearMonth(d.getFullYear(), d.getMonth() + 1);
     monthLbl.textContent = selMonth;
+    nextBtn.disabled = selMonth >= nowMonth;
     drawBody();
   }
   prevBtn.addEventListener("click", () => shiftMonth(-1));
@@ -13957,12 +13973,13 @@ routes.staff_hr = function(u) {
   state.salary_loans   = state.salary_loans   || [];
   state.leaves         = state.leaves         || [];
 
-  const nowMonth = new Date().toISOString().slice(0, 7);
+  const _nmNow2 = new Date();
+  const nowMonth = fmtYearMonth(_nmNow2.getFullYear(), _nmNow2.getMonth() + 1);
   let selMonth = nowMonth;
 
   const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
   const prevBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
-  const nextBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "›");
+  const nextBtn  = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" }, disabled: true }, "›");
   const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, selMonth);
   monthNav.appendChild(prevBtn);
   monthNav.appendChild(monthLbl);
@@ -13976,8 +13993,9 @@ routes.staff_hr = function(u) {
   function shiftMonth(delta) {
     const [y, m] = selMonth.split("-").map(Number);
     const d = new Date(y, m - 1 + delta, 1);
-    selMonth = d.toISOString().slice(0, 7);
+    selMonth = fmtYearMonth(d.getFullYear(), d.getMonth() + 1);
     monthLbl.textContent = selMonth;
+    nextBtn.disabled = selMonth >= nowMonth;
     drawBody();
   }
   prevBtn.addEventListener("click", () => shiftMonth(-1));
@@ -13986,14 +14004,16 @@ routes.staff_hr = function(u) {
   function drawBody() {
     body.innerHTML = "";
     const monthFn = x => (x.month || (x.date || "").slice(0, 7)) === selMonth;
-    const isPast  = selMonth < nowMonth;
 
-    // Active baristas + archived baristas who have any payroll record in this month
-    // (or any salary configured, when viewing a past month — preserves full history)
+    // Show baristas who were employed in selMonth using barista_dates history.
+    // Falls back to active flag + payroll data for staff with no history recorded.
     const staff = state.users.filter(x => {
       if (!["barista","head_barista"].includes(x.role)) return false;
+      const hist = wasActiveInMonth(x.id, selMonth);
+      if (hist !== null) return hist;
+      // No barista_dates history — use original fallback logic
       if (x.active) return true;
-      if (!isPast)  return false; // never show archived for current month
+      if (selMonth >= nowMonth) return false;
       return !!(state.salary_config[x.id])
         || state.penalties.some(r => r.user_id === x.id && monthFn(r))
         || state.overtime_logs.some(r => r.user_id === x.id && monthFn(r))
