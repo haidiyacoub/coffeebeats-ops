@@ -1066,6 +1066,7 @@ function migrateState(s) {
   s.leaves              = s.leaves        || []; // leave requests (annual / sick)
   s.suggestions         = s.suggestions   || []; // team suggestions & complaints for monthly meetings
   s.special_dates       = s.special_dates || []; // custom events: Zawya screenings, Maadi events, etc.
+  s.external_baristas   = s.external_baristas || []; // outsourced staff for events: [{id, name, daily_rate, notes, active}]
   s.order_items         = s.order_items   || []; // File 2: per-line items from "Branch order items Month Year"
   s.orders              = s.orders        || []; // File 3: per-order barista attribution from "Branch orders Month Year"
   s.settings.team_code           = s.settings.team_code           || "coffeeteam2026";
@@ -1241,7 +1242,7 @@ const STATE_CHUNKS = {
   purchases:   ["purchases", "petty_cash", "bank_ledger"],
   sales:       ["sales", "shifts", "order_items", "orders"],
   operations:  ["shift_closes", "cleaning_logs", "signin_stamps", "suggestions"],
-  roster:      ["rosters", "roaster_schedules", "maadi_deposits", "special_dates"],
+  roster:      ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:          ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
   overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:       ["photo_log", "assets"],
@@ -1269,7 +1270,7 @@ function hasPending() {
 }
 try { pendingWrites = Number(localStorage.getItem(SYNC_DIRTY_KEY) || 0); } catch(e) {}
 
-function updateSyncBadge(status) {
+function updateSyncBadge(status, detail) {
   let badge = document.getElementById("syncBadge");
   if (!badge) {
     badge = document.createElement("div");
@@ -1278,9 +1279,9 @@ function updateSyncBadge(status) {
     document.body.appendChild(badge);
   }
   badge.style.display = "";
-  if (status === "syncing") { badge.textContent = "⟳ Syncing…"; badge.style.background = "#fef3c7"; badge.style.color = "#92400e"; }
-  else if (status === "synced") { badge.textContent = "✓ Synced"; badge.style.background = "#d1fae5"; badge.style.color = "#065f46"; }
-  else if (status === "error")  { badge.textContent = "⚠ Sync failed"; badge.style.background = "#fee2e2"; badge.style.color = "#991b1b"; }
+  if (status === "syncing") { badge.textContent = "⟳ Syncing…"; badge.style.background = "#fef3c7"; badge.style.color = "#92400e"; badge.title = ""; }
+  else if (status === "synced") { badge.textContent = "✓ Synced"; badge.style.background = "#d1fae5"; badge.style.color = "#065f46"; badge.title = ""; }
+  else if (status === "error")  { badge.textContent = "⚠ Sync failed"; badge.style.background = "#fee2e2"; badge.style.color = "#991b1b"; badge.title = detail || ""; }
 }
 
 function queueSync() {
@@ -1288,6 +1289,7 @@ function queueSync() {
   syncTimer = setTimeout(doSync, 2500);
 }
 
+let _syncRetryCount = 0;
 async function doSync() {
   if (syncInFlight) return;
   syncInFlight = true;
@@ -1297,18 +1299,35 @@ async function doSync() {
     const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
       const doc = {};
       for (const k of keys) { const v = state[k]; doc[k] = v !== undefined ? v : null; }
-      return db.collection("state").doc(chunk).set(doc);
+      // Warn in console if any chunk is approaching Firestore's 1 MB document limit
+      const approxBytes = JSON.stringify(doc).length;
+      if (approxBytes > 800_000) console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
+      return db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; });
     });
     await Promise.all(writes);
     state.settings.last_sync = now();
     pendingWrites = Math.max(0, pendingWrites - batchSize);
+    _syncRetryCount = 0;
     try { localStorage.setItem(SYNC_DIRTY_KEY, String(pendingWrites)); } catch(e) {}
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     if (pendingWrites === 0) updateSyncBadge("synced");
     else { updateSyncBadge("syncing"); queueSync(); }
   } catch (e) {
-    console.warn("Firebase sync failed", e);
-    updateSyncBadge("error");
+    const code = e.code || e.name || "unknown";
+    const chunk = e._chunk ? ` (chunk: ${e._chunk})` : "";
+    console.error(`Firebase sync failed [${code}]${chunk}`, e);
+    // Auto-retry up to 3 times with exponential backoff (5s, 15s, 45s)
+    // Skip retry for permanent errors like permission-denied or quota-exceeded
+    const permanent = ["permission-denied", "unauthenticated", "resource-exhausted"].includes(code);
+    if (!permanent && _syncRetryCount < 3) {
+      _syncRetryCount++;
+      const delay = 5000 * Math.pow(3, _syncRetryCount - 1);
+      console.warn(`[sync] retrying in ${delay/1000}s (attempt ${_syncRetryCount}/3)`);
+      updateSyncBadge("syncing");
+      setTimeout(() => { syncInFlight = false; doSync(); }, delay);
+      return;
+    }
+    updateSyncBadge("error", `${code}${chunk}`);
   } finally {
     syncInFlight = false;
   }
@@ -6291,7 +6310,39 @@ routes.sales_import = function (u) {
       stateCard.appendChild(pills);
     }
     if (u.role === "owner" && state.sales.length > 0) {
-      stateCard.appendChild(el("button", { class: "btn ghost", style: { marginTop: "12px" }, onClick: () => {
+      // Selective delete row
+      const selRow = el("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", marginTop: "12px" } });
+
+      const branchOpts = [el("option", { value: "" }, "All branches"), ...([...new Set(combos.map(c => c.b))].sort().map(b => el("option", { value: b }, b || "?")))]
+      const monthOpts  = [el("option", { value: "" }, "All months"),  ...([...new Set(combos.map(c => c.m))].sort().reverse().map(m => el("option", { value: m }, m || "?")))]
+
+      const brSel = el("select", { style: { padding: "6px 10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--card)", color: "var(--fg)", fontSize: "14px" } }, branchOpts);
+      const moSel = el("select", { style: { padding: "6px 10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--card)", color: "var(--fg)", fontSize: "14px" } }, monthOpts);
+
+      const delSelBtn = el("button", { class: "btn ghost", style: { color: "var(--warn)" }, onClick: () => {
+        const br = brSel.value;
+        const mo = moSel.value;
+        const toDelete = state.sales.filter(s => {
+          const matchBr = !br || (s.branch || "").toLowerCase() === br;
+          const matchMo = !mo || (s.date || "").startsWith(mo);
+          return matchBr && matchMo;
+        });
+        if (toDelete.length === 0) { toast("No matching rows", "error"); return; }
+        const label = [br || "all branches", mo || "all months"].join(" · ");
+        if (!confirm(`Delete ${toDelete.length} rows for ${label}? This can't be undone.`)) return;
+        const ids = new Set(toDelete.map(s => s.id || JSON.stringify(s)));
+        state.sales = state.sales.filter(s => !ids.has(s.id || JSON.stringify(s)));
+        saveState();
+        toast(`Deleted ${toDelete.length} rows (${label})`);
+        renderStateCard();
+      }}, "🗑 Delete selected");
+
+      selRow.appendChild(brSel);
+      selRow.appendChild(moSel);
+      selRow.appendChild(delSelBtn);
+      stateCard.appendChild(selRow);
+
+      stateCard.appendChild(el("button", { class: "btn ghost", style: { marginTop: "8px", fontSize: "12px", opacity: "0.6" }, onClick: () => {
         if (!confirm(`Delete all ${state.sales.length} sales rows? This can't be undone.`)) return;
         state.sales = [];
         saveState();
@@ -6539,11 +6590,10 @@ routes.sales_import = function (u) {
     // Save excluded revenue so dashboard can compute CB% of total venue sales
     if ((parsed.zawyaExcludedNet || 0) > 0 || (parsed.zawyaExcludedGross || 0) > 0) {
       state.sales_meta = state.sales_meta || [];
-      for (const m of [...importedMonths]) {
-        state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
-      }
-      if (importedMonths.size === 0) {
-        const m = monthFallback.value || new Date().toISOString().slice(0,7);
+      const metaMonths = importedMonths.size > 0 ? [...importedMonths] : [monthFallback.value || new Date().toISOString().slice(0,7)];
+      // Remove stale entries for these months before inserting to prevent accumulation on re-upload
+      state.sales_meta = state.sales_meta.filter(m => !(m.branch === "zawya" && metaMonths.includes(m.month)));
+      for (const m of metaMonths) {
         state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
       }
     }
@@ -6583,6 +6633,8 @@ routes.sales_import = function (u) {
       if ((parsed.zawyaExcludedNet || 0) > 0 || (parsed.zawyaExcludedGross || 0) > 0) {
         state.sales_meta = state.sales_meta || [];
         const metaMonths = importedMonths.size > 0 ? [...importedMonths] : [monthFallback.value || new Date().toISOString().slice(0,7)];
+        // Remove stale entries for these months before inserting to prevent accumulation on re-upload
+        state.sales_meta = state.sales_meta.filter(m => !(m.branch === "zawya" && metaMonths.includes(m.month)));
         for (const m of metaMonths) {
           state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
         }
@@ -7514,6 +7566,8 @@ routes.roster = function (u) {
       // Build options: exclude staff on approved leave for this day
       const dayStaff = staff.filter(s => !onLeave.includes(s.id));
       const staffOptions = [["","— empty —"], ...dayStaff.map(s => [s.id, s.name])];
+      // External baristas (active only) — for events shifts
+      const activeExtBaristas = (state.external_baristas || []).filter(b => b.active !== false);
 
       for (const branch of ["maadi","zawya","events"]) {
         let branchLabel, shiftsForBranch;
@@ -7543,10 +7597,29 @@ routes.roster = function (u) {
             // If the currently-assigned person is on approved leave, show a warning
             const assignedOnLeave = entry && onLeave.includes(entry.user_id);
             const sel = el("select", { style: assignedOnLeave ? { borderColor: "var(--bad)" } : {} });
-            for (const [val, lab] of staffOptions) {
-              const o = el("option", { value: val }, lab);
-              if (entry && entry.user_id === val) o.selected = true;
-              sel.appendChild(o);
+            if (branch === "events" && activeExtBaristas.length > 0) {
+              // Events shift: show Coffee Beats team and outsourced team in separate groups
+              sel.appendChild(el("option", { value: "" }, "— empty —"));
+              const cbGroup = document.createElement("optgroup"); cbGroup.label = "☕ Coffee Beats Team";
+              for (const s of dayStaff) {
+                const o = el("option", { value: s.id }, s.name);
+                if (entry && entry.user_id === s.id) o.selected = true;
+                cbGroup.appendChild(o);
+              }
+              sel.appendChild(cbGroup);
+              const extGroup = document.createElement("optgroup"); extGroup.label = "🤝 Outsourced Team";
+              for (const b of activeExtBaristas) {
+                const o = el("option", { value: "ext_" + b.id }, b.name + (b.daily_rate ? ` (${b.daily_rate} L.E./day)` : ""));
+                if (entry && entry.user_id === "ext_" + b.id) o.selected = true;
+                extGroup.appendChild(o);
+              }
+              sel.appendChild(extGroup);
+            } else {
+              for (const [val, lab] of staffOptions) {
+                const o = el("option", { value: val }, lab);
+                if (entry && entry.user_id === val) o.selected = true;
+                sel.appendChild(o);
+              }
             }
             // If assigned person is now on leave, add them as a disabled option with warning
             if (assignedOnLeave) {
@@ -7561,7 +7634,13 @@ routes.roster = function (u) {
                 sel.value = entry ? entry.user_id : "";
                 return;
               }
-              const user = staff.find(s => s.id === sel.value) || null;
+              const isExt = sel.value.startsWith("ext_");
+              const extId = isExt ? sel.value.slice(4) : null;
+              const extPerson = isExt ? (state.external_baristas || []).find(b => b.id === extId) : null;
+              // Resolve user: either a Coffee Beats staff member or a synthetic external barista object
+              const user = isExt
+                ? (extPerson ? { id: "ext_" + extPerson.id, name: extPerson.name, _external: true, _daily_rate: extPerson.daily_rate } : null)
+                : (staff.find(s => s.id === sel.value) || null);
               setRosterEntry(branch, shift, day, user);
               // ── Events bonus automation ───────────────────────────
               if (branch === "events") {
@@ -7571,20 +7650,26 @@ routes.roster = function (u) {
                   !(x.kind === "events_bonus" && x.date === dayDateStr && x.shift === shift)
                 );
                 if (user) {
-                  const salary = getSalaryForMonth(user.id, dayDateStr.slice(0, 7));
-                  const bonus = Math.round((salary / 30) + (salary * 0.07));
+                  let bonus = 0;
+                  if (user._external) {
+                    // External barista: bonus = their daily rate (no monthly salary formula)
+                    bonus = user._daily_rate || 0;
+                  } else {
+                    const salary = getSalaryForMonth(user.id, dayDateStr.slice(0, 7));
+                    bonus = Math.round((salary / 30) + (salary * 0.07));
+                  }
                   if (bonus > 0) {
                     const sb = stamp();
                     state.overtime_logs.push({
                       id: uuid(), user_id: user.id, user_name: user.name,
                       date: dayDateStr, month: dayDateStr.slice(0, 7),
                       hours: 0, amount: bonus, kind: "events_bonus", shift,
-                      note: `🎪 Events bonus — ${state.events_location_name || "Coffee Beats Events"}`,
+                      note: `🎪 Events bonus — ${state.events_location_name || "Coffee Beats Events"}${user._external ? " (outsourced)" : ""}`,
                       approved: true,
                       by: sb.by, by_name: sb.by_name, at: sb.at,
                     });
                     saveState();
-                    toast(`${ROSTER_DAY_LABELS[day]} · ${branchLabel} · ${shiftLabel} → ${user.name} (+${bonus} L.E. events bonus 🎪)`);
+                    toast(`${ROSTER_DAY_LABELS[day]} · ${branchLabel} · ${shiftLabel} → ${user.name} (+${bonus} L.E. events bonus 🎪${user._external ? " · outsourced" : ""})`);
                     return;
                   }
                 }
@@ -8816,7 +8901,16 @@ routes.dashboard = function (u, params) {
     const npPct = revenue ? (netProfit / revenue) * 100 : 0;
 
     // CB Sales % — only meaningful for Zawya (third-party concessions exist at that venue)
-    const salesMetaInRange = (state.sales_meta || []).filter(m => m.branch === branch && m.month >= monthFrom && m.month <= monthTo);
+    // Deduplicate sales_meta by branch+month, keeping the latest entry (by id insertion order)
+    // to avoid double-counting when the same month's data was re-uploaded multiple times.
+    const salesMetaDeduped = (() => {
+      const latest = new Map();
+      for (const m of (state.sales_meta || [])) {
+        latest.set(m.branch + "|" + m.month, m);
+      }
+      return [...latest.values()];
+    })();
+    const salesMetaInRange = salesMetaDeduped.filter(m => m.branch === branch && m.month >= monthFrom && m.month <= monthTo);
     const excludedNet = salesMetaInRange.reduce((s, m) => s + (Number(m.excluded_net) || 0), 0);
     const totalVenueNet = revenue + excludedNet;
     const cbPct = totalVenueNet > 0 ? (revenue / totalVenueNet) * 100 : null;
@@ -8836,7 +8930,7 @@ routes.dashboard = function (u, params) {
       kpi("Purchases", money(purchTotal), purch.length + " invoices"),
       kpi("Waste events", String(waste.length), money(wasteCost) + " valued"),
     ];
-    if (cbPct !== null) {
+    if (branch === "zawya" && cbPct !== null) {
       topKpis.push(kpi("CB Sales %", cbPct.toFixed(1) + "%", `CB ${money(revenue)} of ${money(totalVenueNet)} venue total`));
     }
     body.appendChild(el("div", { class: "grid c2" }, topKpis));
@@ -9024,6 +9118,92 @@ routes.settings = function (u) {
     ]));
   }
   wrap.appendChild(pc);
+
+  // ── External / Outsourced Team ──
+  const extCard = el("div", { class: "card", style: { marginTop: "14px" } });
+  extCard.appendChild(el("h2", {}, "🤝 External / Outsourced Team"));
+  extCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    "Add freelance or outsourced baristas who help at external events. They appear in the Events shift dropdown alongside your Coffee Beats team. Set a daily rate to auto-calculate their events bonus."));
+
+  function renderExtBaristas() {
+    extCard.querySelectorAll(".ext-barista-row, .ext-barista-form, .ext-barista-list").forEach(e => e.remove());
+    const list = el("div", { class: "ext-barista-list" });
+    const extB = state.external_baristas || [];
+    if (extB.length === 0) {
+      list.appendChild(el("div", { class: "muted small", style: { fontStyle: "italic", marginBottom: "8px" } }, "No external baristas added yet."));
+    } else {
+      extB.forEach((b, i) => {
+        const row = el("div", { class: "ext-barista-row kv", style: { alignItems: "center", gap: "8px", marginBottom: "6px" } });
+        const nameEl = el("div", { class: "k" }, b.name);
+        const rateEl = el("div", { class: "v muted small" }, b.daily_rate ? `${b.daily_rate} L.E./day` : "No rate set");
+        const actBadge = el("span", { class: "pill", style: { background: b.active ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.12)", fontSize: "11px" } }, b.active ? "Active" : "Inactive");
+        const editBtn = el("button", { class: "btn secondary", style: { width: "auto", fontSize: "12px", padding: "3px 10px" }, onClick: () => {
+          showExtForm(i);
+        }}, "Edit");
+        const delBtn = el("button", { class: "btn", style: { width: "auto", fontSize: "12px", padding: "3px 10px", background: "var(--bad)" }, onClick: () => {
+          if (!confirm(`Remove ${b.name}?`)) return;
+          state.external_baristas.splice(i, 1);
+          saveState(); renderExtBaristas();
+        }}, "Remove");
+        row.appendChild(nameEl);
+        row.appendChild(rateEl);
+        row.appendChild(actBadge);
+        row.appendChild(editBtn);
+        row.appendChild(delBtn);
+        list.appendChild(row);
+      });
+    }
+    extCard.appendChild(list);
+
+    const addBtn = el("button", { class: "btn secondary", style: { marginTop: "8px" }, onClick: () => showExtForm(null) }, "+ Add External Barista");
+    addBtn.className += " ext-barista-form";
+    extCard.appendChild(addBtn);
+  }
+
+  function showExtForm(idx) {
+    extCard.querySelectorAll(".ext-barista-form").forEach(e => e.remove());
+    const existing = idx !== null ? (state.external_baristas[idx] || {}) : {};
+    const form = el("div", { class: "ext-barista-form card", style: { marginTop: "10px", background: "var(--bg2)", border: "1px solid var(--border)" } });
+    form.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px", fontWeight: "600" } }, idx !== null ? "Edit External Barista" : "Add External Barista"));
+
+    form.appendChild(el("label", {}, "Name *"));
+    const nameIn = el("input", { type: "text", value: existing.name || "", placeholder: "e.g. Ahmed (Outsourced)" });
+    form.appendChild(nameIn);
+
+    form.appendChild(el("label", {}, "Daily rate (L.E.) — used to calculate events bonus"));
+    const rateIn = el("input", { type: "number", value: existing.daily_rate || "", placeholder: "e.g. 300" });
+    form.appendChild(rateIn);
+
+    form.appendChild(el("label", {}, "Notes (optional)"));
+    const notesIn = el("input", { type: "text", value: existing.notes || "", placeholder: "e.g. Via Agency X, contact: ..." });
+    form.appendChild(notesIn);
+
+    const activeRow = el("div", { class: "kv", style: { marginTop: "6px" } });
+    activeRow.appendChild(el("div", { class: "k" }, "Active"));
+    const activeChk = el("input", { type: "checkbox" }); activeChk.checked = existing.active !== false;
+    const activeWrap = el("div", { class: "v" }); activeWrap.appendChild(activeChk);
+    activeRow.appendChild(activeWrap);
+    form.appendChild(activeRow);
+
+    const btnRow = el("div", { class: "btn-row", style: { marginTop: "10px" } });
+    btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => {
+      const name = nameIn.value.trim();
+      if (!name) { toast("Name is required", "error"); return; }
+      const entry = { id: existing.id || uuid(), name, daily_rate: Number(rateIn.value) || 0, notes: notesIn.value.trim(), active: activeChk.checked };
+      state.external_baristas = state.external_baristas || [];
+      if (idx !== null) { state.external_baristas[idx] = entry; }
+      else { state.external_baristas.push(entry); }
+      saveState(); renderExtBaristas(); toast(idx !== null ? "External barista updated ✓" : "External barista added ✓");
+    }}, "Save"));
+    btnRow.appendChild(el("button", { class: "btn secondary", style: { background: "var(--bg3)" }, onClick: () => {
+      form.remove(); renderExtBaristas();
+    }}, "Cancel"));
+    form.appendChild(btnRow);
+    extCard.appendChild(form);
+  }
+
+  renderExtBaristas();
+  wrap.appendChild(extCard);
 
   // export / backup
   const ex = el("div", { class: "card", style: { marginTop: "14px" } });
