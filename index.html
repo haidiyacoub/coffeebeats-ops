@@ -5866,12 +5866,15 @@ routes.overheads = function (u) {
         el("div", { style:{ fontWeight:"500", fontSize:"13px", flex:"1" } }, cat.label),
         el("div", { style:{ fontWeight:"700", fontSize:"14px" } }, money(amount)),
       ]));
-      rowDiv.appendChild(el("div", { style:{ display:"flex", gap:"4px", marginTop:"5px", flexWrap:"wrap" } }, [
-        el("button", {
-          class:"btn " + (isPaid ? "" : "secondary"),
-          style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px" },
-          onClick:() => togglePaid(br, cat, preset, existing, monthlyOverride)
-        }, isPaid ? `✓ ${paidOn ? paidOn : "Paid"}` : "Mark paid"),
+      const cbLabel = el("label", { style:{ display:"flex", alignItems:"center", gap:"6px", cursor:"pointer", fontSize:"13px", marginTop:"5px", userSelect:"none" } });
+      const cb = el("input", { type:"checkbox" });
+      cb.checked = isPaid;
+      cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--ok)";
+      cb.addEventListener("change", () => togglePaid(br, cat, preset, existing, monthlyOverride));
+      cbLabel.appendChild(cb);
+      cbLabel.appendChild(document.createTextNode(isPaid ? `Paid${paidOn ? " · " + paidOn : ""}` : "Mark as paid"));
+      rowDiv.appendChild(el("div", { style:{ display:"flex", gap:"4px", marginTop:"5px", flexWrap:"wrap", alignItems:"center" } }, [
+        cbLabel,
         el("button", {
           class:"btn ghost",
           style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", color:"var(--warn)" },
