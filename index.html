@@ -6677,12 +6677,20 @@ function extractDateFromOrderRef(orderRef, isoMonth) {
   return isoMonth + "-15"; // mid-month placeholder
 }
 
-// A(0)=order_reference, D(3)=order_type, H(7)=name, J(9)=unit_price, L(11)=qty, O(14)=discount, P(15)=discount_name
+// A(0)=order_reference, D(3)=order_type, H(7)=name, J(9)=unit_price, L(11)=qty, O(14)=discount, P(15)=discount_name, U(20)=date
 function parseOrderItemsSheet(wb, branch, isoMonth) {
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", cellDates: true });
   const dataRows = raw.slice(6);
   const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
+  const parseColDate = (v) => {
+    if (!v) return null;
+    if (v instanceof Date) return v.toISOString().slice(0,10);
+    const s = String(v).trim();
+    const m = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    return null;
+  };
   const rows = [];
   for (const r of dataRows) {
     const order_ref  = String(r[0]  || "").trim();
@@ -6695,7 +6703,7 @@ function parseOrderItemsSheet(wb, branch, isoMonth) {
     if (!order_ref || !name) continue;
     if (order_type === "modifier" || order_type === "modifier option") continue;
     if (branch === "zawya" && isZawyaExcluded("", name)) continue;
-    const date = extractDateFromOrderRef(order_ref, isoMonth);
+    const date = parseColDate(r[20]) || extractDateFromOrderRef(order_ref, isoMonth);
     rows.push({ order_ref, name, unit_price, qty, discount, disc_name, branch, month: isoMonth, date });
   }
   return rows;
@@ -6703,17 +6711,25 @@ function parseOrderItemsSheet(wb, branch, isoMonth) {
 
 // Parses "{Branch} orders {Month} {Year}" Excel format.
 // Rows 0–4 preamble, row 5 header, data at row 6+.
-// A(0)=order_reference, X(23)=barista_name
+// A(0)=order_reference, J(9)=date, X(23)=barista_name
 function parseOrdersSheet(wb, branch, isoMonth) {
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", cellDates: true });
   const dataRows = raw.slice(6);
+  const parseColDate = (v) => {
+    if (!v) return null;
+    if (v instanceof Date) return v.toISOString().slice(0,10);
+    const s = String(v).trim();
+    const m = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    return null;
+  };
   const rows = [];
   for (const r of dataRows) {
-    const order_ref   = String(r[0]  || "").trim();
+    const order_ref    = String(r[0]  || "").trim();
     const barista_name = String(r[23] || "").trim();
     if (!order_ref || !barista_name) continue;
-    const date = extractDateFromOrderRef(order_ref, isoMonth);
+    const date = parseColDate(r[9]) || extractDateFromOrderRef(order_ref, isoMonth);
     rows.push({ order_ref, barista_name, branch, month: isoMonth, date });
   }
   return rows;
