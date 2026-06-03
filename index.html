@@ -2291,13 +2291,13 @@ const ROLE_ACCESS = {
                  "reorder_action_list","supplier_list","items_list",
                  "inventory_engine",
                  "my_hr","staff_hr","leaderboard","notifications","suggestions",
-                 "my_training","training_quiz_take"],
+                 "my_training","training_quiz_take","app_guide"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
   barista: ["home","my_id","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","my_hr","leaderboard","notifications","suggestions",
-            "my_training","training_quiz_take"],
+            "my_training","training_quiz_take","app_guide"],
   // Zawya-only support roles — minimal access: home screen + own profile
-  manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook","notifications","suggestions"],
-  helper:  ["home","my_id","users","handbook","notifications","suggestions"],
+  manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook","notifications","suggestions","app_guide"],
+  helper:  ["home","my_id","users","handbook","notifications","suggestions","app_guide"],
 
 };
 function canAccess(routeName, u) {
@@ -2651,6 +2651,7 @@ routes.home = function (u) {
   // ── Manager / Helper (Zawya only): handbook only ──
   if (u.role === "manager" || u.role === "helper") {
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
+    tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(_notifTile());
     tiles.appendChild(el("div", {
       style: { gridColumn: "1 / -1", textAlign: "center", padding: "16px 16px 32px", color: "var(--ink-dim)", fontSize: "14px" },
@@ -6565,7 +6566,7 @@ routes.sales_import = function (u) {
       const batch = uuid();
       for (const r of parsedOrderItems.rows) {
         state.order_items.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
-          branch: r.branch, month: r.month, order_ref: r.order_ref,
+          branch: r.branch, month: r.month, date: r.date, order_ref: r.order_ref,
           name: r.name, unit_price: r.unit_price, qty: r.qty,
           discount: r.discount, disc_name: r.disc_name });
       }
@@ -6579,7 +6580,7 @@ routes.sales_import = function (u) {
       const batch = uuid();
       for (const r of parsedOrders.rows) {
         state.orders.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
-          branch: r.branch, month: r.month, order_ref: r.order_ref, barista_name: r.barista_name });
+          branch: r.branch, month: r.month, date: r.date, order_ref: r.order_ref, barista_name: r.barista_name });
       }
       parts.push(`File 3: ${parsedOrders.rows.length} orders`);
     }
@@ -6656,6 +6657,26 @@ function detectOrdersFilename(filename) {
 
 // Parses "{Branch} order items {Month} {Year}" Excel format.
 // Rows 0–4 preamble, row 5 header, data at row 6+.
+/** Try to extract a YYYY-MM-DD date from a Foodics order_ref string.
+ *  Foodics refs are typically "2026-06-05-00123" or "20260605-00123".
+ *  Falls back to isoMonth + "-15" when no date can be found. */
+function extractDateFromOrderRef(orderRef, isoMonth) {
+  const s = String(orderRef || "");
+  // Pattern 1: YYYY-MM-DD anywhere in the string
+  const m1 = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m1 && m1[2] >= "01" && m1[2] <= "12" && m1[3] >= "01" && m1[3] <= "31") {
+    const d = `${m1[1]}-${m1[2]}-${m1[3]}`;
+    if (d.slice(0,7) === isoMonth) return d; // sanity: must be in expected month
+  }
+  // Pattern 2: YYYYMMDD at the start
+  const m2 = s.match(/^(\d{4})(\d{2})(\d{2})/);
+  if (m2 && m2[2] >= "01" && m2[2] <= "12" && m2[3] >= "01" && m2[3] <= "31") {
+    const d = `${m2[1]}-${m2[2]}-${m2[3]}`;
+    if (d.slice(0,7) === isoMonth) return d;
+  }
+  return isoMonth + "-15"; // mid-month placeholder
+}
+
 // A(0)=order_reference, D(3)=order_type, H(7)=name, J(9)=unit_price, L(11)=qty, O(14)=discount, P(15)=discount_name
 function parseOrderItemsSheet(wb, branch, isoMonth) {
   const ws = wb.Sheets[wb.SheetNames[0]];
@@ -6674,7 +6695,8 @@ function parseOrderItemsSheet(wb, branch, isoMonth) {
     if (!order_ref || !name) continue;
     if (order_type === "modifier" || order_type === "modifier option") continue;
     if (branch === "zawya" && isZawyaExcluded("", name)) continue;
-    rows.push({ order_ref, name, unit_price, qty, discount, disc_name, branch, month: isoMonth });
+    const date = extractDateFromOrderRef(order_ref, isoMonth);
+    rows.push({ order_ref, name, unit_price, qty, discount, disc_name, branch, month: isoMonth, date });
   }
   return rows;
 }
@@ -6691,7 +6713,8 @@ function parseOrdersSheet(wb, branch, isoMonth) {
     const order_ref   = String(r[0]  || "").trim();
     const barista_name = String(r[23] || "").trim();
     if (!order_ref || !barista_name) continue;
-    rows.push({ order_ref, barista_name, branch, month: isoMonth });
+    const date = extractDateFromOrderRef(order_ref, isoMonth);
+    rows.push({ order_ref, barista_name, branch, month: isoMonth, date });
   }
   return rows;
 }
@@ -8658,8 +8681,11 @@ routes.dashboard = function (u, params) {
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
 
     // Use actual quantities from order_items (File 2) when available — more accurate than qty=1 default
-    const orderItemsInRange = (state.order_items || []).filter(i =>
-      i.branch === branch && i.month >= monthFrom && i.month <= monthTo);
+    // For events: filter Maadi order_items by exact event date (extracted from order_ref).
+    // For regular branches: filter by branch + month range.
+    const orderItemsInRange = branch === "events"
+      ? (state.order_items || []).filter(i => i.branch === "maadi" && _isEventDay(i.date || i.month + "-15"))
+      : (state.order_items || []).filter(i => i.branch === branch && i.month >= monthFrom && i.month <= monthTo);
     const qtyByItem = new Map();
     for (const i of orderItemsInRange) {
       const k = normName(i.name);
