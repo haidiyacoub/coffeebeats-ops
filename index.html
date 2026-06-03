@@ -2555,7 +2555,7 @@ routes.home = function (u) {
     if (_isBudgetMgr) {
       tiles.appendChild(sectionHeader("💰 Budget & Inventory Manager"));
       tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
-      tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & reorder actions", () => go("reorder_action_list")));
+      tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
       tiles.appendChild(tile("📦", "Inventory Count", "Monthly snapshot", () => go("snapshot_new")));
       tiles.appendChild(tile("🗑️", "Waste Log", "View recent entries", () => go("waste_list")));
       tiles.appendChild(tile("🧾", "Record Purchase", "Upload receipt", () => go("purchase_new")));
@@ -2613,7 +2613,7 @@ routes.home = function (u) {
     if (u.branches.includes("maadi")) {
       tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
     }
-    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & reorder actions", () => go("reorder_action_list")));
+    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
     tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
@@ -2676,7 +2676,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🕐", "Sign-In Stamps", "Clock-in photos", () => go("signin_stamp_list")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
-    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & reorder actions", () => go("reorder_action_list")));
+    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
     tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
@@ -3645,7 +3645,7 @@ routes.snapshot_new = function (u) {
 // ==============================================================
 routes.reorder_action_list = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Inventory Status", "Low-stock alerts · reorder actions logged by baristas."));
+  wrap.appendChild(header("Inventory Status", "Low-stock alerts · restock logged by baristas."));
 
   state.alert_log = state.alert_log || [];
   state.reorder_actions = state.reorder_actions || [];
@@ -8784,10 +8784,9 @@ routes.dashboard = function (u, params) {
       ["barista","head_barista"].includes(x.role) &&
       (x.active || !!(state.salary_config || {})[x.id])
     );
-    const salariesTotal = rangeMonths.reduce((total, m) => {
-      const monthSum = _activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, m), 0);
-      return total + Math.round(monthSum / 2);
-    }, 0);
+    const _totalStaffSalary = rangeMonths.reduce((total, m) =>
+      total + _activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, m), 0), 0);
+    const salariesTotal = Math.round(_totalStaffSalary / 2);
     const totalOpex = overheadsTotal + salariesTotal;
 
     // ---------- KEY METRICS ----------
@@ -10557,7 +10556,7 @@ routes.handbook = function (u) {
         { type: "para", text: "When any inventory item falls below seven days of estimated supply, the Operations App automatically fires a low-stock alert. The barista on shift is personally responsible for taking immediate action." },
         { type: "para", text: "Items tracked through the Inventory Engine use per-supplier or per-category ordering windows configured by the owner — these override the default and produce a more accurate reorder threshold for each item based on how quickly its supplier can deliver." },
         { type: "subheader", text: "How to Log Your Action" },
-        { type: "bullets", items: ["Open the Operations App and tap the red banner or \"Reorder Actions\".", "Tick at least one checkbox: Called the supplier directly — or — Communicated to head barista.", "Add a comment with useful details (delivery date, who you spoke to).", "Tap Save Action. The red banner clears."] },
+        { type: "bullets", items: ["Open the Operations App and tap the red banner or \"Restock\".", "Tick at least one checkbox: Called the supplier directly — or — Communicated to head barista.", "Add a comment with useful details (delivery date, who you spoke to).", "Tap Save Action. The red banner clears."] },
         { type: "subheader", text: "Follow-Up Alarm Schedule" },
         { type: "bullets", items: ["Day 0: Initial alert fires. Action required before shift ends.", "Day +3: First follow-up alarm fires if item not yet in purchase log.", "Day +5: Second follow-up — \"URGENT — reorder overdue.\"", "Day +6: Final alarm — \"CRITICAL — reorder still missing.\""] },
         { type: "subheader", text: "Inventory Engine (Inventory Manager)" },
@@ -11779,7 +11778,7 @@ routes.app_guide = function (u) {
       en_steps: [
         "When stock of any item falls below 7 days of estimated supply, a <strong>low-stock alert</strong> fires automatically. A red banner appears on your home screen.",
         "The <strong>barista on shift at the time of the alert is responsible</strong> — it is logged against your name.",
-        "Tap the red banner or the <strong>📦 Reorder Actions</strong> tile to open the action form with the supplier's contact details.",
+        "Tap the red banner or the <strong>📦 Restock</strong> tile to open the action form with the supplier's contact details.",
         "Tick <strong>at least one</strong>: <strong>☑ Called the supplier directly</strong> OR <strong>☑ Communicated to head barista to order</strong>. Add a comment.",
         "Tap <strong>Save Action</strong>.",
         "<strong>Follow-up alarms:</strong> If the item is not in the purchase log within 3 days, a follow-up fires — then 2 days later, then 1 final day.",
@@ -11968,7 +11967,7 @@ routes.app_guide = function (u) {
         "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small. If nothing was wasted, tap No Waste. This is mandatory every shift — missing entries deduct −10 pts from your Waste Control KPI.",
         "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
         "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
-        "<strong>📦 Reorder Alerts</strong>: Act on every low-stock alert before your shift ends.",
+        "<strong>📦 Restock</strong>: Act on every low-stock alert before your shift ends.",
         "<strong>📝 Training Quiz</strong>: Complete your monthly quiz as soon as it appears — it counts for 10% of your KPI.",
         "<strong>💳 Emergency Contact</strong>: Keep your emergency contact up to date in My HR.",
         "<strong>🪪 My ID</strong>: Upload and keep your ID documents current in the My ID section.",
