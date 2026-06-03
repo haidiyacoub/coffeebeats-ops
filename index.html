@@ -2901,8 +2901,14 @@ routes.waste_new = function (u) {
 
     bottom.appendChild(el("label", {}, "Reason"));
     const reasonSel = el("select", {}, ["سكب","منتهي الصلاحية","مرجوع من العميل","تدريب / معايرة","أخرى"].map(r => el("option", { value: r, selected: r===reason ? "true" : null }, r)));
-    reasonSel.addEventListener("change", () => reason = reasonSel.value);
+    const expiryPhotoNote = el("div", { class: "banner-warn", style: { display: "none", marginTop: "8px", fontSize: "13px" } }, "📷 Photo required for expired milk — attach before submitting.");
+    reasonSel.addEventListener("change", () => {
+      reason = reasonSel.value;
+      const isMilk = (state.items.find(x => x.id === itemId)?.name || "").toLowerCase().match(/milk|oat|almond|soy|cream/);
+      expiryPhotoNote.style.display = (reason === "منتهي الصلاحية" && isMilk) ? "block" : "none";
+    });
     bottom.appendChild(reasonSel);
+    bottom.appendChild(expiryPhotoNote);
 
     bottom.appendChild(el("label", {}, "Note (optional)"));
     const noteInput = el("input", { type: "text", value: note, placeholder: "e.g. dropped pitcher" });
@@ -2924,6 +2930,10 @@ routes.waste_new = function (u) {
   function submit() {
     const it = state.items.find(x => x.id === itemId);
     if (!it || !qty || qty <= 0) { toast("Pick an item and qty > 0", "error"); return; }
+    const isMilkItem = (it.name||"").toLowerCase().match(/milk|oat|almond|soy|cream/);
+    if (reason === "منتهي الصلاحية" && isMilkItem && !wastePhotoField.getCloudUrls().filter(Boolean).length) {
+      toast("📷 Attach a photo of the expired milk before submitting", "error"); return;
+    }
     const s = stamp();
     const photoUrls = wastePhotoField.getCloudUrls().filter(Boolean);
     state.waste.push({
@@ -4669,9 +4679,10 @@ function checkNoStampAlert() {
       `No stamp has been submitted. Please check in with ${user.name} immediately.\n\n` +
       `— Coffee Beats Operations App`
     );
-    const toAddr = hbEmail || ownerEmail;
-    const ccPart = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
-    try { window.open(`mailto:${encodeURIComponent(toAddr)}?subject=${subj}${ccPart}&body=${mailBody}`, "_blank"); } catch(e) {}
+    const toAddr  = hbEmail || ownerEmail;
+    const ccPart  = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
+    const noStampSubj = hbEmail ? subj : encodeURIComponent(`[PRIORITY — No Head Barista] [No Stamp Alert] ${user.name} · ${branch} · ${todayStr}`);
+    try { window.open(`mailto:${encodeURIComponent(toAddr)}?subject=${noStampSubj}${ccPart}&body=${mailBody}`, "_blank"); } catch(e) {}
   }
 }
 
@@ -5057,7 +5068,8 @@ routes.salaries = function (u) {
         const statusPill = r.approved
           ? el("span", { class: "pill ok", style: { fontSize:"11px" } }, "✓ Approved")
           : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, "⏳ Pending");
-        const rateLabel = r.kind === "events_bonus" ? "🎪 Events bonus"
+        const rateLabel = r.kind === "leadership_bonus" ? "👑 Leadership role bonus"
+          : r.kind === "events_bonus" ? "🎪 Events bonus"
           : r.kind === "double_shift" ? "×1.5 Double shift"
           : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
           : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
@@ -5258,18 +5270,24 @@ routes.salaries = function (u) {
           approved: false,
         });
         saveState();
-        // Send approval email
+        // Send approval email — head barista (To:) with owner CC; fallback to owner with priority flag
+        const _otHbEmail    = (state.settings.head_barista_email || "").trim();
+        const _otOwnerEmail = (state.settings.owner_email || "coffeebeats@haidiyacoub.com").trim();
+        const _otToAddr     = _otHbEmail || _otOwnerEmail;
+        const _otCcPart     = _otHbEmail ? `&cc=${encodeURIComponent(_otOwnerEmail)}` : "";
+        const _otPriority   = _otHbEmail ? "" : "[PRIORITY — No Head Barista] ";
         const otTypeLabel = vals.ot_type === "eid_fitr" ? "Eid Al-Fitr (×2)"
           : vals.ot_type === "eid_adha" ? "Eid Al-Adha (×2)" : "Regular OT (×1.5)";
-        const subj = encodeURIComponent(`[OT Approval Needed] ${person.name} · ${vals.date} · ${hrs}h · ${otTypeLabel} · EGP ${amount.toFixed(2)}`);
+        const subj = encodeURIComponent(`${_otPriority}[OT Approval Needed] ${person.name} · ${vals.date} · ${hrs}h · ${otTypeLabel} · EGP ${amount.toFixed(2)}`);
         const bod  = encodeURIComponent(
           `Overtime submitted for your approval:\n\n` +
           `Barista: ${person.name}\nDate: ${vals.date}\nHours: ${hrs}\n` +
           `OT type: ${otTypeLabel}\nHourly rate: EGP ${hrRate.toFixed(2)} × ${multiplier} = EGP ${(hrRate * multiplier).toFixed(2)}/hr\nTotal OT pay: EGP ${amount.toFixed(2)}\n` +
           `Month: ${mon}\nNote: ${vals.note || "—"}\nSubmitted by: ${s.by_name}\n\n` +
+          (_otHbEmail ? "" : `⚠️ No head barista email is configured — this approval request has been sent directly to the owner.\n\n`) +
           `Log in to the Operations app > Salaries to approve.`
         );
-        try { window.open(`mailto:coffeebeats@haidiyacoub.com?subject=${subj}&body=${bod}`, "_blank"); } catch(e) {}
+        try { window.open(`mailto:${encodeURIComponent(_otToAddr)}?subject=${subj}${_otCcPart}&body=${bod}`, "_blank"); } catch(e) {}
         toast(`Overtime logged · EGP ${amount.toFixed(2)} · Approval email sent ✉️`);
         drawBody();
       }
@@ -9615,13 +9633,18 @@ routes.signin_stamp_new = function (u) {
           (() => {
             const ownerEmail = ((state.settings || {}).owner_email || "coffeebeats@haidiyacoub.com").trim();
             const hbEmail    = ((state.settings || {}).head_barista_email || "").trim();
-            const subj = encodeURIComponent(`[Late Arrival] ${u.name} · ${minsLate} min late · ${branch} · ${todayStr}`);
+            const lateSubj = encodeURIComponent(`[🚨 PRIORITY] [Late Arrival] ${u.name} · ${minsLate} min late · ${branch} · ${todayStr}`);
             const mailBody = encodeURIComponent(
               `🚨 High Priority — Late Arrival\n\nBarista: ${u.name}\nBranch: ${branch}\nDate: ${todayStr}\nMinutes late: ${minsLate}\nPenalty: ${kLabel}${doubleNote}\n\n— Coffee Beats Operations App`
             );
-            const toAddr  = hbEmail || ownerEmail;
-            const ccPart  = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
-            try { window.open(`mailto:${encodeURIComponent(toAddr)}?subject=${subj}${ccPart}&body=${mailBody}`, "_blank"); } catch(e) {}
+            if (hbEmail) {
+              // Send to both HB (To:) and owner (CC:) with priority flag
+              try { window.open(`mailto:${encodeURIComponent(hbEmail)}?cc=${encodeURIComponent(ownerEmail)}&subject=${lateSubj}&body=${mailBody}`, "_blank"); } catch(e) {}
+            } else {
+              // No HB configured — send to owner only with escalation note
+              const fallbackSubj = encodeURIComponent(`[PRIORITY — No Head Barista] [Late Arrival] ${u.name} · ${minsLate} min late · ${branch} · ${todayStr}`);
+              try { window.open(`mailto:${encodeURIComponent(ownerEmail)}?subject=${fallbackSubj}&body=${mailBody}`, "_blank"); } catch(e) {}
+            }
           })();
           // ────────────────────────────────────────────────────────────────────
         })();
@@ -9820,15 +9843,16 @@ function handbookSeedRecipes() {
 // ==============================================================
 routes.leave_new = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Request Leave", "Submit annual or sick leave — must be requested at least 1 week ahead."));
+  wrap.appendChild(header("Request Leave", "Submit annual or sick leave. Annual leave requires 1 week notice; sick leave is recorded immediately."));
 
   state.leaves = state.leaves || [];
 
   const canRequestForOthers = (u.role === "owner" || u.role === "head_barista");
   const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
 
-  // Minimum start date = today + 7 days
-  const minDate = (() => {
+  const today = new Date().toISOString().slice(0, 10);
+  // Minimum start date for annual leave = today + 7 days
+  const minAnnual = (() => {
     const d = new Date(); d.setDate(d.getDate() + 7);
     return d.toISOString().slice(0, 10);
   })();
@@ -9862,14 +9886,33 @@ routes.leave_new = function (u) {
   ]);
   form.appendChild(typeSel);
 
-  // Dates
-  form.appendChild(el("label", {}, `From date (earliest: ${minDate})`));
-  const fromIn = el("input", { type: "date", min: minDate, value: minDate });
+  // Dates — sick leave defaults to today with no minimum; annual requires 7-day notice
+  const fromLabel = el("div", { class: "label" }, `From date (earliest for annual: ${minAnnual})`);
+  form.appendChild(fromLabel);
+  const fromIn = el("input", { type: "date", min: minAnnual, value: minAnnual });
   form.appendChild(fromIn);
 
   form.appendChild(el("label", {}, "To date"));
-  const toIn = el("input", { type: "date", min: minDate, value: minDate });
+  const toIn = el("input", { type: "date", min: minAnnual, value: minAnnual });
   form.appendChild(toIn);
+
+  // Adjust date constraints when type changes
+  function updateDateConstraints() {
+    const isSick = typeSel.value === "sick";
+    const minVal = isSick ? today : minAnnual;
+    fromIn.min = minVal;
+    toIn.min   = minVal;
+    if (isSick) {
+      fromIn.value = today;
+      toIn.value   = today;
+      fromLabel.textContent = "From date";
+    } else {
+      fromIn.value = minAnnual;
+      toIn.value   = minAnnual;
+      fromLabel.textContent = `From date (earliest: ${minAnnual})`;
+    }
+  }
+  typeSel.addEventListener("change", updateDateConstraints);
 
   // Keep to ≥ from as user changes from
   fromIn.addEventListener("change", () => {
@@ -9890,7 +9933,8 @@ routes.leave_new = function (u) {
     const to   = toIn.value;
     if (!from || !to) return toast("Please fill in both dates", "error");
     if (to < from)    return toast("End date can't be before start date", "error");
-    if (from < minDate) return toast(`Leave must start at least 7 days from today (${minDate})`, "error");
+    const isSick = typeSel.value === "sick";
+    if (!isSick && from < minAnnual) return toast(`Annual leave must start at least 7 days from today (${minAnnual})`, "error");
 
     const person = canRequestForOthers
       ? state.users.find(x => x.id === targetUserId)
@@ -9908,6 +9952,7 @@ routes.leave_new = function (u) {
     }
 
     const s = stamp();
+    // Sick leave is auto-approved immediately; annual leave goes through approval flow
     const leave = {
       id: uuid(),
       user_id: person.id,
@@ -9916,48 +9961,82 @@ routes.leave_new = function (u) {
       from_date: from,
       to_date: to,
       reason: reasonIn.value.trim(),
-      status: "pending",
+      status: isSick ? "approved" : "pending",
       requested_by: s.by,
       requested_by_name: s.by_name,
       requested_at: s.at,
-      reviewed_by: null,
-      reviewed_by_name: null,
-      reviewed_at: null,
-      review_note: "",
+      reviewed_by: isSick ? s.by : null,
+      reviewed_by_name: isSick ? s.by_name : null,
+      reviewed_at: isSick ? s.at : null,
+      review_note: isSick ? "Auto-approved" : "",
     };
     state.leaves.push(leave);
+
+    // Sick leave: immediately create salary deduction (¼ day per sick day)
+    if (isSick) {
+      const days = Math.round((new Date(to) - new Date(from)) / 86400000) + 1;
+      const mon  = from.slice(0, 7);
+      const sal  = getSalaryForMonth(person.id, mon);
+      const amount = Math.round((sal / 30 / 4) * days * 100) / 100;
+      state.sick_leave_deductions = state.sick_leave_deductions || [];
+      state.sick_leave_deductions.push({
+        id: uuid(), leave_id: leave.id,
+        user_id: person.id, barista: person.name,
+        days, amount, date: from,
+        month: mon,
+        note: leave.reason || "Sick leave",
+        by: s.by, by_name: s.by_name, at: s.at,
+      });
+    }
+
     saveState();
 
     // Count calendar days
     const days = Math.round((new Date(to) - new Date(from)) / 86400000) + 1;
 
-    // Send email to head barista (To:) and owner (CC:)
+    // Send notification email
     const hbEmail    = (state.settings.head_barista_email || "").trim();
     const ownerEmail = (state.settings.owner_email || "coffeebeats@haidiyacoub.com").trim();
     const typeLabel  = leave.type === "annual" ? "Annual Leave" : "Sick Leave";
     const subj = encodeURIComponent(
-      `[Leave Request] ${person.name} · ${typeLabel} · ${from} → ${to} (${days}d)`
+      isSick
+        ? `[Sick Leave Recorded] ${person.name} · ${from} → ${to} (${days}d) — deduction applied`
+        : `[Leave Request] ${person.name} · ${typeLabel} · ${from} → ${to} (${days}d)`
     );
     const body = encodeURIComponent(
-      `A leave request has been submitted and is pending your approval.\n\n` +
-      `Barista: ${person.name}\n` +
-      `Leave type: ${typeLabel}\n` +
-      `From: ${from}\n` +
-      `To: ${to}\n` +
-      `Duration: ${days} day${days > 1 ? "s" : ""}\n` +
-      `Reason: ${leave.reason || "—"}\n` +
-      `Submitted by: ${s.by_name}\n\n` +
-      `Please log in to the Operations app → Leave Requests to approve or reject.\n\n` +
-      `— Coffee Beats Operations`
+      isSick
+        ? `Sick leave has been recorded and the salary deduction applied automatically.\n\n` +
+          `Barista: ${person.name}\nFrom: ${from}\nTo: ${to}\n` +
+          `Duration: ${days} day${days > 1 ? "s" : ""}\nReason: ${leave.reason || "—"}\n` +
+          `Deduction: ¼ day × ${days} = EGP ${(getSalaryForMonth(person.id, from.slice(0,7)) / 30 / 4 * days).toFixed(2)}\n` +
+          `Submitted by: ${s.by_name}\n— Coffee Beats Operations`
+        : `A leave request has been submitted and is pending your approval.\n\n` +
+          `Barista: ${person.name}\n` +
+          `Leave type: ${typeLabel}\n` +
+          `From: ${from}\n` +
+          `To: ${to}\n` +
+          `Duration: ${days} day${days > 1 ? "s" : ""}\n` +
+          `Reason: ${leave.reason || "—"}\n` +
+          `Submitted by: ${s.by_name}\n\n` +
+          `Please log in to the Operations app → Leave Requests to approve or reject.\n\n` +
+          `— Coffee Beats Operations`
     );
 
-    const to_addr = hbEmail || ownerEmail;
-    const cc_part = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
+    const to_addr    = hbEmail || ownerEmail;
+    const cc_part    = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
+    const leaveSubj  = hbEmail ? subj : encodeURIComponent(
+      isSick
+        ? `[PRIORITY — No Head Barista] [Sick Leave Recorded] ${person.name} · ${from} → ${to} (${days}d) — deduction applied`
+        : `[PRIORITY — No Head Barista] [Leave Request] ${person.name} · ${typeLabel} · ${from} → ${to} (${days}d)`
+    );
     try {
-      window.open(`mailto:${encodeURIComponent(to_addr)}?subject=${subj}${cc_part}&body=${body}`, "_blank");
+      window.open(`mailto:${encodeURIComponent(to_addr)}?subject=${leaveSubj}${cc_part}&body=${body}`, "_blank");
     } catch(e) {}
 
-    toast(`Leave request submitted for ${person.name} · ${days} day${days > 1 ? "s" : ""} · Email sent ✉️`);
+    toast(isSick
+      ? `Sick leave recorded · ${days} day${days > 1 ? "s" : ""} · deduction applied automatically ✓`
+      : `Leave request submitted for ${person.name} · ${days} day${days > 1 ? "s" : ""} · Email sent ✉️`
+    );
     go("leave_list");
   });
   wrap.appendChild(submitBtn);
@@ -10061,11 +10140,17 @@ routes.leave_list = function (u) {
         ]));
       }
 
+      // Helper: remove the linked sick_leave_deduction when sick leave is cancelled/rejected
+      function removeSickDeduction() {
+        if (leave.type !== "sick") return;
+        state.sick_leave_deductions = (state.sick_leave_deductions || []).filter(x => x.leave_id !== leave.id);
+      }
+
       // Action buttons
       if (leave.status === "pending") {
         const btnRow = el("div", { class: "btn-row", style: { marginTop: "10px" } });
 
-        if (canManage) {
+        if (canManage && leave.type !== "sick") {
           const approveBtn = el("button", { class: "btn", style: { background: "var(--ok)", color: "#fff" } }, "✓ Approve");
           approveBtn.addEventListener("click", () => {
             const note = prompt("Approval note (optional):") || "";
@@ -10105,6 +10190,7 @@ routes.leave_list = function (u) {
             leave.reviewed_by_name = s.by_name;
             leave.reviewed_at = s.at;
             leave.review_note = note;
+            removeSickDeduction();
             saveState();
             toast(`Leave rejected for ${leave.user_name}`);
             draw();
@@ -10125,6 +10211,7 @@ routes.leave_list = function (u) {
             leave.reviewed_by_name = s.by_name;
             leave.reviewed_at = s.at;
             leave.review_note = "Cancelled";
+            removeSickDeduction();
             saveState();
             toast("Leave request cancelled");
             draw();
@@ -10147,6 +10234,7 @@ routes.leave_list = function (u) {
           leave.reviewed_by_name = s.by_name;
           leave.reviewed_at = s.at;
           leave.review_note = "Approval revoked";
+          removeSickDeduction();
           saveState();
           toast(`Approval revoked — ${leave.user_name} is now available in the schedule`);
           draw();
@@ -11756,19 +11844,19 @@ routes.app_guide = function (u) {
         "Tap <strong>Request Leave</strong>.",
         "Select the type: <strong>Annual Leave</strong> or <strong>Sick Leave</strong>.",
         "Choose the <strong>start date</strong> and <strong>end date</strong>.",
-        "Write a short <strong>reason</strong>.",
-        "Tap <strong>Submit</strong> — an email is sent automatically to the head barista for approval.",
-        "You can track your request status in <strong>My Leaves</strong>.",
-        "⚠ Leave is not confirmed until you receive approval.",
+        "Write a short <strong>reason</strong> (optional).",
+        "<strong>Sick Leave:</strong> tap Submit — the leave is approved instantly and a ¼-day salary deduction is applied automatically per sick day. No approval needed.",
+        "<strong>Annual Leave:</strong> tap Submit — a notification email is sent to the head barista. Leave is not confirmed until you receive approval.",
+        "You can track your request status and cancel it in <strong>My Leaves</strong>.",
       ],
       ar_steps: [
         "اضغط على <strong>طلب إجازة</strong>.",
         "اختر النوع: <strong>إجازة سنوية</strong> أو <strong>إجازة مرضية</strong>.",
         "اختر <strong>تاريخ البدء</strong> و<strong>تاريخ الانتهاء</strong>.",
-        "اكتب <strong>سبباً</strong> مختصراً.",
-        "اضغط <strong>إرسال</strong> — يُرسل بريد إلكتروني تلقائياً لرئيس البريستا للموافقة.",
-        "يمكنك متابعة حالة طلبك في <strong>إجازاتي</strong>.",
-        "⚠ الإجازة غير مؤكدة حتى تحصل على موافقة.",
+        "اكتب <strong>سبباً</strong> مختصراً (اختياري).",
+        "<strong>الإجازة المرضية:</strong> اضغط إرسال — تُعتمد فوراً وتُطبَّق خصومة ربع يوم تلقائياً عن كل يوم مرضي. لا تحتاج موافقة.",
+        "<strong>الإجازة السنوية:</strong> اضغط إرسال — يُرسل إشعار بريد إلكتروني لرئيس البريستا. الإجازة غير مؤكدة حتى تحصل على موافقة.",
+        "يمكنك متابعة حالة طلبك وإلغاؤه في <strong>إجازاتي</strong>.",
       ],
     },
     {
@@ -11821,7 +11909,7 @@ routes.app_guide = function (u) {
         "Tap <strong>My HR</strong> to see your personal salary dashboard for the current month.",
         "Shows: <strong>Base Salary</strong>, <strong>Overtime</strong> (with the multiplier label for each entry), <strong>Penalties</strong> (with date, reason, and amount for each), <strong>Sick Leave Deductions</strong>, <strong>Loans</strong>, and <strong>Net Due</strong> — the final amount to be paid.",
         "<strong>Overtime multipliers</strong> are shown next to each overtime entry (e.g. ×1.5 for regular overtime, ×2 for Eid Al-Fitr and Eid Al-Adha). Events shifts show a flat bonus instead of a multiplier.",
-        "<strong>Sick Leave Deductions:</strong> approved sick leave days are deducted from your salary at the daily rate and listed as a separate line item.",
+        "<strong>Sick Leave Deductions:</strong> each approved sick day is deducted at ¼ of your daily rate (monthly salary ÷ 30 ÷ 4) and listed as a separate line item.",
         "Your <strong>KPI Reward Tier</strong> appears at month end: Gold (90+), Silver (80+), Bronze (70+), or Rising (below 70).",
         "Use the <strong>month navigation</strong> to review any previous month.",
         "Tap <strong>Emergency Contact</strong> at the top to add or update your emergency contact name, relationship, and phone number.",
@@ -11829,8 +11917,8 @@ routes.app_guide = function (u) {
       ar_steps: [
         "اضغط على <strong>الموارد البشرية الخاصة بي</strong> لعرض لوحة راتبك الشهرية.",
         "تعرض: <strong>الراتب الأساسي</strong>، <strong>العمل الإضافي</strong> (مع تصنيف المضاعف لكل إدخال)، <strong>الخصومات</strong> (مع التاريخ والسبب والمبلغ)، <strong>خصومات الإجازة المرضية</strong>، <strong>القروض</strong>، و<strong>صافي المستحق</strong>.",
-        "<strong>مضاعفات الأوفر تايم:</strong> تُعرض بجانب كل إدخال (مثل ×1.5 للأوفر تايم العادي، ×2 لشيفتات الفعاليات).",
-        "<strong>خصومات الإجازة المرضية:</strong> أيام الإجازة المرضية المعتمدة تُخصم من الراتب بمعدل اليوم وتظهر كبند منفصل.",
+        "<strong>مضاعفات الأوفر تايم:</strong> تُعرض بجانب كل إدخال (مثل ×1.5 للأوفر تايم العادي، ×2 لعيد الفطر وعيد الأضحى). شيفتات الفعاليات تحصل على مكافأة ثابتة بدلاً من المضاعف.",
+        "<strong>خصومات الإجازة المرضية:</strong> كل يوم إجازة مرضية معتمد يُخصم بمقدار ربع اليوم (الراتب الشهري ÷ 30 ÷ 4) ويظهر كبند منفصل.",
         "يظهر <strong>مستوى مكافأة الأداء</strong> في نهاية الشهر: ذهبي (90+)، فضي (80+)، برونزي (70+)، أو في تطور (أقل من 70).",
         "استخدم <strong>التنقل بين الأشهر</strong> لمراجعة أي شهر سابق.",
         "اضغط <strong>جهة الاتصال الطارئ</strong> في أعلى الصفحة لإضافة أو تحديث بيانات الطوارئ.",
@@ -12307,8 +12395,11 @@ function kpiWasteScore(userId, cutoff) {
       if (name.includes("espresso")||name.includes("shot")||name.includes("coffee")||name.includes("bean")) {
         score -= isCal ? qty*2 : qty*6;
       } else if (name.includes("milk")||name.includes("oat")||name.includes("almond")||name.includes("soy")||name.includes("cream")) {
-        const ml = (w.unit==="L"||(w.unit||"").toLowerCase()==="litre") ? qty*1000 : qty;
-        score -= isCal ? Math.floor(ml/200)*3 : Math.floor(ml/100)*5;
+        const isExpiry = reason.includes("منتهي") || reason.includes("expir");
+        if (!isExpiry) {
+          const ml = (w.unit==="L"||(w.unit||"").toLowerCase()==="litre") ? qty*1000 : qty;
+          score -= isCal ? Math.floor(ml/200)*3 : Math.floor(ml/100)*5;
+        }
       } else {
         score -= isCal ? qty*1 : qty*3;
       }
@@ -12431,6 +12522,12 @@ function kpiTeamworkScore(userId, cutoff) {
 // ─── Leadership helpers ───────────────────────────────────────────────────────
 
 function getLeadershipAssignment(month) {
+  // Head barista is auto-assigned to all leadership roles — no manual entry needed.
+  const headBarista = (state.users || []).find(u => u.role === "head_barista" && u.active !== false);
+  if (headBarista) {
+    return { month, weekly_schedule: headBarista.id, budget_inventory: headBarista.id, _auto: true };
+  }
+  // No head barista — use manual assignment for regular barista substitutes.
   const assignments = state.leadership_assignments || [];
   const exact = assignments.find(a => a.month === month);
   if (exact) return exact;
@@ -12462,6 +12559,9 @@ function kpiLeadershipScore(userId, month) {
   const ROLES = ["weekly_schedule","budget_inventory","inventory_management","cash_status"];
   const myRole = assignment ? (ROLES.find(r => assignment[r] === userId) || null) : null;
   if (!myRole) return null;
+  // Regular baristas assigned a leadership role earn a 10% salary bonus instead of KPI points.
+  const user = (state.users || []).find(u => u.id === userId);
+  if (user && user.role === "barista") return null;
 
   if (myRole === "weekly_schedule") {
     const [yr, mo] = month.split("-").map(Number);
@@ -12578,6 +12678,70 @@ function runEndOfMonthLeadershipCheck(month, cu) {
   saveState();
   toast(`⚠ Half-day penalty applied to ${invMgr ? invMgr.name : invMgrId} — no inventory snapshot for ${month}`, "warn");
   notifyHaidi(`Leadership penalty — ${invMgr ? invMgr.name : invMgrId}`, `No inventory snapshot for ${lastDay}. Half-day deducted.`);
+
+  // Apply 10% salary bonus for any regular baristas assigned a leadership role this month.
+  _applyLeadershipBonusForBaristas(month, cu);
+}
+
+function _applyLeadershipBonusForBaristas(month, cu) {
+  const assignment = getLeadershipAssignment(month);
+  if (!assignment) return;
+  const [yr, mo] = month.split("-").map(Number);
+  const monthStart = new Date(yr, mo - 1, 1);
+  const monthEnd   = new Date(yr, mo, 0);
+
+  // Collect all unique weeks in the month
+  const allWeeks = new Set();
+  for (let d = new Date(monthStart); d <= monthEnd; d.setDate(d.getDate() + 1)) {
+    allWeeks.add(mondayOf(localISODate(d)));
+  }
+  const totalWeeks = allWeeks.size;
+  if (totalWeeks === 0) return;
+
+  const ROLES = ["weekly_schedule", "budget_inventory"];
+  const processed = new Set();
+
+  for (const roleKey of ROLES) {
+    const uid = assignment[roleKey];
+    if (!uid || processed.has(uid)) continue;
+    processed.add(uid);
+
+    const user = (state.users || []).find(u => u.id === uid);
+    if (!user || user.role !== "barista") continue;
+
+    // Count weeks where this barista had at least one rostered shift
+    const weeksWithShift = [...allWeeks].filter(weekOf =>
+      (state.rosters || []).some(r => r.week_of === weekOf && r.user_id === uid)
+    ).length;
+    if (weeksWithShift === 0) continue;
+
+    const alreadyLogged = (state.overtime_logs || []).some(l =>
+      l.kind === "leadership_bonus" && l.user_id === uid && l.month === month
+    );
+    if (alreadyLogged) continue;
+
+    const salary = Number(((state.salary_config || {})[uid] || {}).monthly_salary || 0);
+    if (salary <= 0) continue;
+
+    const bonusAmount = Math.round(salary * 0.10 * (weeksWithShift / totalWeeks));
+    state.overtime_logs = state.overtime_logs || [];
+    state.overtime_logs.push({
+      id: uuid(), at: new Date().toISOString(),
+      by: cu.id, by_name: cu.name,
+      user_id: uid, barista: user.name,
+      kind: "leadership_bonus",
+      hours: 0,
+      amount: bonusAmount,
+      month,
+      date: localISODate(monthEnd),
+      note: `Leadership role bonus (${roleKey.replace("_"," ")}) — ${weeksWithShift}/${totalWeeks} weeks on shift`,
+      approved: true,
+      approved_by: cu.id,
+    });
+    toast(`✅ Leadership bonus +${money(bonusAmount)} added for ${user.name} (${weeksWithShift}/${totalWeeks} weeks)`, "ok");
+    notifyHaidi(`Leadership bonus — ${user.name}`, `+${money(bonusAmount)} for ${weeksWithShift}/${totalWeeks} weeks as leadership substitute in ${month}.`);
+  }
+  saveState();
 }
 
 function kpiHygieneScore(userId, month) {
@@ -12719,33 +12883,59 @@ routes.leadership_roles = function(u) {
 
   const ROLES_META = [
     { key:"weekly_schedule",  label:"📅 Schedule Manager",
-      desc:"Accountable for weekly schedule and sign-in stamp compliance. Also manages leave requests — access to view and submit leaves is granted for the month. Gets alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from the Leadership KPI; a late stamp (>10 min) deducts 10 pts. The window to act is same-day — if the barista's stamp is submitted before the owner runs the missing-stamp check, no deduction applies." },
+      desc:"Accountable for weekly schedule and sign-in stamp compliance. Also manages leave requests — access to view and submit leaves is granted for the month. Gets alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from the Leadership KPI; a late stamp (>10 min) deducts 10 pts. The window to act is same-day — if the barista's stamp is submitted before the owner runs the missing-stamp check, no deduction applies. Head baristas: role counted in their Leadership KPI. Regular baristas: KPI unaffected — earns a 10% salary bonus for weeks on shift instead." },
     { key:"budget_inventory", label:"💰 Budget & Inventory Manager",
-      desc:"Responsible for managing petty cash, logging the weekly Maadi ATM cash deposit, and submitting the end-of-month inventory snapshot. Gets low-stock and reorder alerts. Full access to all inventory routes (items, suppliers, reorder, waste, purchases, snapshots) and cash routes (petty cash, ATM deposits). Penalty: ¼ day per missed weekly deposit, half-day if end-of-month snapshot is missing." },
+      desc:"Responsible for managing petty cash, logging the weekly Maadi ATM cash deposit, and submitting the end-of-month inventory snapshot. Gets low-stock and reorder alerts. Full access to all inventory routes (items, suppliers, reorder, waste, purchases, snapshots) and cash routes (petty cash, ATM deposits). Penalty: ¼ day per missed weekly deposit, half-day if end-of-month snapshot is missing. Head baristas: role counted in their Leadership KPI. Regular baristas: KPI unaffected — earns a 10% salary bonus for weeks on shift instead." },
   ];
 
   function draw() {
     content.innerHTML = "";
     const month = selectedMonth;
+    const headBarista = (state.users || []).find(x => x.role === "head_barista" && x.active !== false);
+
+    if (headBarista) {
+      // ── Auto-assigned mode: head barista holds all roles ──────────────────
+      const card = el("div",{class:"card"});
+      card.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"6px"}},
+        "Assignments for " + month));
+      card.appendChild(el("div",{class:"pill ok",style:{marginBottom:"14px",fontSize:"12px",display:"inline-block"}},
+        "✅ Head barista present — all roles auto-assigned"));
+      for (const role of ROLES_META) {
+        const row = el("div",{style:{marginBottom:"14px",paddingBottom:"14px",borderBottom:"1px solid var(--border)"}});
+        row.appendChild(el("div",{style:{fontWeight:"600",fontSize:"13px",marginBottom:"2px"}},role.label));
+        row.appendChild(el("div",{class:"muted small",style:{marginBottom:"4px"}},role.desc));
+        row.appendChild(el("div",{style:{fontSize:"14px",fontWeight:"600",color:"var(--ok,#2a7a4b)"}},
+          headBarista.name + " ⭐ (auto)"));
+        card.appendChild(row);
+      }
+      if (month <= today.toISOString().slice(0,7)) {
+        card.appendChild(el("button",{class:"btn secondary",style:{marginTop:"4px"},onClick:() => {
+          runEndOfMonthLeadershipCheck(month, u);
+        }},"⚙ End-of-Month Check"));
+      }
+      content.appendChild(card);
+      return;
+    }
+
+    // ── Manual assignment mode: no head barista ────────────────────────────
     const assignment = getLeadershipAssignment(month) || {};
-    const baristas = (state.users || []).filter(x =>
-      ["barista","head_barista"].includes(x.role) && x.active !== false
+    const allBaristas = (state.users || []).filter(x =>
+      x.role === "barista" && x.active !== false
     );
 
     const card = el("div",{class:"card"});
-    const carried = assignment._carried_forward;
     card.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"2px"}},
       "Assignments for " + month));
-    if (carried) {
+    card.appendChild(el("div",{class:"pill warn",style:{marginBottom:"10px",fontSize:"12px",display:"inline-block"}},
+      "⚠ No head barista — assign a substitute. They earn a 10% salary bonus instead of Leadership KPI points."));
+    if (assignment._carried_forward) {
       card.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
-        "No explicit record for this month — showing carried forward from previous month. Save to lock in."));
-    } else {
-      card.appendChild(el("div",{class:"muted small",style:{marginBottom:"10px"}},
-        "Changes save immediately and sync to all devices."));
+        "No record for this month — showing carried forward from previous month. Save to lock in."));
     }
 
     const currentAssignment = { month, ...assignment };
     delete currentAssignment._carried_forward;
+    delete currentAssignment._auto;
 
     for (const role of ROLES_META) {
       const row = el("div",{style:{marginBottom:"16px",paddingBottom:"16px",borderBottom:"1px solid var(--border)"}});
@@ -12753,8 +12943,14 @@ routes.leadership_roles = function(u) {
       row.appendChild(el("div",{class:"muted small",style:{marginBottom:"6px"}},role.desc));
       const sel = el("select",{style:{width:"100%",padding:"6px 8px",borderRadius:"8px",border:"1px solid var(--border)",fontSize:"14px"}});
       sel.appendChild(el("option",{value:""},"— Unassigned —"));
-      for (const b of baristas) {
-        const opt = el("option",{value:b.id}, b.name + (b.role==="head_barista"?" ⭐":""));
+      const optionSet = new Map(allBaristas.map(b => [b.id, b]));
+      const existingId = currentAssignment[role.key];
+      if (existingId && !optionSet.has(existingId)) {
+        const u2 = (state.users||[]).find(x => x.id === existingId);
+        if (u2) optionSet.set(u2.id, u2);
+      }
+      for (const b of optionSet.values()) {
+        const opt = el("option",{value:b.id}, b.name + " (barista — 10% bonus)");
         if (currentAssignment[role.key] === b.id) opt.selected = true;
         sel.appendChild(opt);
       }
@@ -12764,41 +12960,23 @@ routes.leadership_roles = function(u) {
     }
 
     const btnRow = el("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap",marginTop:"4px"}});
-
-    const saveBtn = el("button",{class:"btn",onClick:() => {
+    btnRow.appendChild(el("button",{class:"btn",onClick:() => {
       state.leadership_assignments = state.leadership_assignments || [];
       const idx = state.leadership_assignments.findIndex(a => a.month === month);
       const record = { ...currentAssignment };
-      delete record._carried_forward;
       if (idx >= 0) state.leadership_assignments[idx] = record;
       else state.leadership_assignments.push(record);
       saveState();
       toast("✅ Leadership roles saved for " + month);
       draw();
-    }},"Save Assignments");
-    btnRow.appendChild(saveBtn);
-
+    }},"Save Assignments"));
     if (month <= today.toISOString().slice(0,7)) {
-      const eomBtn = el("button",{class:"btn secondary",onClick:() => {
+      btnRow.appendChild(el("button",{class:"btn secondary",onClick:() => {
         runEndOfMonthLeadershipCheck(month, u);
-      }},"⚙ End-of-Month Check");
-      btnRow.appendChild(eomBtn);
+      }},"⚙ End-of-Month Check"));
     }
     card.appendChild(btnRow);
     content.appendChild(card);
-
-    // Summary card
-    const summCard = el("div",{class:"card",style:{marginTop:"12px"}});
-    summCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"13px",marginBottom:"10px"}},"Current Assignment Summary"));
-    for (const role of ROLES_META) {
-      const uid  = currentAssignment[role.key];
-      const name = uid ? ((state.users||[]).find(x=>x.id===uid)||{}).name || uid : "Unassigned";
-      const row  = el("div",{class:"kv",style:{marginBottom:"6px"}});
-      row.appendChild(el("div",{class:"k",style:{fontSize:"12px"}},role.label));
-      row.appendChild(el("div",{class:"v",style:{fontWeight:uid?"600":"400",color:uid?"var(--ink)":"var(--ink-dim)"}},name));
-      summCard.appendChild(row);
-    }
-    content.appendChild(summCard);
   }
 
   monthInput.addEventListener("input",() => { selectedMonth = monthInput.value; draw(); });
