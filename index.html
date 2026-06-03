@@ -5223,8 +5223,9 @@ routes.salaries = function (u) {
     const staff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
     const options = staff.map(p => ({ label: p.name, value: p.id }));
     const otTypeOptions = [
-      { label: "Regular OT (×1.5)", value: "regular" },
-      { label: "Holiday (×2)",      value: "holiday" },
+      { label: "Regular OT (×1.5)",    value: "regular" },
+      { label: "Eid Al-Fitr (×2)",     value: "eid_fitr" },
+      { label: "Eid Al-Adha (×2)",     value: "eid_adha" },
     ];
     openPrompt({
       title: "Log overtime hours",
@@ -5242,21 +5243,24 @@ routes.salaries = function (u) {
         if (!person) return toast("Pick a barista", "error");
         const sal = getSalaryForMonth(person.id, (vals.date||"").slice(0,7) || month);
         const hrRate = sal > 0 ? sal / 30 / 8 : 0;
-        const multiplier = vals.ot_type === "holiday" ? 2 : 1.5;
+        const multiplier = (vals.ot_type === "eid_fitr" || vals.ot_type === "eid_adha") ? 2 : 1.5;
         const amount = Math.round(hrRate * hrs * multiplier * 100) / 100;
         const s = stamp();
         const mon = monthInput.value || new Date().toISOString().slice(0,7);
+        const eidNote = vals.ot_type === "eid_fitr" ? "Eid Al-Fitr double pay"
+          : vals.ot_type === "eid_adha" ? "Eid Al-Adha double pay" : "";
         state.overtime_logs = state.overtime_logs || [];
         state.overtime_logs.push({
           id: uuid(), user_id: person.id, barista: person.name,
           date: vals.date, hours: hrs, rate: hrRate, multiplier, amount,
           month: mon || (vals.date||"").slice(0,7),
-          note: vals.note || "", by: s.by, by_name: s.by_name, at: s.at,
+          note: eidNote || vals.note || "", by: s.by, by_name: s.by_name, at: s.at,
           approved: false,
         });
         saveState();
         // Send approval email
-        const otTypeLabel = multiplier === 2 ? "Holiday (×2)" : "Regular OT (×1.5)";
+        const otTypeLabel = vals.ot_type === "eid_fitr" ? "Eid Al-Fitr (×2)"
+          : vals.ot_type === "eid_adha" ? "Eid Al-Adha (×2)" : "Regular OT (×1.5)";
         const subj = encodeURIComponent(`[OT Approval Needed] ${person.name} · ${vals.date} · ${hrs}h · ${otTypeLabel} · EGP ${amount.toFixed(2)}`);
         const bod  = encodeURIComponent(
           `Overtime submitted for your approval:\n\n` +
@@ -10504,16 +10508,20 @@ routes.handbook = function (u) {
     {
       number: "8", title: "Record Waste", ar_title: "تسجيل الهدر",
       content: [
-        { type: "para", text: "Use the Record Waste screen to log any ingredient or product that has been discarded, spoiled, spilled, or cannot be used." },
+        { type: "para", text: "Use the Record Waste screen to log any ingredient or product that has been discarded, spoiled, spilled, or cannot be used. Every morning-shift barista must submit a waste entry after every shift — even if nothing was wasted." },
         { type: "subheader", text: "How to Record Waste" },
-        { type: "bullets", items: ["Open the Record Waste screen.", "Select the item wasted from the ingredient list.", "Enter the quantity wasted and the reason.", "Add any additional notes if relevant, then tap Submit."] },
+        { type: "bullets", items: ["Open the Record Waste screen.", "Select the item wasted from the ingredient list.", "Enter the quantity wasted and the reason.", "Add any additional notes if relevant, then tap Submit.", "If there was no waste during the shift, tap <strong>No Waste</strong> to log a clear shift — this is mandatory."] },
+        { type: "subheader", text: "KPI Impact" },
+        { type: "bullets", items: ["Every morning shift day with no waste entry at all (not even No Waste) deducts <strong>−10 pts</strong> from your Waste Control KPI score.", "Logging No Waste counts as a clean day (100 pts for that day)."] },
         { type: "subheader", text: "Updating an Existing Entry" },
         { type: "para", text: "Waste entries are editable after submission. Tap the entry in the Waste Log, make corrections, and tap Save. Only the shift manager can edit entries from previous shifts." },
       ],
       ar_content: [
-        { type: "para", text: "استخدم شاشة تسجيل الهدر لتسجيل أي مكوّن أو منتج تم التخلص منه أو تلفه أو انسكابه أو لا يمكن استخدامه." },
+        { type: "para", text: "استخدم شاشة تسجيل الهدر لتسجيل أي مكوّن أو منتج تم التخلص منه أو تلفه أو انسكابه أو لا يمكن استخدامه. يجب على كل بريستا شيفت صباحي تقديم إدخال هدر بعد كل شيفت — حتى لو لم يكن هناك هدر." },
         { type: "subheader", text: "كيفية تسجيل الهدر" },
-        { type: "bullets", items: ["افتح شاشة تسجيل الهدر.", "اختر العنصر المهدر من قائمة المكونات.", "أدخل الكمية المهدرة والسبب.", "أضف أي ملاحظات إضافية إن وُجدت، ثم اضغط تقديم."] },
+        { type: "bullets", items: ["افتح شاشة تسجيل الهدر.", "اختر العنصر المهدر من قائمة المكونات.", "أدخل الكمية المهدرة والسبب.", "أضف أي ملاحظات إضافية إن وُجدت، ثم اضغط تقديم.", "إذا لم يكن هناك هدر خلال الشيفت، اضغط <strong>لا هدر</strong> لتسجيل شيفت نظيف — هذا إلزامي."] },
+        { type: "subheader", text: "التأثير على مؤشرات الأداء" },
+        { type: "bullets", items: ["كل يوم شيفت صباحي بدون أي إدخال هدر (حتى لو لا هدر) يخصم <strong>−10 نقاط</strong> من مؤشر ضبط الهدر.", "تسجيل لا هدر يُحتسب كيوم نظيف كامل (100 نقطة لذلك اليوم)."] },
         { type: "subheader", text: "تحديث إدخال موجود" },
         { type: "para", text: "يمكن تعديل إدخالات الهدر بعد التقديم. اضغط على الإدخال في سجل الهدر، أجرِ التصحيحات، واضغط حفظ. فقط مشرف الشيفت يمكنه تعديل إدخالات من الشيفتات السابقة." },
       ]
@@ -10527,7 +10535,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "Automatic Deduction Rules" },
         { type: "bullets", items: ["Up to 10 min late: no penalty (grace period).", "Late 10–60 min: ½ day deducted.", "Late 60–120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 2 or more times in a calendar month, every subsequent penalty in that month is doubled automatically.", "Covering a shift not assigned to you earns +50 punctuality KPI bonus points."] },
         { type: "subheader", text: "Punctuality KPI Impact" },
-        { type: "para", text: "Your Punctuality KPI starts at 100 each month. Late arrivals deduct points directly from that score — not added as a fixed number. Late 16–120 min: −20 pts. Late more than 120 min: −50 pts. No stamp: −100 pts. If deductions exceed your Punctuality score (below 0), the overflow is subtracted from your overall KPI total." },
+        { type: "para", text: "Your Punctuality KPI starts at 100 each month. Late arrivals deduct points directly from that score — not added as a fixed number. Late 11–120 min: −20 pts. Late more than 120 min: −50 pts. No stamp: −100 pts. Covering a shift not assigned to you: +50 pts. If deductions exceed your Punctuality score (below 0), the overflow is subtracted from your overall KPI total." },
         { type: "subheader", text: "Early Arrival Bonus" },
         { type: "para", text: "Arriving 15–30 min before opening adds +5 pts to your Punctuality KPI. Arriving 30+ min early adds +10 pts. Both trigger an automatic bonus on clock-in and are reflected in your monthly KPI score." },
       ],
@@ -10536,9 +10544,11 @@ routes.handbook = function (u) {
         { type: "subheader", text: "كيفية تقديم بصمة الحضور" },
         { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو زاوية).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
         { type: "subheader", text: "قواعد الخصم التلقائي" },
-        { type: "bullets", items: ["تأخر 15 دقيقة – 60 دقيقة: خصم نصف يوم.", "تأخر 60 دقيقة – 120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "غياب بدون بصمة: خصم 3 أيام.", "إذا تأخر نفس البريستا 3 مرات أو أكثر في شهر ميلادي واحد، يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً."] },
+        { type: "bullets", items: ["تأخر 10 دقائق أو أقل: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "غياب بدون بصمة: خصم 3 أيام.", "إذا تأخر نفس البريستا مرتين أو أكثر في شهر ميلادي واحد، يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت غير مُخصَّص لك تمنحك +50 نقطة مكافأة في مؤشر الانضباط."] },
+        { type: "subheader", text: "تأثير مؤشر الانضباط" },
+        { type: "para", text: "يبدأ مؤشر الانضباط من 100 كل شهر. التأخر 11–120 دقيقة: −20 نقطة. التأخر أكثر من 120 دقيقة: −50 نقطة. غياب بدون بصمة: −100 نقطة. تغطية شيفت: +50 نقطة. إذا تجاوزت الخصومات درجة الانضباط، ينعكس الفائض على إجمالي مؤشر الأداء." },
         { type: "subheader", text: "مكافأة الحضور المبكر" },
-        { type: "para", text: "إذا تم تقديم صورة الحضور قبل 30 دقيقة أو أكثر من وقت الفتح المجدول، يسجّل النظام مكافأة الحضور المبكر تلقائياً، وتنعكس في مؤشر الانضباط." },
+        { type: "para", text: "الحضور قبل 15–30 دقيقة من الفتح يضيف +5 نقاط. الحضور قبل 30+ دقيقة يضيف +10 نقاط. كلاهما يُسجَّل تلقائياً عند تقديم بصمة الحضور." },
       ]
     },
     {
@@ -10574,7 +10584,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "The Three Monthly Roles" },
         { type: "bullets", items: [
           "<strong>Schedule Manager</strong> — Accountable for weekly schedule accuracy and sign-in stamp compliance. Gains edit access to the Weekly Schedule screen for the month — can create, update, and publish rosters. Each unresolved missing stamp deducts 15 pts from Leadership KPI; a late stamp deducts 10 pts.",
-          "<strong>Inventory Manager</strong> — Responsible for daily stock monitoring and must submit the end-of-month inventory snapshot before midnight on the last day. Gains access to the Inventory Engine screen — a POS-driven forecasting dashboard showing consumption rates, days remaining, reorder thresholds, and risk alerts. A missing snapshot results in a half-day salary deduction plus a Leadership KPI penalty.",
+          "<strong>Inventory Manager</strong> — Responsible for daily stock monitoring and must submit the end-of-month inventory snapshot before midnight on the last day. Gains access to the Inventory Engine screen — a POS-driven forecasting dashboard showing consumption rates, days remaining, reorder thresholds, and risk alerts. A missing snapshot results in a half-day salary deduction plus a Leadership KPI penalty. <em>Accountability note: if a Head Barista is assigned this month, the penalty is applied to them first; it falls to the Inventory Manager only when no Head Barista is assigned.</em>",
           "<strong>Cash Manager</strong> — Responsible for logging the weekly Maadi ATM cash deposit and maintaining the petty cash log. Gains access to the Petty Cash screen and the ATM Deposit screen (Maadi branch) for the month. A reminder fires automatically every Thursday. Missed deposit entries result in a ¼ day salary deduction per week."
         ] },
         { type: "subheader", text: "How App Access Works" },
@@ -10587,7 +10597,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "الأدوار الشهرية الثلاثة" },
         { type: "bullets", items: [
           "<strong>مدير الجدول</strong> — مسؤول عن دقة الجدول الأسبوعي وامتثال بصمات الحضور. يحصل على صلاحية تعديل شاشة الجدول الأسبوعي للشهر — يمكنه إنشاء الجداول وتحديثها ونشرها. كل بصمة غائبة غير محلولة تخصم 15 نقطة من مؤشر القيادة؛ والبصمة المتأخرة تخصم 10 نقاط.",
-          "<strong>مدير المخزون</strong> — مسؤول عن المراقبة اليومية للمخزون ويجب تقديم جرد المخزون في نهاية الشهر قبل منتصف ليل اليوم الأخير. يحصل على وصول إلى شاشة محرك المخزون — لوحة توقعات مدفوعة بنقاط البيع تعرض معدلات الاستهلاك والأيام المتبقية وحدود إعادة الطلب وتنبيهات المخاطر. الجرد المفقود يؤدي إلى خصم نصف يوم من الراتب إضافة إلى عقوبة في مؤشر القيادة.",
+          "<strong>مدير المخزون</strong> — مسؤول عن المراقبة اليومية للمخزون ويجب تقديم جرد المخزون في نهاية الشهر قبل منتصف ليل اليوم الأخير. يحصل على وصول إلى شاشة محرك المخزون — لوحة توقعات مدفوعة بنقاط البيع تعرض معدلات الاستهلاك والأيام المتبقية وحدود إعادة الطلب وتنبيهات المخاطر. الجرد المفقود يؤدي إلى خصم نصف يوم من الراتب إضافة إلى عقوبة في مؤشر القيادة. <em>ملاحظة المساءلة: إذا كان هناك رئيس بريستا معيّن هذا الشهر، تُطبَّق العقوبة عليه أولاً؛ وتنتقل إلى مدير المخزون فقط في غياب رئيس البريستا.</em>",
           "<strong>مدير الكاش</strong> — مسؤول عن تسجيل إيداع الكاش الأسبوعي في ماكينة الصراف الآلي بالمعادي والحفاظ على سجل النثريات. يحصل على وصول إلى شاشة النثريات وشاشة إيداع الصراف الآلي (فرع المعادي) للشهر. يُرسَل تذكير تلقائياً كل خميس. الإدخالات المفقودة تؤدي إلى خصم ربع يوم من الراتب عن كل أسبوع."
         ] },
         { type: "subheader", text: "كيفية عمل صلاحيات التطبيق" },
@@ -11639,7 +11649,7 @@ routes.app_guide = function (u) {
       en_title: "Record Waste",
       ar_title: "تسجيل الهدر",
       en_steps: [
-        "Tap <strong>Record Waste</strong> — do this <em>every time</em> something is wasted during your shift.",
+        "Tap <strong>Record Waste</strong> — do this <em>every time</em> something is wasted during your shift. If nothing was wasted, tap <strong>No Waste</strong> — this is mandatory every shift, not optional. Missing entry = −10 pts from your Waste Control KPI for that day.",
         "Select your <strong>branch</strong>.",
         "Search for the item (e.g. milk, espresso, syrup) and select it.",
         "Enter the <strong>quantity wasted</strong> and the <strong>unit</strong> (ml, g, or unit).",
@@ -11811,7 +11821,7 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>My HR</strong> to see your personal salary dashboard for the current month.",
         "Shows: <strong>Base Salary</strong>, <strong>Overtime</strong> (with the multiplier label for each entry), <strong>Penalties</strong> (with date, reason, and amount for each), <strong>Sick Leave Deductions</strong>, <strong>Loans</strong>, and <strong>Net Due</strong> — the final amount to be paid.",
-        "<strong>Overtime multipliers</strong> are shown next to each overtime entry (e.g. ×1.5 for regular overtime, ×2 for events shifts).",
+        "<strong>Overtime multipliers</strong> are shown next to each overtime entry (e.g. ×1.5 for regular overtime, ×2 for Eid Al-Fitr and Eid Al-Adha). Events shifts show a flat bonus instead of a multiplier.",
         "<strong>Sick Leave Deductions:</strong> approved sick leave days are deducted from your salary at the daily rate and listed as a separate line item.",
         "Your <strong>KPI Reward Tier</strong> appears at month end: Gold (90+), Silver (80+), Bronze (70+), or Rising (below 70).",
         "Use the <strong>month navigation</strong> to review any previous month.",
@@ -11955,7 +11965,7 @@ routes.app_guide = function (u) {
       ar_title: "قواعد أساسية — يجب الالتزام بها",
       en_steps: [
         "<strong>🕐 Sign-In Stamp</strong>: Stamp the moment you arrive. Never stamp for someone else. Penalties are automatic.",
-        "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small.",
+        "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small. If nothing was wasted, tap No Waste. This is mandatory every shift — missing entries deduct −10 pts from your Waste Control KPI.",
         "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
         "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
         "<strong>📦 Reorder Alerts</strong>: Act on every low-stock alert before your shift ends.",
@@ -12126,7 +12136,7 @@ function kpiLocalDateStr(ts) {
 // Returns { score, overflow } where score is punctuality KPI clamped to [0,110],
 // and overflow is any excess deduction that couldn't be absorbed (spills into total KPI).
 // Logic: start at 100, each shift adds/deducts based on arrival time.
-//   early ≥30 min: +10 | early 15–30 min: +5 | on time: 0 | late ≤120 min: −20 | late >120 min: −50 | no stamp: −100
+//   early ≥30 min: +10 | early 15–30 min: +5 | on time (≤10 min): 0 | late 11–120 min: −20 | late >120 min: −50 | no stamp: −100 | substitute cover: +50
 function kpiPunctualityScore(userId, cutoff) {
   const bot      = state.branch_opening_times || {};
   const today    = new Date();
@@ -12710,7 +12720,7 @@ routes.leadership_roles = function(u) {
 
   const ROLES_META = [
     { key:"weekly_schedule",  label:"📅 Schedule Manager",
-      desc:"Accountable for weekly schedule and sign-in stamp compliance. Also manages leave requests — access to view and submit leaves is granted for the month. Gets alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from the Leadership KPI; a late stamp (>15 min) deducts 10 pts. The window to act is same-day — if the barista's stamp is submitted before the owner runs the missing-stamp check, no deduction applies." },
+      desc:"Accountable for weekly schedule and sign-in stamp compliance. Also manages leave requests — access to view and submit leaves is granted for the month. Gets alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from the Leadership KPI; a late stamp (>10 min) deducts 10 pts. The window to act is same-day — if the barista's stamp is submitted before the owner runs the missing-stamp check, no deduction applies." },
     { key:"budget_inventory", label:"💰 Budget & Inventory Manager",
       desc:"Responsible for managing petty cash, logging the weekly Maadi ATM cash deposit, and submitting the end-of-month inventory snapshot. Gets low-stock and reorder alerts. Full access to all inventory routes (items, suppliers, reorder, waste, purchases, snapshots) and cash routes (petty cash, ATM deposits). Penalty: ¼ day per missed weekly deposit, half-day if end-of-month snapshot is missing." },
   ];
@@ -13228,7 +13238,7 @@ routes.my_scorecard = function(u) {
     const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status"];
     const ROLE_INFO = {
       weekly_schedule:      { en:"📅 Schedule Manager",  ar:"📅 مدير الجداول",
-        descEn:"You are accountable for the weekly schedule and sign-in stamp compliance. You are alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from your Leadership KPI; a late stamp (>15 min) deducts 10 pts. Act on alerts the same day — a stamp submitted before the owner's missing-stamp check avoids the deduction.",
+        descEn:"You are accountable for the weekly schedule and sign-in stamp compliance. You are alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from your Leadership KPI; a late stamp (>10 min) deducts 10 pts. Act on alerts the same day — a stamp submitted before the owner's missing-stamp check avoids the deduction.",
         descAr:"أنت مسؤول عن الجدول الأسبوعي وبصمات الحضور هذا الشهر. ستتلقى تنبيهاً عند غياب أو تأخر البصمة. كل بصمة مفقودة غير معالجة تحسم 15 نقطة من نقاط قيادتك، والتأخر أكثر من 15 دقيقة يحسم 10 نقاط. تصرف في نفس اليوم — البصمة المسجّلة قبل فحص المدير لا تُحسب عليك." },
       inventory_management: { en:"📦 Inventory Manager", ar:"📦 مدير المخزون",
         descEn:"You must submit the end-of-month inventory snapshot. You receive all low-stock alerts.",
@@ -13817,15 +13827,21 @@ routes.my_jd = function(u) {
         en:"Punctuality, Attendance & Operations Discipline",ar:"الانضباط والحضور وانضباط العمليات",
         items_en:[
           "Arrive 15 min before shift start for machine warm-up and team briefing — non-negotiable · KPI: Late Arrivals ≤ 1/month (Punctuality Score auto from stamp)",
+          "Grace period: ≤10 min late = no penalty. 10–60 min = ½ day. 60–120 min = 1 day. >120 min = 2 days. No stamp = 3 days. 2nd+ late same month: penalty doubles.",
+          "Covering a colleague's unassigned shift earns +50 punctuality KPI bonus — encourage this culture in your team",
           "Attendance ≥ 95% of scheduled shifts — arrange cover proactively, never last-minute · KPI: Attendance ≥ 95%",
           "Submit Cleaning Log + Waste Log personally every shift you work — lead by example · KPI: Personal Log Compliance 100%",
+          "If no waste during shift, log No Waste — mandatory, not optional. Missing entry = −10 pts Waste KPI for that day.",
           "Ensure every barista submits their Shift Close before leaving — bar cannot close without it · KPI: Shift Close Rate 100%",
           "Temperature and equipment checks: espresso machine at temperature within 20 min of opening (measured) · KPI: Equipment Readiness 100%",
         ],
         items_ar:[
           "الوصول قبل ١٥ دقيقة من بداية الشيفت لتسخين الماكينة وإيجاز الفريق — غير قابل للتفاوض · الهدف: تأخيرات ≤ ١/شهر (نقاط الانضباط تلقائية من البصمة)",
+          "فترة سماح: ≤١٠ دقائق لا خصم. ١٠–٦٠ دقيقة = خصم نصف يوم. ٦٠–١٢٠ دقيقة = يوم. أكثر من ١٢٠ دقيقة = يومان. غياب = ٣ أيام. التأخر مرتين أو أكثر في الشهر: يُضاعَف الخصم.",
+          "تغطية شيفت زميل غير مُخصَّص لك تمنحك +٥٠ نقطة في مؤشر الانضباط — شجّع هذه الثقافة في فريقك",
           "الحضور ≥ ٩٥٪ من الشيفتات المجدولة — ترتيب البديل مسبقاً، لا لحظة أخيرة أبداً · الهدف: ≥ ٩٥٪",
           "إرسال سجل النظافة وسجل الهدر شخصياً في كل شيفت تعمله — قُدوة للفريق · الهدف: الالتزام الشخصي ١٠٠٪",
+          "إذا لم يكن هناك هدر خلال الشيفت، سجّل لا هدر — إلزامي وليس اختيارياً. إدخال مفقود = −١٠ نقاط من مؤشر الهدر لذلك اليوم.",
           "التأكد من إرسال كل بريستا إغلاق الشيفت قبل المغادرة — البار لا يُغلق بدونه · الهدف: معدل إغلاق الشيفت ١٠٠٪",
           "فحص الحرارة والمعدات: ماكينة الإسبريسو على درجة الحرارة خلال ٢٠ دقيقة من الفتح (قياس فعلي) · الهدف: جاهزية المعدات ١٠٠٪",
         ],
@@ -13902,14 +13918,18 @@ routes.my_jd = function(u) {
         en:"Punctuality & Attendance",ar:"الانضباط والحضور",
         items_en:[
           "Arrive and clock in on time — measured daily via Sign-In Stamp · KPI: Punctuality Score ≥ 80 (auto-calculated)",
-          "Late ≤ 2 times per month (>5 min counts as late) · KPI: Late Arrivals ≤ 2/month",
+          "Grace period: ≤10 min late = no penalty. 10–60 min = ½ day deducted. 60–120 min = 1 day. >120 min = 2 days. No stamp = 3 days.",
+          "Late 2+ times in same month: every further penalty that month is doubled automatically",
+          "Covering a shift not assigned to you earns +50 punctuality KPI bonus points automatically",
           "Attendance ≥ 90% of scheduled shifts — proactive communication required for any absence · KPI: Attendance ≥ 90%",
           "No-show without notice: automatic full-day deduction + flag on scorecard",
           "Submit Cleaning Log and Waste Log by end of every shift — completion tracked automatically · KPI: Shift Compliance ≥ 90%",
         ],
         items_ar:[
           "الحضور والبصمة في الوقت المحدد — قياس يومي عبر بصمة الحضور · الهدف: نقاط الانضباط ≥ ٨٠ (حساب تلقائي)",
-          "تأخير ≤ مرتين في الشهر (أكثر من ٥ دقائق يُحسب تأخيراً) · الهدف: التأخيرات ≤ ٢/شهر",
+          "فترة سماح: ≤١٠ دقائق لا خصم. ١٠–٦٠ دقيقة = خصم نصف يوم. ٦٠–١٢٠ دقيقة = يوم كامل. أكثر من ١٢٠ دقيقة = يومان. غياب بدون بصمة = ٣ أيام.",
+          "التأخر مرتين أو أكثر في نفس الشهر: يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً",
+          "تغطية شيفت غير مُخصَّص لك تمنحك +٥٠ نقطة مكافأة في مؤشر الانضباط تلقائياً",
           "الحضور ≥ ٩٠٪ من الشيفتات المجدولة — التواصل المسبق مطلوب عند أي غياب · الهدف: ≥ ٩٠٪",
           "الغياب بدون إشعار: خصم يوم كامل تلقائي + تسجيل في بطاقة الأداء",
           "إرسال سجل النظافة وسجل الهدر قبل نهاية كل شيفت — يُتابَع تلقائياً · الهدف: الالتزام بالشيفت ≥ ٩٠٪",
@@ -13922,6 +13942,8 @@ routes.my_jd = function(u) {
           "Espresso shots wasted per shift: target ≤ 3 (excludes calibration) · KPI: Shot Waste ≤ 3/shift (auto from Waste Log)",
           "Milk waste per shift: target ≤ 100ml (SCA specialty standard) · KPI: Milk Waste ≤ 100ml/shift (auto)",
           "Log all waste in real-time via the Waste Log tile — honesty is mandatory · KPI: Zero unreported waste incidents",
+          "If there was no waste during the shift, tap No Waste — this is mandatory every shift, not optional",
+          "Missing waste entry on a rostered morning shift day = −10 pts from Waste Control KPI (even if no waste occurred)",
           "Calibration waste: up to 10 shots acceptable — must tag reason as 'calibration' in log",
           "Improve personal waste score month-over-month — trend tracked in scorecard · KPI: MoM Waste Improvement",
         ],
@@ -13929,6 +13951,8 @@ routes.my_jd = function(u) {
           "شوطات الإسبريسو المهدرة لكل شيفت: الهدف ≤ ٣ (لا تشمل المعايرة) · الهدف: هدر الشوطات ≤ ٣/شيفت (تلقائي من سجل الهدر)",
           "هدر الحليب لكل شيفت: الهدف ≤ ١٠٠ مل (معيار SCA للقهوة المتخصصة) · الهدف: هدر الحليب ≤ ١٠٠ مل/شيفت (تلقائي)",
           "تسجيل كل الهدر فوراً عبر تايل سجل الهدر — الصدق إلزامي · الهدف: صفر حوادث هدر غير مُبلَّغ عنها",
+          "إذا لم يكن هناك هدر خلال الشيفت، اضغط لا هدر — هذا إلزامي في كل شيفت وليس اختيارياً",
+          "إدخال هدر مفقود في يوم شيفت صباحي مُجدوَل = −١٠ نقاط من مؤشر ضبط الهدر (حتى لو لم يكن هناك هدر)",
           "هدر المعايرة: حتى ١٠ شوطات مقبولة — يجب وضع سبب 'معايرة' في السجل",
           "تحسين نقاط الهدر الشخصية شهراً بعد شهر — التطور يُتابع في بطاقة الأداء · الهدف: تحسن شهري في الهدر",
         ],
