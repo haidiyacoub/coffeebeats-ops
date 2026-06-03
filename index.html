@@ -5057,7 +5057,14 @@ routes.salaries = function (u) {
         const statusPill = r.approved
           ? el("span", { class: "pill ok", style: { fontSize:"11px" } }, "✓ Approved")
           : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, "⏳ Pending");
-        const rateLabel = r.multiplier === 2 ? "×2 Holiday" : r.multiplier === 1.5 ? "×1.5 OT" : r.multiplier ? `×${r.multiplier}` : "×1.5 OT";
+        const rateLabel = r.kind === "events_bonus" ? "🎪 Events bonus"
+          : r.kind === "double_shift" ? "×1.5 Double shift"
+          : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
+          : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
+          : r.multiplier === 2   ? "×2 Holiday"
+          : r.multiplier === 1.5 ? "×1.5 OT"
+          : r.multiplier         ? `×${r.multiplier}`
+          : "×1.5 OT";
         otCard.appendChild(el("div", { class: "kv" }, [
           el("div", { class: "k" }, [
             el("div", {}, `${r.barista || "—"} · ${r.date || ""} · ${r.hours}h · ${rateLabel}`),
@@ -5313,11 +5320,13 @@ routes.salaries = function (u) {
 // ==============================================================
 //
 // Auto sign-in stamp penalty tiers (applied on clock-in upload):
-//   - late 15–60 min               (half day)
+//   - late 1–10 min                (grace — no penalty)
+//   - late 10–60 min               (half day)
 //   - late 60–120 min              (full day)
 //   - late >120 min                (2 days)
 //   - no stamp at all              (3 days, via missing-stamp checker)
-//   - 3rd+ late in same month      penalty doubles automatically
+//   - 2nd+ late in same month      penalty doubles automatically
+//   - stamps a shift not assigned to them → +50 KPI punctuality bonus
 //
 // Manual reasons dropdown:
 //   - not wearing the uniform      (half day penalty)
@@ -7079,7 +7088,7 @@ routes.roster = function (u) {
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Sign-in stamps are checked against these times. >15 min = ½ day · >60 min = 1 day · >120 min = 2 days · No stamp = 3 days. If the same barista is late 2+ times in a month, the penalty doubles. Deductions show automatically in each barista's salary."));
+    "Sign-in stamps are checked against these times. 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · No stamp = 3 days. ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
   for (const otBranch of ["maadi", "zawya"]) {
     const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
@@ -9524,7 +9533,23 @@ routes.signin_stamp_new = function (u) {
             r.shift   === "morning" &&
             r.user_id === u.id
           );
-          if (!morningEntry) return; // not today's morning barista — no penalty
+          if (!morningEntry) {
+            // Check if this barista is covering someone else's morning shift
+            const anyMorningShift = (state.rosters || []).find(r =>
+              r.week_of === weekOf &&
+              r.branch  === branch.toLowerCase() &&
+              r.day     === dayKey &&
+              r.shift   === "morning"
+            );
+            if (anyMorningShift) {
+              // Mark the stamp as a substitute cover and award +50 punctuality KPI bonus
+              const lastStamp = state.signin_stamps[state.signin_stamps.length - 1];
+              if (lastStamp) lastStamp.substitute_cover = true;
+              saveState();
+              toast(`⭐ Substitute cover recorded for ${u.name} — +50 punctuality bonus`, "ok");
+            }
+            return; // not today's assigned morning barista — no late penalty
+          }
 
           // Get morning opening time for this branch from the schedule config
           const bot      = state.branch_opening_times || {};
@@ -9533,7 +9558,7 @@ routes.signin_stamp_new = function (u) {
           const openingMs = new Date(todayStr + "T" + openStr + ":00").getTime();
           const minsLate  = Math.round((submitTime.getTime() - openingMs) / 60000);
 
-          if (minsLate <= 15) return; // on time or within grace period
+          if (minsLate <= 10) return; // on time or within grace period (≤10 min)
 
           // Prevent duplicate auto-penalty for same person on same date
           const already = (state.penalties || []).find(p =>
@@ -9546,7 +9571,7 @@ routes.signin_stamp_new = function (u) {
             `${minsLate} min late at ${branch} on ${todayStr}.`
           );
 
-          // Penalty tier: >15 min = ½ day · >60 min = 1 day · >120 min = 2 days
+          // Penalty tier: 10–60 min = ½ day · 60–120 min = 1 day · >120 min = 2 days
           const kind   = minsLate > 120 ? "two_days" : minsLate > 60 ? "full_day" : "half_day";
           const salary = getSalaryForMonth(u.id, todayStr.slice(0, 7));
           let amount   = penaltyAmount(kind, salary);
@@ -10500,7 +10525,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "How to Submit a Sign-In Stamp" },
         { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or Zawya).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
         { type: "subheader", text: "Automatic Deduction Rules" },
-        { type: "bullets", items: ["Late 15 min – 60 min: ½ day deducted.", "Late 60 min – 120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 2 or more times in a calendar month, every subsequent penalty in that month is doubled automatically."] },
+        { type: "bullets", items: ["Up to 10 min late: no penalty (grace period).", "Late 10–60 min: ½ day deducted.", "Late 60–120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 2 or more times in a calendar month, every subsequent penalty in that month is doubled automatically.", "Covering a shift not assigned to you earns +50 punctuality KPI bonus points."] },
         { type: "subheader", text: "Punctuality KPI Impact" },
         { type: "para", text: "Your Punctuality KPI starts at 100 each month. Late arrivals deduct points directly from that score — not added as a fixed number. Late 16–120 min: −20 pts. Late more than 120 min: −50 pts. No stamp: −100 pts. If deductions exceed your Punctuality score (below 0), the overflow is subtracted from your overall KPI total." },
         { type: "subheader", text: "Early Arrival Bonus" },
@@ -11593,10 +11618,11 @@ routes.app_guide = function (u) {
         "Select your branch: <strong>Maadi</strong> or <strong>Zawya</strong>.",
         "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
         "Tap <strong>Submit clock-in</strong>.",
-        "<strong>⚠ Automatic penalty rules:</strong> Late 1–60 min = <strong>½ day deducted</strong>. Late 61–120 min = <strong>1 full day deducted</strong>. Late more than 120 min = <strong>2 days deducted</strong>. No stamp at all = <strong>3 days deducted</strong>.",
+        "<strong>⚠ Automatic penalty rules:</strong> ≤10 min late = <strong>no penalty</strong> (grace period). Late 10–60 min = <strong>½ day deducted</strong>. Late 61–120 min = <strong>1 full day deducted</strong>. Late more than 120 min = <strong>2 days deducted</strong>. No stamp at all = <strong>3 days deducted</strong>.",
         "<strong>Repeat offender rule:</strong> If the same barista is late 2 or more times in one calendar month, every further penalty that month is <strong>doubled automatically</strong>.",
-        "<strong>Punctuality KPI:</strong> Your score starts at 100 each month. Late 16–120 min = <strong>−20 pts</strong>. Late 120+ min = <strong>−50 pts</strong>. No stamp = <strong>−100 pts</strong>. If deductions exceed your Punctuality score, the overflow reduces your overall KPI total. Arriving 15–30 min early = <strong>+5 pts</strong>. Arriving 30+ min early = <strong>+10 pts</strong>.",
-        "<strong>Notifications:</strong> Any stamp 15+ minutes late triggers an immediate in-app alert and email to the owner and head barista. If no stamp is recorded within 1 hour of opening, a second alert is sent automatically.",
+        "<strong>Substitute cover bonus:</strong> If you stamp a shift that was not assigned to you (covering for a colleague), you earn <strong>+50 punctuality KPI bonus points</strong> automatically.",
+        "<strong>Punctuality KPI:</strong> Your score starts at 100 each month. Late 11–120 min = <strong>−20 pts</strong>. Late 120+ min = <strong>−50 pts</strong>. No stamp = <strong>−100 pts</strong>. Covering a shift = <strong>+50 pts</strong>. If deductions exceed your Punctuality score, the overflow reduces your overall KPI total. Arriving 15–30 min early = <strong>+5 pts</strong>. Arriving 30+ min early = <strong>+10 pts</strong>.",
+        "<strong>Notifications:</strong> Any stamp 10+ minutes late triggers an immediate in-app alert and email to the owner and head barista. If no stamp is recorded within 1 hour of opening, a second alert is sent automatically.",
       ],
       ar_steps: [
         "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
@@ -12138,12 +12164,18 @@ function kpiPunctualityScore(userId, cutoff) {
         const diff = Math.round((new Date(st.at).getTime() - openMs) / 60000);
         if      (diff <= -30) delta += 10;
         else if (diff <= -15) delta +=  5;
-        else if (diff <=  15) delta +=  0;
+        else if (diff <=  10) delta +=  0;  // grace: ≤10 min late = no KPI hit
         else if (diff <= 120) delta -= 20;
         else                  delta -= 50;
       }
     }
   }
+
+  // Substitute cover bonus: +50 per shift covered for someone else
+  const subCovers = (state.signin_stamps||[]).filter(s =>
+    s.by === userId && s.substitute_cover && new Date(s.at).getTime() >= cutoff
+  );
+  delta += subCovers.length * 50;
 
   // Fallback when no roster data: score only from submitted stamps, no missing-stamp penalty
   if (shiftsFound === 0) {
@@ -12158,7 +12190,7 @@ function kpiPunctualityScore(userId, cutoff) {
         const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
         if      (diff <= -30) delta += 10;
         else if (diff <= -15) delta +=  5;
-        else if (diff <=  15) delta +=  0;
+        else if (diff <=  10) delta +=  0;
         else if (diff <= 120) delta -= 20;
         else                  delta -= 50;
       } catch(e) {}
@@ -12222,16 +12254,41 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
 
 function kpiWasteScore(userId, cutoff) {
   const entries = (state.waste||[]).filter(w => w.by === userId && new Date(w.at).getTime() >= cutoff);
-  if (!entries.length) return null;
-  // Group by calendar day
+  // Group submitted entries by calendar day
   const byDay = {};
   entries.forEach(w => {
     const d = kpiLocalDateStr(new Date(w.at));
     if (!byDay[d]) byDay[d] = [];
     byDay[d].push(w);
   });
-  const dayScores = Object.values(byDay).map(items => {
-    if (items.every(i => i.item_name === "— No waste —")) return 100;
+
+  // Find all morning shift days for this user in the cutoff window
+  const today = localISODate(new Date());
+  const bot   = state.branch_opening_times || {};
+  const morningShiftDays = new Set();
+  for (let d = new Date(cutoff); ; d.setDate(d.getDate() + 1)) {
+    const dateStr = localISODate(d);
+    if (dateStr >= today) break;
+    const dayIndex = (d.getDay() + 6) % 7;
+    const dayKey   = ROSTER_DAYS[dayIndex];
+    const weekOf   = mondayOf(dateStr);
+    const onMorning = (state.rosters||[]).some(r =>
+      r.week_of === weekOf && r.day === dayKey && r.shift === "morning" && r.user_id === userId
+    );
+    if (onMorning) morningShiftDays.add(dateStr);
+  }
+
+  // If no shift days and no entries, no score yet
+  if (!morningShiftDays.size && !Object.keys(byDay).length) return null;
+
+  const dayScores = [];
+
+  // Score days with entries
+  Object.entries(byDay).forEach(([dateStr, items]) => {
+    if (items.every(i => i.item_name === "— No waste —")) {
+      dayScores.push({ date: dateStr, score: 100 });
+      return;
+    }
     let score = 100;
     items.filter(w => w.item_name !== "— No waste —").forEach(w => {
       const name = (w.item_name||"").toLowerCase();
@@ -12239,17 +12296,24 @@ function kpiWasteScore(userId, cutoff) {
       const reason = (w.reason||"").toLowerCase();
       const isCal = reason.includes("training") || reason.includes("calibr");
       if (name.includes("espresso")||name.includes("shot")||name.includes("coffee")||name.includes("bean")) {
-        score -= isCal ? qty*2 : qty*6;           // 6 pts per shot (SCA: ≤3 shots/shift target)
+        score -= isCal ? qty*2 : qty*6;
       } else if (name.includes("milk")||name.includes("oat")||name.includes("almond")||name.includes("soy")||name.includes("cream")) {
         const ml = (w.unit==="L"||(w.unit||"").toLowerCase()==="litre") ? qty*1000 : qty;
-        score -= isCal ? Math.floor(ml/200)*3 : Math.floor(ml/100)*5; // 5 pts per 100ml (SCA: ≤100ml/shift)
+        score -= isCal ? Math.floor(ml/200)*3 : Math.floor(ml/100)*5;
       } else {
         score -= isCal ? qty*1 : qty*3;
       }
     });
-    return Math.max(Math.round(score), 10);
+    dayScores.push({ date: dateStr, score: Math.max(Math.round(score), 10) });
   });
-  return Math.round(dayScores.reduce((a,b)=>a+b,0)/dayScores.length);
+
+  // Penalise morning shift days with no waste entry at all (−10 per missed day)
+  morningShiftDays.forEach(dateStr => {
+    if (!byDay[dateStr]) dayScores.push({ date: dateStr, score: 90 });
+  });
+
+  if (!dayScores.length) return null;
+  return Math.round(dayScores.reduce((a,b) => a + b.score, 0) / dayScores.length);
 }
 function kpiCleanlinessScore(userId, cutoff) {
   const logs = (state.cleaning_logs||[]).filter(l => l.by === userId && new Date(l.at).getTime() >= cutoff);
@@ -12476,8 +12540,10 @@ function runEndOfMonthLeadershipCheck(month, cu) {
   if (!assignment) { toast("No leadership assignment for " + month, "error"); return; }
   const [yr, mo] = month.split("-").map(Number);
   const lastDay   = localISODate(new Date(yr, mo, 0));
-  const invMgrId  = assignment.budget_inventory || assignment.inventory_management;
-  if (!invMgrId) { toast("No Budget & Inventory Manager assigned for " + month, "warn"); return; }
+  // Head barista is accountable first; fall back to inventory manager if no head barista assigned
+  const headBaristaId = assignment.head_barista;
+  const invMgrId  = headBaristaId || assignment.budget_inventory || assignment.inventory_management;
+  if (!invMgrId) { toast("No Head Barista or Inventory Manager assigned for " + month, "warn"); return; }
   const hasSnapshot = (state.snapshots || []).some(s => s.as_of === lastDay);
   if (hasSnapshot) { toast("✅ Inventory snapshot found for " + lastDay + " — no penalty.", "ok"); return; }
   const already = (state.penalties || []).some(p =>
@@ -13405,17 +13471,29 @@ routes.my_hr = function(u, params) {
       const t = el("table", {});
       t.appendChild(el("thead", {}, [el("tr", {}, [
         el("th", {}, isAR ? "التاريخ" : "Date"),
+        el("th", {}, isAR ? "النوع" : "Type"),
         el("th", {}, isAR ? "الساعات" : "Hours"),
         el("th", { style: { textAlign: "right" } }, isAR ? "المبلغ" : "Amount"),
         el("th", {}, isAR ? "الحالة" : "Status"),
       ])]));
       const tb = el("tbody", {});
-      otList.forEach(r => tb.appendChild(el("tr", {}, [
-        el("td", {}, r.date || ""),
-        el("td", { class: "num" }, String(r.hours || 0) + "h"),
-        el("td", { class: "num", style: { color: "var(--ok)" } }, "+" + money(r.amount || 0)),
-        el("td", {}, r.approved ? "✅" : "⏳"),
-      ])));
+      otList.forEach(r => {
+        const typeLabel = r.kind === "events_bonus" ? "🎪 Events bonus"
+          : r.kind === "double_shift" ? "×1.5 Double shift"
+          : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
+          : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
+          : r.multiplier === 2   ? "×2 Holiday"
+          : r.multiplier === 1.5 ? "×1.5 OT"
+          : r.multiplier         ? `×${r.multiplier}`
+          : "×1.5 OT";
+        tb.appendChild(el("tr", {}, [
+          el("td", {}, r.date || ""),
+          el("td", { style: { fontSize: "12px", color: "var(--muted)" } }, typeLabel),
+          el("td", { class: "num" }, r.kind === "events_bonus" ? "—" : String(r.hours || 0) + "h"),
+          el("td", { class: "num", style: { color: "var(--ok)" } }, "+" + money(r.amount || 0)),
+          el("td", {}, r.approved ? "✅" : "⏳"),
+        ]));
+      });
       t.appendChild(tb);
       otCard.appendChild(t);
     }
