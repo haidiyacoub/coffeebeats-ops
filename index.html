@@ -1240,7 +1240,7 @@ const STATE_CHUNKS = {
   users_items: ["items", "menu", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
   waste:       ["waste"],
   purchases:   ["purchases", "petty_cash", "bank_ledger"],
-  sales:       ["sales", "shifts", "order_items", "orders"],
+  shifts:      ["shifts"],
   operations:  ["shift_closes", "cleaning_logs", "signin_stamps", "suggestions"],
   roster:      ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:          ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
@@ -1290,6 +1290,53 @@ function queueSync() {
 }
 
 let _syncRetryCount = 0;
+// Group an array of records by a month key derived from each record.
+// keyFn(record) should return a YYYY-MM string (or falsy to use a fallback bucket).
+function _groupByMonth(arr, keyFn) {
+  const map = {};
+  for (const r of (arr || [])) {
+    const k = keyFn(r) || "unknown";
+    (map[k] = map[k] || []).push(r);
+  }
+  return map;
+}
+
+// Write monthly-sharded sales docs to Firestore.
+// Each array (sales, order_items, orders) is split by month and stored in
+// state/sales__YYYY-MM, state/order_items__YYYY-MM, state/orders__YYYY-MM.
+// A lightweight state/sales_index doc tracks which month keys exist so pull
+// knows exactly which docs to fetch without a collection scan.
+async function _syncSalesShards() {
+  const salesByMonth      = _groupByMonth(state.sales,       r => r.date && r.date.slice(0, 7));
+  const orderItemsByMonth = _groupByMonth(state.order_items, r => r.month);
+  const ordersByMonth     = _groupByMonth(state.orders,      r => r.month);
+
+  const allMonths = new Set([
+    ...Object.keys(salesByMonth),
+    ...Object.keys(orderItemsByMonth),
+    ...Object.keys(ordersByMonth),
+  ]);
+
+  const writes = [];
+  for (const m of allMonths) {
+    const doc = {
+      sales:       salesByMonth[m]      || [],
+      order_items: orderItemsByMonth[m] || [],
+      orders:      ordersByMonth[m]     || [],
+    };
+    const approxBytes = JSON.stringify(doc).length;
+    if (approxBytes > 800_000) console.warn(`[sync] sales shard "${m}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
+    const docId = `sales__${m}`;
+    writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
+  }
+
+  // Index doc so pullFromFirestore knows which shards to fetch
+  writes.push(db.collection("state").doc("sales_index").set({ months: [...allMonths] })
+    .catch(err => { err._chunk = "sales_index"; throw err; }));
+
+  await Promise.all(writes);
+}
+
 async function doSync() {
   if (syncInFlight) return;
   syncInFlight = true;
@@ -1304,7 +1351,7 @@ async function doSync() {
       if (approxBytes > 800_000) console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
       return db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; });
     });
-    await Promise.all(writes);
+    await Promise.all([...writes, _syncSalesShards()]);
     state.settings.last_sync = now();
     pendingWrites = Math.max(0, pendingWrites - batchSize);
     _syncRetryCount = 0;
@@ -1337,12 +1384,50 @@ async function doSync() {
 async function pullFromFirestore() {
   try {
     const chunkNames = Object.keys(STATE_CHUNKS);
-    const docs = await Promise.all(chunkNames.map(c => db.collection("state").doc(c).get()));
+
+    // Fetch regular chunks + the sales shard index in parallel
+    const [docs, salesIndexDoc] = await Promise.all([
+      Promise.all(chunkNames.map(c => db.collection("state").doc(c).get())),
+      db.collection("state").doc("sales_index").get(),
+    ]);
+
     const remote = {};
     for (let i = 0; i < chunkNames.length; i++) {
       if (docs[i].exists) Object.assign(remote, docs[i].data());
     }
     if (!remote.items) return { ok: false, err: "No data in Firestore yet" };
+
+    // Pull monthly sales shards (new format)
+    const shardMonths = salesIndexDoc.exists ? (salesIndexDoc.data().months || []) : [];
+    if (shardMonths.length > 0) {
+      const shardDocs = await Promise.all(
+        shardMonths.map(m => db.collection("state").doc(`sales__${m}`).get())
+      );
+      const allSales = [], allOrderItems = [], allOrders = [];
+      for (const sd of shardDocs) {
+        if (!sd.exists) continue;
+        const d = sd.data();
+        if (Array.isArray(d.sales))       allSales.push(...d.sales);
+        if (Array.isArray(d.order_items)) allOrderItems.push(...d.order_items);
+        if (Array.isArray(d.orders))      allOrders.push(...d.orders);
+      }
+      remote.sales       = allSales;
+      remote.order_items = allOrderItems;
+      remote.orders      = allOrders;
+    } else {
+      // Migration path: old monolithic sales doc still exists — keep its data
+      // and doSync() at the end will write it out in the new sharded format.
+      const oldSalesDoc = await db.collection("state").doc("sales").get();
+      if (oldSalesDoc.exists) {
+        const d = oldSalesDoc.data();
+        if (Array.isArray(d.sales))       remote.sales       = d.sales;
+        if (Array.isArray(d.order_items)) remote.order_items = d.order_items;
+        if (Array.isArray(d.orders))      remote.orders      = d.orders;
+        if (Array.isArray(d.shifts))      remote.shifts      = d.shifts;
+        console.log("[migration] Migrating monolithic sales doc to monthly shards on next sync");
+      }
+    }
+
     const settingsBak = state.settings;
     Object.assign(state, remote);
     migrateState(state);
@@ -1353,7 +1438,7 @@ async function pullFromFirestore() {
     // Remap any legacy UUIDs in HR/KPI records to Firebase UIDs
     _remapLegacyIds();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    doSync(); // push back any migration fixes
+    doSync(); // push back any migration fixes (also writes new shard format if migrating)
     startReviewsListener();
     return { ok: true };
   } catch (e) {
