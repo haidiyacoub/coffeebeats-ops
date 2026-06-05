@@ -2659,7 +2659,7 @@ routes.home = function (u) {
     if (_isBudgetMgr) {
       tiles.appendChild(sectionHeader("💰 Budget & Inventory Manager"));
       tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
-      tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
+      tiles.appendChild(tile("📉", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
       tiles.appendChild(tile("📦", "Inventory Count", "Monthly snapshot", () => go("snapshot_new")));
       tiles.appendChild(tile("🗑️", "Waste Log", "View recent entries", () => go("waste_list")));
       tiles.appendChild(tile("🧾", "Record Purchase", "Upload receipt", () => go("purchase_new")));
@@ -2717,7 +2717,7 @@ routes.home = function (u) {
     if (u.branches.includes("maadi")) {
       tiles.appendChild(tile("🏧", "Maadi Deposits", "Weekly cash → bank", () => go("maadi_deposits")));
     }
-    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
+    tiles.appendChild(tile("📉", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
     tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🏆", "Leaderboard", "Monthly staff rankings · #1 earns a bonus", () => go("leaderboard")));
@@ -2780,7 +2780,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🕐", "Sign-In Stamps", "Clock-in photos", () => go("signin_stamp_list")));
     tiles.appendChild(tile("📷", "Photo Gallery", "Drive photo repository", () => go("photo_gallery")));
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
-    tiles.appendChild(tile("📊", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
+    tiles.appendChild(tile("📉", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
     tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
@@ -3117,8 +3117,7 @@ routes.shift_close_new = function (u) {
   // Barista allowance drinks — dynamic rows [{who, drink}]
   // Returns all active baristas/head-baristas/managers/helpers assigned to the current branch.
   function getBaristaList() {
-    const list = staffDir.shiftStaff(branch);
-    return (list.length ? list : staffDir.shiftStaff()).map(x => x.name);
+    return staffDir.shiftStaff().map(x => x.name);
   }
   let baristaAllowanceDrinks = [{ who: "", drink: "" }];
 
