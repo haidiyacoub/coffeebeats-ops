@@ -1236,19 +1236,22 @@ const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
 // NOTE: `users` is no longer synced here — staff come from Firestore `staff_public`
 // via staffDir.load() and are kept as an in-memory computed view (state.users).
 const STATE_CHUNKS = {
-  config:      ["settings", "salary_config"],
-  menu_data:   ["menu"],
-  users_items: ["items", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
-  waste:       ["waste"],
-  purchases:   ["purchases", "petty_cash", "bank_ledger"],
-  shifts:      ["shifts"],
-  operations:  ["shift_closes", "cleaning_logs", "signin_stamps", "suggestions"],
-  roster:      ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
-  hr:          ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
-  overhead:    ["overheads", "overhead_presets", "overhead_monthly_amts"],
-  media:       ["photo_log", "assets"],
-  kpi:         ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
-  meta:        ["_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
+  config:        ["settings", "salary_config"],
+  menu_data:     ["menu"],
+  users_items:   ["items", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
+  waste:         ["waste"],
+  purchases:     ["purchases", "petty_cash", "bank_ledger"],
+  shifts:        ["shifts"],
+  shift_closes:  ["shift_closes"],           // split out — daily high-volume log
+  cleaning_logs: ["cleaning_logs"],          // split out — daily high-volume log
+  signin_stamps: ["signin_stamps"],          // split out — multiple entries per day per branch
+  suggestions:   ["suggestions"],
+  roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
+  hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
+  overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts"],
+  media:         ["photo_log", "assets"],
+  kpi:           ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
+  meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
   inv_engine:       ["inv_engine"],
   inv_engine_sales: ["inv_engine_sales_data"],
   inv_engine_bom:   ["inv_engine_recipes"],
@@ -1347,9 +1350,11 @@ async function doSync() {
     const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
       const doc = {};
       for (const k of keys) { const v = state[k]; doc[k] = v !== undefined ? v : null; }
-      // Warn in console if any chunk is approaching Firestore's 1 MB document limit
       const approxBytes = JSON.stringify(doc).length;
-      if (approxBytes > 800_000) console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
+      if (approxBytes > 800_000) {
+        console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
+        toast(`⚠️ Data chunk "${chunk}" is getting large (${(approxBytes/1024).toFixed(0)} KB). Contact support to archive old records.`, "error");
+      }
       return db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; });
     });
     await Promise.all([...writes, _syncSalesShards()]);
