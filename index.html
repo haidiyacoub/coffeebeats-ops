@@ -1214,7 +1214,13 @@ function migrateState(s) {
 // `opts.immediate` pushes to Firestore right now instead of waiting for the
 // 2.5s debounce — use it for any write the user expects reflected immediately.
 function saveState(opts) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    // localStorage quota exceeded (common after large sales uploads) — log but don't block.
+    // Firestore sync is the source of truth; localStorage is just a cache.
+    console.warn("localStorage quota exceeded — state not cached locally, but Firestore sync will still run.", e);
+  }
   markDirty();
   if (opts && opts.immediate) {
     clearTimeout(syncTimer);
@@ -1253,7 +1259,7 @@ const STATE_CHUNKS = {
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts"],
   media:         ["photo_log", "assets"],
   kpi:           ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
-  meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times"],
+  meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times", "sales_meta"],
   inv_engine:       ["inv_engine"],
   inv_engine_sales: ["inv_engine_sales_data"],
   inv_engine_bom:   ["inv_engine_recipes"],
@@ -1310,35 +1316,48 @@ function _groupByMonth(arr, keyFn) {
 // Write monthly-sharded sales docs to Firestore.
 // Each array (sales, order_items, orders) is split by month and stored in
 // state/sales__YYYY-MM, state/order_items__YYYY-MM, state/orders__YYYY-MM.
-// A lightweight state/sales_index doc tracks which month keys exist so pull
-// knows exactly which docs to fetch without a collection scan.
+// Sales data is split into THREE separate Firestore docs per month so each array
+// (sales, order_items, orders) has its own 1 MB Firestore budget.
+// Doc names: sales__YYYY-MM, oi__YYYY-MM, ord__YYYY-MM
 async function _syncSalesShards() {
   const salesByMonth      = _groupByMonth(state.sales,       r => r.date && r.date.slice(0, 7));
   const orderItemsByMonth = _groupByMonth(state.order_items, r => r.month);
   const ordersByMonth     = _groupByMonth(state.orders,      r => r.month);
 
-  const allMonths = new Set([
-    ...Object.keys(salesByMonth),
-    ...Object.keys(orderItemsByMonth),
-    ...Object.keys(ordersByMonth),
-  ]);
+  const salesMonths = new Set(Object.keys(salesByMonth));
+  const oiMonths    = new Set(Object.keys(orderItemsByMonth));
+  const ordMonths   = new Set(Object.keys(ordersByMonth));
+  const allMonths   = new Set([...salesMonths, ...oiMonths, ...ordMonths]);
 
   const writes = [];
-  for (const m of allMonths) {
-    const doc = {
-      sales:       salesByMonth[m]      || [],
-      order_items: orderItemsByMonth[m] || [],
-      orders:      ordersByMonth[m]     || [],
-    };
-    const approxBytes = JSON.stringify(doc).length;
-    if (approxBytes > 800_000) console.warn(`[sync] sales shard "${m}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
+
+  // Write each array type in its own doc so none share the 1 MB cap
+  for (const m of salesMonths) {
+    const doc = { sales: salesByMonth[m] };
+    const kb = (JSON.stringify(doc).length / 1024).toFixed(0);
+    if (JSON.stringify(doc).length > 800_000) toast(`⚠️ Sales shard ${m} is ${kb} KB — approaching limit`, "error");
     const docId = `sales__${m}`;
     writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
   }
+  for (const m of oiMonths) {
+    const doc = { order_items: orderItemsByMonth[m] };
+    const kb = (JSON.stringify(doc).length / 1024).toFixed(0);
+    if (JSON.stringify(doc).length > 800_000) toast(`⚠️ Order-items shard ${m} is ${kb} KB — approaching limit`, "error");
+    const docId = `oi__${m}`;
+    writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
+  }
+  for (const m of ordMonths) {
+    const doc = { orders: ordersByMonth[m] };
+    const docId = `ord__${m}`;
+    writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
+  }
 
-  // Index doc so pullFromFirestore knows which shards to fetch
-  writes.push(db.collection("state").doc("sales_index").set({ months: [...allMonths] })
-    .catch(err => { err._chunk = "sales_index"; throw err; }));
+  // Index doc: store which months exist for each type so pullFromFirestore is precise
+  writes.push(db.collection("state").doc("sales_index").set({
+    months:    [...salesMonths],
+    oi_months: [...oiMonths],
+    ord_months: [...ordMonths],
+  }).catch(err => { err._chunk = "sales_index"; throw err; }));
 
   await Promise.all(writes);
 }
@@ -1414,36 +1433,50 @@ async function pullFromFirestore() {
     }
     if (!remote.items) return { ok: false, err: "No data in Firestore yet" };
 
-    // Pull monthly sales shards (new format)
-    const shardMonths = salesIndexDoc.exists ? (salesIndexDoc.data().months || []) : [];
-    if (shardMonths.length > 0) {
-      const shardDocs = await Promise.all(
-        shardMonths.map(m => db.collection("state").doc(`sales__${m}`).get())
-      );
-      const allSales = [], allOrderItems = [], allOrders = [];
-      for (const sd of shardDocs) {
+    // Pull monthly sales shards — each array type now lives in its own doc per month.
+    // Index tells us which months exist for each type.
+    const idxData       = salesIndexDoc.exists ? salesIndexDoc.data() : {};
+    const shardMonths   = idxData.months     || [];
+    const oiMonths      = idxData.oi_months  || [];
+    const ordMonths     = idxData.ord_months || [];
+
+    const allSales = [], allOrderItems = [], allOrders = [];
+
+    if (shardMonths.length > 0 || oiMonths.length > 0 || ordMonths.length > 0) {
+      // New split-shard format
+      const [salesDocs, oiDocs, ordDocs] = await Promise.all([
+        Promise.all(shardMonths.map(m => db.collection("state").doc(`sales__${m}`).get())),
+        Promise.all(oiMonths.map(m   => db.collection("state").doc(`oi__${m}`).get())),
+        Promise.all(ordMonths.map(m  => db.collection("state").doc(`ord__${m}`).get())),
+      ]);
+      for (const sd of salesDocs) { if (sd.exists && Array.isArray(sd.data().sales))       allSales.push(...sd.data().sales); }
+      for (const sd of oiDocs)    { if (sd.exists && Array.isArray(sd.data().order_items)) allOrderItems.push(...sd.data().order_items); }
+      for (const sd of ordDocs)   { if (sd.exists && Array.isArray(sd.data().orders))      allOrders.push(...sd.data().orders); }
+
+      // Migration: old combined shard (sales__YYYY-MM contained all three arrays) — pull leftovers
+      for (const sd of salesDocs) {
         if (!sd.exists) continue;
         const d = sd.data();
-        if (Array.isArray(d.sales))       allSales.push(...d.sales);
-        if (Array.isArray(d.order_items)) allOrderItems.push(...d.order_items);
-        if (Array.isArray(d.orders))      allOrders.push(...d.orders);
+        if (Array.isArray(d.order_items) && d.order_items.length) allOrderItems.push(...d.order_items);
+        if (Array.isArray(d.orders)      && d.orders.length)      allOrders.push(...d.orders);
       }
-      remote.sales       = allSales;
-      remote.order_items = allOrderItems;
-      remote.orders      = allOrders;
     } else {
       // Migration path: old monolithic sales doc still exists — keep its data
       // and doSync() at the end will write it out in the new sharded format.
       const oldSalesDoc = await db.collection("state").doc("sales").get();
       if (oldSalesDoc.exists) {
         const d = oldSalesDoc.data();
-        if (Array.isArray(d.sales))       remote.sales       = d.sales;
-        if (Array.isArray(d.order_items)) remote.order_items = d.order_items;
-        if (Array.isArray(d.orders))      remote.orders      = d.orders;
-        if (Array.isArray(d.shifts))      remote.shifts      = d.shifts;
-        console.log("[migration] Migrating monolithic sales doc to monthly shards on next sync");
+        if (Array.isArray(d.sales))       allSales.push(...d.sales);
+        if (Array.isArray(d.order_items)) allOrderItems.push(...d.order_items);
+        if (Array.isArray(d.orders))      allOrders.push(...d.orders);
+        if (Array.isArray(d.shifts))      remote.shifts = d.shifts;
+        console.log("[migration] Migrating monolithic sales doc to split shards on next sync");
       }
     }
+
+    remote.sales       = allSales;
+    remote.order_items = allOrderItems;
+    remote.orders      = allOrders;
 
     const settingsBak = state.settings;
     Object.assign(state, remote);
