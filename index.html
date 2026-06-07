@@ -1238,7 +1238,9 @@ const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
 const STATE_CHUNKS = {
   config:        ["settings", "salary_config"],
   menu_data:     ["menu"],
-  users_items:   ["items", "snapshots", "handbook_recipes", "purchase_units", "inventory_alerts", "suppliers"],
+  users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
+  snapshots:     ["snapshots"],          // split out — grows with every inventory count
+  recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
   waste:         ["waste"],
   purchases:     ["purchases", "petty_cash", "bank_ledger"],
   shifts:        ["shifts"],
@@ -1382,7 +1384,7 @@ async function doSync() {
     }
     updateSyncBadge("error", `${code}${chunk}`);
     // After all retries exhausted, show a hard-to-miss warning banner
-    showSyncWarningBanner();
+    showSyncWarningBanner(`${code}${chunk}`);
   } finally {
     syncInFlight = false;
   }
@@ -1490,13 +1492,16 @@ async function autoPullOnStart() {
   }
 }
 
-function showSyncWarningBanner() {
-  if (document.getElementById("syncWarnBanner")) return;
-  const b = document.createElement("div");
-  b.id = "syncWarnBanner";
-  b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;padding:12px 16px;font-size:13px;font-weight:600;font-family:system-ui,sans-serif;display:flex;align-items:center;gap:12px;";
-  b.innerHTML = `⚠️ Your last changes could not be saved to the server. Do NOT refresh until the sync badge shows ✓ Synced. <button onclick="doSync().then(()=>{ if(!hasPending()){ document.getElementById('syncWarnBanner').remove(); } })" style="margin-left:auto;background:#fff;color:#b91c1c;border:none;border-radius:6px;padding:4px 12px;font-weight:700;cursor:pointer;">Retry now</button>`;
-  document.body.appendChild(b);
+function showSyncWarningBanner(detail) {
+  let b = document.getElementById("syncWarnBanner");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "syncWarnBanner";
+    b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;padding:12px 16px;font-size:13px;font-weight:600;font-family:system-ui,sans-serif;display:flex;align-items:center;gap:12px;";
+    document.body.appendChild(b);
+  }
+  const errNote = detail ? ` (${detail})` : "";
+  b.innerHTML = `⚠️ Your last changes could not be saved to the server${errNote}. Do NOT refresh until the sync badge shows ✓ Synced. <button onclick="doSync().then(()=>{ if(!hasPending()){ document.getElementById('syncWarnBanner').remove(); } })" style="margin-left:auto;background:#fff;color:#b91c1c;border:none;border-radius:6px;padding:4px 12px;font-weight:700;cursor:pointer;">Retry now</button>`;
 }
 
 // ----- auth / session -----
