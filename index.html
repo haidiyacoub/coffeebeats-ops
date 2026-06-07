@@ -1242,7 +1242,7 @@ const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
 // NOTE: `users` is no longer synced here — staff come from Firestore `staff_public`
 // via staffDir.load() and are kept as an in-memory computed view (state.users).
 const STATE_CHUNKS = {
-  config:        ["settings", "salary_config"],
+  config:        ["settings", "salary_config", "gcal_api_key", "events_config", "om_overrides", "om_ar_overrides", "blocked_feedback_ids"],
   menu_data:     ["menu"],
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   snapshots:     ["snapshots"],          // split out — grows with every inventory count
@@ -1256,7 +1256,8 @@ const STATE_CHUNKS = {
   suggestions:   ["suggestions"],
   roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
-  overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts"],
+  hr_meta:       ["barista_dates", "salary_snapshots"], // per-barista history, kept separate to avoid crowding hr chunk
+  overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history"],
   media:         ["photo_log", "assets"],
   kpi:           ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
   meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times", "sales_meta"],
@@ -8385,8 +8386,8 @@ routes.users = function (u) {
         state.leaves            = (state.leaves            || []).filter(x => !matchId(x));
         state.customer_feedback = (state.customer_feedback || []).filter(x => !matchId(x) && x.barista_id !== usr.uid && (!usr.legacy_id || x.barista_id !== usr.legacy_id));
         state.signin_stamps     = (state.signin_stamps     || []).filter(x => !matchBy(x));
-        state.waste_new         = (state.waste_new         || []).filter(x => !matchId(x));
-        state.cleaning_log      = (state.cleaning_log      || []).filter(x => !matchId(x));
+        state.waste             = (state.waste             || []).filter(x => !matchId(x));
+        state.cleaning_logs     = (state.cleaning_logs     || []).filter(x => !matchId(x));
         saveState();
         toast("\u2705 " + usr.name + " reactivated with a clean slate");
         go("users");
@@ -13683,8 +13684,8 @@ routes.scorecard = function(u) {
       const { uid, mon } = t;
       const inMonth = x => (x.month || (x.date || "").slice(0, 7)) === mon;
       state.kpi_manual        = (state.kpi_manual        || []).filter(m => !(m.user_id === uid && m.month === mon));
-      state.waste_new         = (state.waste_new         || []).filter(x => !(x.user_id === uid && inMonth(x)));
-      state.cleaning_log      = (state.cleaning_log      || []).filter(x => !(x.user_id === uid && inMonth(x)));
+      state.waste             = (state.waste             || []).filter(x => !(x.user_id === uid && inMonth(x)));
+      state.cleaning_logs     = (state.cleaning_logs     || []).filter(x => !(x.user_id === uid && inMonth(x)));
       const fbToRemove = (state.customer_feedback || []).filter(x => x.user_id === uid && inMonth(x));
       fbToRemove.forEach(x => { if (x.by === "website" && x.id) { state.blocked_feedback_ids = state.blocked_feedback_ids || []; if (!state.blocked_feedback_ids.includes(x.id)) state.blocked_feedback_ids.push(x.id); } });
       state.customer_feedback = (state.customer_feedback || []).filter(x => !(x.user_id === uid && inMonth(x)));
