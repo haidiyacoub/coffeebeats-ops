@@ -1337,12 +1337,31 @@ function _groupByMonth(arr, keyFn) {
   return map;
 }
 
+// Merge-write one month shard. CRITICAL: each month doc holds ALL branches for that
+// month. A device only ever has authoritative data for the (branch, month) pairs it
+// actually holds locally, so we must NOT blow away another branch's rows that this
+// device happens not to have. We therefore read the remote shard, keep every remote
+// row whose branch this device is NOT writing, and append our local rows on top.
+// This is what stops "laptop pushes Zawya June and wipes Maadi June" — the exact
+// data-loss seen in the field.
+async function _mergeShardWrite(writes, docId, arrayName, localRows) {
+  const localBranches = new Set(localRows.map(r => r.branch));
+  let kept = [];
+  try {
+    const snap = await db.collection("state").doc(docId).get();
+    const ex = snap.exists ? snap.data()[arrayName] : null;
+    if (Array.isArray(ex)) kept = ex.filter(r => !localBranches.has(r.branch));
+  } catch (_) { /* offline / first write — local rows only */ }
+  const doc = { [arrayName]: [...kept, ...localRows] };
+  const bytes = JSON.stringify(doc).length;
+  if (bytes > 800_000) toast(`⚠️ ${arrayName} shard ${docId} is ${(bytes / 1024).toFixed(0)} KB — approaching limit`, "error");
+  writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
+}
+
 // Write monthly-sharded sales docs to Firestore.
-// Each array (sales, order_items, orders) is split by month and stored in
-// state/sales__YYYY-MM, state/order_items__YYYY-MM, state/orders__YYYY-MM.
-// Sales data is split into THREE separate Firestore docs per month so each array
-// (sales, order_items, orders) has its own 1 MB Firestore budget.
-// Doc names: sales__YYYY-MM, oi__YYYY-MM, ord__YYYY-MM
+// Each array (sales, order_items, orders) is split by month and stored in its own doc
+// (state/sales__YYYY-MM, state/oi__YYYY-MM, state/ord__YYYY-MM) so each has its own
+// 1 MB Firestore budget. Writes MERGE by branch-within-month (see _mergeShardWrite).
 async function _syncSalesShards() {
   const salesByMonth      = _groupByMonth(state.sales,       r => r.date && r.date.slice(0, 7));
   const orderItemsByMonth = _groupByMonth(state.order_items, r => r.month);
@@ -1351,30 +1370,15 @@ async function _syncSalesShards() {
   const salesMonths = new Set(Object.keys(salesByMonth));
   const oiMonths    = new Set(Object.keys(orderItemsByMonth));
   const ordMonths   = new Set(Object.keys(ordersByMonth));
-  const allMonths   = new Set([...salesMonths, ...oiMonths, ...ordMonths]);
 
   const writes = [];
 
-  // Write each array type in its own doc so none share the 1 MB cap
-  for (const m of salesMonths) {
-    const doc = { sales: salesByMonth[m] };
-    const kb = (JSON.stringify(doc).length / 1024).toFixed(0);
-    if (JSON.stringify(doc).length > 800_000) toast(`⚠️ Sales shard ${m} is ${kb} KB — approaching limit`, "error");
-    const docId = `sales__${m}`;
-    writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
-  }
-  for (const m of oiMonths) {
-    const doc = { order_items: orderItemsByMonth[m] };
-    const kb = (JSON.stringify(doc).length / 1024).toFixed(0);
-    if (JSON.stringify(doc).length > 800_000) toast(`⚠️ Order-items shard ${m} is ${kb} KB — approaching limit`, "error");
-    const docId = `oi__${m}`;
-    writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
-  }
-  for (const m of ordMonths) {
-    const doc = { orders: ordersByMonth[m] };
-    const docId = `ord__${m}`;
-    writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
-  }
+  // Merge-write each month shard (reads remote first to preserve other branches' rows)
+  await Promise.all([
+    ...[...salesMonths].map(m => _mergeShardWrite(writes, `sales__${m}`, "sales",       salesByMonth[m])),
+    ...[...oiMonths].map(m    => _mergeShardWrite(writes, `oi__${m}`,    "order_items", orderItemsByMonth[m])),
+    ...[...ordMonths].map(m   => _mergeShardWrite(writes, `ord__${m}`,   "orders",      ordersByMonth[m])),
+  ]);
 
   // Index doc: store which months exist for each type so pullFromFirestore is precise.
   // MERGE (union) with the remote index instead of overwriting it. A device that only
@@ -1428,22 +1432,44 @@ async function _syncMonthShards() {
   } catch (_) { /* offline / first write */ }
 
   const mergedIdx = {};
+  const shardOps = [];
   for (const [arr, cfg] of Object.entries(MONTH_SHARDED)) {
     const byMonth = _groupByMonth(state[arr], cfg.key);
     const months  = Object.keys(byMonth);
     for (const m of months) {
-      const doc   = { [arr]: byMonth[m] };
-      const bytes = JSON.stringify(doc).length;
-      if (bytes > 800_000) toast(`⚠️ ${arr} shard ${m} is ${(bytes / 1024).toFixed(0)} KB — approaching limit`, "error");
-      const docId = `${cfg.prefix}__${m}`;
-      writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
+      // Merge by branch-within-month, same as sales, so a device that only holds one
+      // branch's logs can't wipe another branch's logs in the same month shard.
+      shardOps.push(_mergeShardWrite(writes, `${cfg.prefix}__${m}`, arr, byMonth[m]));
     }
     mergedIdx[arr] = [...new Set([...(remoteIdx[arr] || []), ...months])];
   }
+  await Promise.all(shardOps);
   writes.push(db.collection("state").doc("log_shard_index").set(mergedIdx)
     .catch(err => { err._chunk = "log_shard_index"; throw err; }));
 
   await Promise.all(writes);
+}
+
+// Build the menu_data doc by MERGING local menu with the remote menu by item id, so a
+// device carrying a stale/seed menu (cost_egp all null) can't overwrite the costed menu
+// on the server — the cause of "menu costs missing from margins". Local edits win, but a
+// blank local cost/price never clobbers a known remote value.
+async function _menuMergeDoc() {
+  let remoteMenu = [];
+  try {
+    const snap = await db.collection("state").doc("menu_data").get();
+    if (snap.exists && Array.isArray(snap.data().menu)) remoteMenu = snap.data().menu;
+  } catch (_) { /* offline / first write */ }
+  const byId = new Map(remoteMenu.map(m => [m.id, m]));
+  for (const lm of (state.menu || [])) {
+    const rm = byId.get(lm.id);
+    if (!rm) { byId.set(lm.id, lm); continue; }
+    const merged = { ...rm, ...lm };
+    if (!lm.cost_egp  && rm.cost_egp)  merged.cost_egp  = rm.cost_egp;   // don't null out a known cost
+    if (!lm.price_egp && rm.price_egp) merged.price_egp = rm.price_egp;  // don't null out a known price
+    byId.set(lm.id, merged);
+  }
+  return { menu: [...byId.values()] };
 }
 
 async function doSync() {
@@ -1453,6 +1479,11 @@ async function doSync() {
   updateSyncBadge("syncing");
   try {
     const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
+      // menu_data is merged (not overwritten) to protect item costs — see _menuMergeDoc.
+      if (chunk === "menu_data") {
+        return _menuMergeDoc().then(doc =>
+          db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; }));
+      }
       const doc = {};
       for (const k of keys) { const v = state[k]; doc[k] = v !== undefined ? v : null; }
       const approxBytes = JSON.stringify(doc).length;
