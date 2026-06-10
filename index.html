@@ -10678,13 +10678,13 @@ routes.handbook = function (u) {
     lang = "en";
     btnLangEn.style.background = "var(--ink)"; btnLangEn.style.color = "var(--accent)";
     btnLangAr.style.background = ""; btnLangAr.style.color = "";
-    buildTopTabs(); buildTabs(); updateSearchPlaceholder(); renderRecipes(); buildOMSection();
+    buildTopTabs(); buildTabs(); updateSearchPlaceholder(); renderRecipes(); buildOMSection(); buildRefGuide();
   });
   btnLangAr.addEventListener("click", () => {
     lang = "ar";
     btnLangAr.style.background = "var(--ink)"; btnLangAr.style.color = "var(--accent)";
     btnLangEn.style.background = ""; btnLangEn.style.color = "";
-    buildTopTabs(); buildTabs(); updateSearchPlaceholder(); renderRecipes(); buildOMSection();
+    buildTopTabs(); buildTabs(); updateSearchPlaceholder(); renderRecipes(); buildOMSection(); buildRefGuide();
   });
 
   // ── Top-level section tabs ──
@@ -10704,6 +10704,116 @@ routes.handbook = function (u) {
   wrap.appendChild(topTabBar);
 
   const recipesSection = el("div", {});
+
+  // ── Espresso & Milk Reference Tables ──
+  const refGuide = el("div", { style: { marginBottom: "18px", border: "1px solid var(--border)", borderRadius: "10px", overflow: "hidden" } });
+
+  const refHead = el("div", {
+    style: { background: "#3b2314", color: "#f5e6d3", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }
+  });
+  const refTitle = el("span", { style: { fontWeight: "700", fontSize: "13px", letterSpacing: "0.3px" } }, "☕ Espresso & Milk Reference Guide");
+  const refToggle = el("span", { style: { fontSize: "12px", opacity: "0.8" } }, "▼");
+  refHead.appendChild(refTitle);
+  refHead.appendChild(refToggle);
+
+  const refBody = el("div", { style: { padding: "14px", display: "none", overflowX: "auto" } });
+
+  refHead.addEventListener("click", () => {
+    const open = refBody.style.display !== "none";
+    refBody.style.display = open ? "none" : "";
+    refToggle.textContent = open ? "▼" : "▲";
+    refTitle.textContent = lang === "ar" ? "☕ مرجع الإسبريسو والحليب" : "☕ Espresso & Milk Reference Guide";
+  });
+
+  function buildRefGuide() {
+    refBody.innerHTML = "";
+    const isAr = lang === "ar";
+    refTitle.textContent = isAr ? "☕ مرجع الإسبريسو والحليب" : "☕ Espresso & Milk Reference Guide";
+
+    // ── Espresso Extraction Profiles ──
+    const sec1Title = el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "8px", color: "var(--ink)" } },
+      isAr ? "مواصفات استخلاص الإسبريسو" : "Espresso Extraction Profiles");
+    const sec1Sub = el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "10px" } },
+      isAr ? "جميع المشروبات المعتمدة على الإسبريسو في كوفي بيتس تستخدم أحد ملفين للاستخلاص. ارجع دائمًا للوصفة للتأكد من النوع."
+           : "All espresso-based drinks at Coffee Beats use one of two extraction profiles. Always refer to the recipe for which type to use.");
+    refBody.appendChild(sec1Title);
+    refBody.appendChild(sec1Sub);
+
+    const thStyle = { background: "#3b2314", color: "#f5e6d3", padding: "7px 10px", fontSize: "12px", fontWeight: "700", textAlign: "left", whiteSpace: "nowrap" };
+    const tdStyle = { padding: "7px 10px", fontSize: "12px", verticalAlign: "top", borderBottom: "1px solid var(--border)" };
+
+    const espHeaders = isAr
+      ? ["المعامل", "نوع 1", "نوع 2", "نوع 3 (V60)", "كورتادو", "ملاحظات"]
+      : ["Parameter", "Coffee Type 1", "Coffee Type 2", "Coffee Type 3 (V60)", "Cortado", "Notes"];
+
+    const espRows = isAr ? [
+      ["الجرعة", "18 غ", "18 غ", "18 غ", "18 غ (نوع 1)\nنوع 2 — فريق الكورتادو", "استخدم دائمًا ميزان دقيق\nزن الناتج\nadjust grind if off"],
+      ["الناتج", "36 مل", "45 مل", "270 مل", "22–24 مل", ""],
+      ["وقت الاستخلاص", "26–30 ثانية", "30–34 ثانية", "1- 50 مل ماء بالتساوي فوق الطحن. انتظر 30 ثانية.\n2- 150 مل ماء تقريبًا في 1 دقيقة 15 ثانية.\n3- 70 مل ماء تقريبًا في 40 ثانية.", "18–22 ثانية", ""],
+      ["نسبة التخمير", "1:2", "1:2.5", "1:15", "1:1.3", ""],
+      ["الطابع", "مركّز، جريء", "متوازن، أحلى", "مشرق، فاكهي، زهري، مع حموضة عصيرية ونهاية شاي نظيفة", "غني، شرابي، حلاوة مكثفة، مرارة منخفضة", ""],
+    ] : [
+      ["Dose", "18 g", "18 g", "18 g", "18 g (type 1)\nType 2 – Cortado Team", "Always use precision scale\nWeigh output\nAdjust grind if off"],
+      ["Yield", "36 ml", "45 ml", "270 ml", "22–24 ml", ""],
+      ["Extraction Time", "26–30 seconds", "30–34 seconds", "1- 50 ml of water evenly over grounds. Wait 30 seconds.\n2- 150 ml of water in approximately 1 minute 15 seconds.\n3- 70 ml in approximately 40 seconds.", "18–22 seconds", ""],
+      ["Brew Ratio", "1:2", "1:2.5", "1:15", "1:1.3", ""],
+      ["Character", "Concentrated, bold", "Balanced, sweeter", "Bright, fruity, floral, with juicy acidity and a clean, tea-like finish", "Rich, syrupy, intense sweetness, low bitterness", ""],
+    ];
+
+    const t1 = el("table", { style: { width: "100%", borderCollapse: "collapse", marginBottom: "20px", fontSize: "12px" } });
+    const thead1 = el("thead", {}); const hrow1 = el("tr", {});
+    espHeaders.forEach(h => { const th = el("th", { style: thStyle }, h); hrow1.appendChild(th); });
+    thead1.appendChild(hrow1); t1.appendChild(thead1);
+    const tbody1 = el("tbody", {});
+    espRows.forEach((row, ri) => {
+      const tr = el("tr", { style: { background: ri % 2 === 0 ? "var(--surface-2)" : "" } });
+      row.forEach(cell => {
+        const td = el("td", { style: { ...tdStyle, whiteSpace: "pre-wrap" } }, cell);
+        tr.appendChild(td);
+      });
+      tbody1.appendChild(tr);
+    });
+    t1.appendChild(tbody1);
+    refBody.appendChild(t1);
+
+    // ── Milk Steaming Guide ──
+    const sec2Title = el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "10px", color: "var(--ink)" } },
+      isAr ? "دليل تبخير الحليب" : "Milk Steaming Guide");
+    refBody.appendChild(sec2Title);
+
+    const milkHeaders = isAr ? ["المشروب", "الحرارة", "مستوى الرغوة", "الملمس"] : ["Drink", "Temperature", "Foam Level", "Texture"];
+    const milkRows = isAr ? [
+      ["فلات وايت", "60°C", "رغوة دقيقة خفيفة", "ناعم كالمخمل"],
+      ["لاتيه", "65°C", "ميكروفوم خفيف", "حريري، ناعم"],
+      ["كابتشينو", "65°C", "رغوة أكثر", "سميك، كريمي"],
+      ["كورتادو", "60°C", "منخفض", "حريري"],
+      ["نكهات ساخنة", "70°C", "ميكروفوم خفيف", "ناعم، كريمي"],
+    ] : [
+      ["Flat White", "60°C", "Minimal", "Velvety microfoam"],
+      ["Latte", "65°C", "Light microfoam", "Silky, smooth"],
+      ["Cappuccino", "65°C", "More foam", "Thick, creamy"],
+      ["Cortado", "60°C", "Low", "Silky"],
+      ["Hot Flavor", "70°C", "Light microfoam", "Smooth, creamy"],
+    ];
+
+    const t2 = el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12px" } });
+    const thead2 = el("thead", {}); const hrow2 = el("tr", {});
+    milkHeaders.forEach(h => { const th = el("th", { style: thStyle }, h); hrow2.appendChild(th); });
+    thead2.appendChild(hrow2); t2.appendChild(thead2);
+    const tbody2 = el("tbody", {});
+    milkRows.forEach((row, ri) => {
+      const tr = el("tr", { style: { background: ri % 2 === 0 ? "var(--surface-2)" : "" } });
+      row.forEach(cell => { const td = el("td", { style: tdStyle }, cell); tr.appendChild(td); });
+      tbody2.appendChild(tr);
+    });
+    t2.appendChild(tbody2);
+    refBody.appendChild(t2);
+  }
+
+  buildRefGuide();
+  refGuide.appendChild(refHead);
+  refGuide.appendChild(refBody);
+  recipesSection.appendChild(refGuide);
 
   // ── Category filter tabs ──
   let activeCategory = "all";
