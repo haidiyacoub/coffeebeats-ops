@@ -1260,14 +1260,14 @@ const STATE_CHUNKS = {
   config:        ["settings", "salary_config", "gcal_api_key", "events_config", "om_overrides", "om_ar_overrides", "blocked_feedback_ids"],
   menu_data:     ["menu"],
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
-  snapshots:     ["snapshots"],          // split out — grows with every inventory count
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
   waste:         ["waste"],
   purchases:     ["purchases", "petty_cash", "bank_ledger"],
   shifts:        ["shifts"],
-  shift_closes:  ["shift_closes"],           // split out — daily high-volume log
-  cleaning_logs: ["cleaning_logs"],          // split out — daily high-volume log
-  signin_stamps: ["signin_stamps"],          // split out — multiple entries per day per branch
+  // NOTE: snapshots, shift_closes, cleaning_logs and signin_stamps are NO LONGER
+  // single docs here — they are append-only logs that grow without bound and would
+  // eventually blow the 1 MB Firestore doc limit and fail every sync. They are now
+  // month-sharded (see MONTH_SHARDED / _syncMonthShards / the pull migration below).
   suggestions:   ["suggestions"],
   roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
@@ -1308,7 +1308,15 @@ function updateSyncBadge(status, detail) {
   }
   badge.style.display = "";
   if (status === "syncing") { badge.textContent = "⟳ Syncing…"; badge.style.background = "#fef3c7"; badge.style.color = "#92400e"; badge.title = ""; }
-  else if (status === "synced") { badge.textContent = "✓ Synced"; badge.style.background = "#d1fae5"; badge.style.color = "#065f46"; badge.title = ""; }
+  else if (status === "synced") {
+    badge.textContent = "✓ Synced";
+    badge.style.background = "#d1fae5"; badge.style.color = "#065f46";
+    // The badge means "nothing left to PUSH" — clarify in the tooltip when we last
+    // pulled DOWN, so users don't assume green == up to date with other devices.
+    const lp = state.settings && state.settings.last_pull;
+    badge.title = lp ? `All local changes saved · last pulled from server ${new Date(lp).toLocaleString()}`
+                     : "All local changes saved";
+  }
   else if (status === "error")  { badge.textContent = "⚠ Sync failed"; badge.style.background = "#fee2e2"; badge.style.color = "#991b1b"; badge.title = detail || ""; }
 }
 
@@ -1368,12 +1376,72 @@ async function _syncSalesShards() {
     writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
   }
 
-  // Index doc: store which months exist for each type so pullFromFirestore is precise
+  // Index doc: store which months exist for each type so pullFromFirestore is precise.
+  // MERGE (union) with the remote index instead of overwriting it. A device that only
+  // holds a subset of months locally (e.g. it loaded before another device uploaded new
+  // months) must NEVER be able to shrink the index and orphan shards that still exist in
+  // Firestore. We never write a shard doc for a month we don't have, so any month present
+  // remotely-but-not-locally still has its data doc intact — keeping it in the index is
+  // correct and safe. (Genuine month deletions are rare and intentionally not propagated
+  // here; that avoids the multi-device data-loss reported in the field.)
+  let remoteIdx = {};
+  try {
+    const idxSnap = await db.collection("state").doc("sales_index").get();
+    if (idxSnap.exists) remoteIdx = idxSnap.data() || {};
+  } catch (_) { /* offline / first write — fall back to local-only index */ }
+  const mergedMonths = [...new Set([...(remoteIdx.months    || []), ...salesMonths])];
+  const mergedOi     = [...new Set([...(remoteIdx.oi_months  || []), ...oiMonths])];
+  const mergedOrd    = [...new Set([...(remoteIdx.ord_months || []), ...ordMonths])];
   writes.push(db.collection("state").doc("sales_index").set({
-    months:    [...salesMonths],
-    oi_months: [...oiMonths],
-    ord_months: [...ordMonths],
+    months:    mergedMonths,
+    oi_months: mergedOi,
+    ord_months: mergedOrd,
   }).catch(err => { err._chunk = "sales_index"; throw err; }));
+
+  await Promise.all(writes);
+}
+
+// Append-only high-volume logs, month-sharded so no single doc can hit the 1 MB cap.
+// Each maps state[arrayName] -> Firestore docs state/{prefix}__YYYY-MM, with the list of
+// months tracked in a single shared index doc state/log_shard_index.
+function _ymFromTs(ts) {
+  if (!ts) return "unknown";
+  const d = new Date(ts);
+  return isNaN(d) ? "unknown" : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+const MONTH_SHARDED = {
+  shift_closes:  { prefix: "sc",   key: r => (r.date  || "").slice(0, 7) || _ymFromTs(r.at) },
+  cleaning_logs: { prefix: "cl",   key: r => (r.date  || "").slice(0, 7) || _ymFromTs(r.at) },
+  signin_stamps: { prefix: "ss",   key: r => _ymFromTs(r.at) },
+  snapshots:     { prefix: "snap", key: r => (r.as_of || "").slice(0, 7) || _ymFromTs(r.created_at) },
+};
+
+// Write the month-sharded log arrays. Mirrors _syncSalesShards: per-month docs plus a
+// merged (union) index so a device holding only some months can't shrink the index and
+// orphan another device's shards.
+async function _syncMonthShards() {
+  const writes = [];
+  let remoteIdx = {};
+  try {
+    const s = await db.collection("state").doc("log_shard_index").get();
+    if (s.exists) remoteIdx = s.data() || {};
+  } catch (_) { /* offline / first write */ }
+
+  const mergedIdx = {};
+  for (const [arr, cfg] of Object.entries(MONTH_SHARDED)) {
+    const byMonth = _groupByMonth(state[arr], cfg.key);
+    const months  = Object.keys(byMonth);
+    for (const m of months) {
+      const doc   = { [arr]: byMonth[m] };
+      const bytes = JSON.stringify(doc).length;
+      if (bytes > 800_000) toast(`⚠️ ${arr} shard ${m} is ${(bytes / 1024).toFixed(0)} KB — approaching limit`, "error");
+      const docId = `${cfg.prefix}__${m}`;
+      writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
+    }
+    mergedIdx[arr] = [...new Set([...(remoteIdx[arr] || []), ...months])];
+  }
+  writes.push(db.collection("state").doc("log_shard_index").set(mergedIdx)
+    .catch(err => { err._chunk = "log_shard_index"; throw err; }));
 
   await Promise.all(writes);
 }
@@ -1394,7 +1462,7 @@ async function doSync() {
       }
       return db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; });
     });
-    await Promise.all([...writes, _syncSalesShards()]);
+    await Promise.all([...writes, _syncSalesShards(), _syncMonthShards()]);
     state.settings.last_sync = now();
     pendingWrites = Math.max(0, pendingWrites - batchSize);
     _syncRetryCount = 0;
@@ -1452,6 +1520,8 @@ async function pullFromFirestore() {
     // Pull monthly sales shards — each array type now lives in its own doc per month.
     // Index tells us which months exist for each type.
     const idxData       = salesIndexDoc.exists ? salesIndexDoc.data() : {};
+    // Record what we just pulled so the live listener doesn't re-pull our own state.
+    _lastSalesIndexSig  = _salesIndexSig(idxData);
     const shardMonths   = idxData.months     || [];
     const oiMonths      = idxData.oi_months  || [];
     const ordMonths     = idxData.ord_months || [];
@@ -1494,6 +1564,32 @@ async function pullFromFirestore() {
     remote.order_items = allOrderItems;
     remote.orders      = allOrders;
 
+    // Pull month-sharded high-volume logs (snapshots, shift_closes, cleaning_logs,
+    // signin_stamps). If the index is missing an array, fall back to the legacy
+    // monolithic doc (state/<arrayName>) — doSync() at the end re-writes it sharded.
+    let logIdx = {};
+    try {
+      const s = await db.collection("state").doc("log_shard_index").get();
+      if (s.exists) logIdx = s.data() || {};
+    } catch (_) { /* offline */ }
+    for (const [arr, cfg] of Object.entries(MONTH_SHARDED)) {
+      const months = logIdx[arr] || [];
+      if (months.length > 0) {
+        const docs = await Promise.all(months.map(m =>
+          db.collection("state").doc(`${cfg.prefix}__${m}`).get()));
+        const all = [];
+        for (const d of docs) { if (d.exists && Array.isArray(d.data()[arr])) all.push(...d.data()[arr]); }
+        remote[arr] = all;
+      } else {
+        // Migration: legacy monolithic doc still holds the full array
+        const old = await db.collection("state").doc(arr).get();
+        if (old.exists && Array.isArray(old.data()[arr])) {
+          remote[arr] = old.data()[arr];
+          console.log(`[migration] ${arr} will be month-sharded on next sync`);
+        }
+      }
+    }
+
     const settingsBak = state.settings;
     Object.assign(state, remote);
     migrateState(state);
@@ -1506,6 +1602,7 @@ async function pullFromFirestore() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     doSync(); // push back any migration fixes (also writes new shard format if migrating)
     startReviewsListener();
+    startSalesSyncListener(); // begin watching for other devices' uploads
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -1514,6 +1611,39 @@ async function pullFromFirestore() {
 
 // Alias so any remaining callsites using pullFromSheets still work
 const pullFromSheets = pullFromFirestore;
+
+// ----- live sync: watch the sales index so a device that loaded BEFORE another
+// device's upload doesn't keep showing stale/partial data indefinitely.
+// We watch sales_index (cheap, one doc) because every sales upload rewrites it.
+// When it changes due to a *remote* write, and we have no unsynced local edits to
+// protect, we pull fresh state automatically.
+let _salesIndexUnsub = null;
+let _lastSalesIndexSig = null;
+function _salesIndexSig(d) {
+  return JSON.stringify([d.months || [], d.oi_months || [], d.ord_months || []]
+    .map(a => [...a].sort()));
+}
+function startSalesSyncListener() {
+  if (_salesIndexUnsub) return;
+  try {
+    _salesIndexUnsub = db.collection("state").doc("sales_index").onSnapshot(snap => {
+      if (!snap.exists) return;
+      // Ignore the local echo of our own pending write (offline cache fires first).
+      if (snap.metadata && snap.metadata.hasPendingWrites) return;
+      const sig = _salesIndexSig(snap.data() || {});
+      if (_lastSalesIndexSig === null) { _lastSalesIndexSig = sig; return; } // baseline
+      if (sig === _lastSalesIndexSig) return;
+      _lastSalesIndexSig = sig;
+      // Never clobber unsynced local edits — they'll be pushed first, then reconciled.
+      if (hasPending()) return;
+      console.log("[sync] remote sales index changed — auto-pulling fresh data");
+      updateSyncBadge("syncing");
+      pullFromFirestore().then(r => {
+        if (r.ok) { updateSyncBadge("synced"); render(); }
+      });
+    }, err => console.warn("[sync] sales index listener error", err));
+  } catch (e) { console.warn("[sync] could not start sales index listener", e); }
+}
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
