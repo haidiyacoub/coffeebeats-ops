@@ -1033,6 +1033,16 @@ function migrateState(s) {
   s.barista_dates           = s.barista_dates           || {}; // uid → [{type:"joined"|"left", date, note}]
   s.salary_config           = s.salary_config           || {};
   s.salary_loans            = s.salary_loans            || [];
+  s.hb_incentive_config     = s.hb_incentive_config     || {
+    maadi_target:        80000,
+    zawya_target:        130000,
+    rate:                0.01,
+    cap:                 5000,
+    base_salary_low:     12000,   // Jun–Aug 2026
+    base_salary_high:    13000,   // Sep 2026 onward
+    low_salary_from:     "2026-06",
+    low_salary_to:       "2026-08",
+  };
   s.sick_leave_deductions   = s.sick_leave_deductions   || [];
   s.salaries                = s.salaries                || [];
   s.overtime_logs  = s.overtime_logs  || [];
@@ -1473,6 +1483,49 @@ async function _menuMergeDoc() {
   return { menu: [...byId.values()] };
 }
 
+// Build the overhead chunk by MERGING local with remote instead of blind-overwriting,
+// so a device holding a stale `overheads` array can't drop entries another device just
+// added — the cause of "the maintenance log I added didn't show on my phone". Mirrors
+// _menuMergeDoc. The `overheads` array is unioned by id (newest by timestamp wins on
+// conflict); the preset/config maps are merged key-by-key so a remote-only key is never
+// lost. NOTE: like sales/log shards, entry *deletions* are not propagated by the merge —
+// a deleted overhead may reappear from another device until that device also deletes it.
+async function _overheadMergeDoc() {
+  let remote = {};
+  try {
+    const snap = await db.collection("state").doc("overhead").get();
+    if (snap.exists) remote = snap.data() || {};
+  } catch (_) { /* offline / first write — local only */ }
+
+  // overheads[]: union by id, keep the most recently updated version on conflict.
+  const byId = new Map((Array.isArray(remote.overheads) ? remote.overheads : []).map(o => [o.id, o]));
+  for (const lo of (state.overheads || [])) {
+    if (!lo || !lo.id) continue;
+    const ro = byId.get(lo.id);
+    if (!ro) { byId.set(lo.id, lo); continue; }
+    const lt = lo.at || lo.updated_at || "";
+    const rt = ro.at || ro.updated_at || "";
+    byId.set(lo.id, lt >= rt ? lo : ro);
+  }
+
+  // presets carry updated_at → keep the newer per category; other maps: local wins per
+  // key but never drop a key that only exists remotely.
+  const presets = { ...(remote.overhead_presets || {}) };
+  for (const [k, v] of Object.entries(state.overhead_presets || {})) {
+    const rv = presets[k];
+    presets[k] = (!rv || (v.updated_at || "") >= (rv.updated_at || "")) ? v : rv;
+  }
+  const mergeMap = (k) => ({ ...(remote[k] && typeof remote[k] === "object" ? remote[k] : {}), ...(state[k] || {}) });
+
+  return {
+    overheads: [...byId.values()],
+    overhead_presets: presets,
+    overhead_monthly_amts: mergeMap("overhead_monthly_amts"),
+    overhead_preset_history: mergeMap("overhead_preset_history"),
+    maintenance_config: mergeMap("maintenance_config"),
+  };
+}
+
 async function doSync() {
   if (syncInFlight) return;
   syncInFlight = true;
@@ -1483,6 +1536,12 @@ async function doSync() {
       // menu_data is merged (not overwritten) to protect item costs — see _menuMergeDoc.
       if (chunk === "menu_data") {
         return _menuMergeDoc().then(doc =>
+          db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; }));
+      }
+      // overhead is merged so a stale device can't drop another device's entries —
+      // see _overheadMergeDoc (fixes "maintenance log missing on the other phone").
+      if (chunk === "overhead") {
+        return _overheadMergeDoc().then(doc =>
           db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; }));
       }
       const doc = {};
@@ -1635,6 +1694,7 @@ async function pullFromFirestore() {
     doSync(); // push back any migration fixes (also writes new shard format if migrating)
     startReviewsListener();
     startSalesSyncListener(); // begin watching for other devices' uploads
+    startOverheadSyncListener(); // watch overhead/maintenance changes from other devices
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -1675,6 +1735,37 @@ function startSalesSyncListener() {
       });
     }, err => console.warn("[sync] sales index listener error", err));
   } catch (e) { console.warn("[sync] could not start sales index listener", e); }
+}
+
+// Watch the overhead doc so a device that's already open shows overhead/maintenance
+// entries another device adds, without needing a manual reload. Same guards as the
+// sales listener: ignore our own local echo, never clobber unsynced local edits.
+let _overheadUnsub = null;
+let _lastOverheadSig = null;
+function _overheadSig(d) {
+  const oh = Array.isArray(d.overheads) ? d.overheads : [];
+  return JSON.stringify([
+    oh.map(o => `${o.id}:${o.at || o.updated_at || ""}:${o.paid ? 1 : 0}`).sort(),
+    Object.keys(d.overhead_presets || {}).length,
+    Object.keys(d.overhead_monthly_amts || {}).length,
+  ]);
+}
+function startOverheadSyncListener() {
+  if (_overheadUnsub) return;
+  try {
+    _overheadUnsub = db.collection("state").doc("overhead").onSnapshot(snap => {
+      if (!snap.exists) return;
+      if (snap.metadata && snap.metadata.hasPendingWrites) return; // our own write echo
+      const sig = _overheadSig(snap.data() || {});
+      if (_lastOverheadSig === null) { _lastOverheadSig = sig; return; } // baseline
+      if (sig === _lastOverheadSig) return;
+      _lastOverheadSig = sig;
+      if (hasPending()) return; // push local edits first; reconcile after
+      console.log("[sync] remote overhead changed — auto-pulling fresh data");
+      updateSyncBadge("syncing");
+      pullFromFirestore().then(r => { if (r.ok) { updateSyncBadge("synced"); render(); } });
+    }, err => console.warn("[sync] overhead listener error", err));
+  } catch (e) { console.warn("[sync] could not start overhead listener", e); }
 }
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
@@ -5443,6 +5534,82 @@ routes.salaries = function (u) {
     }
     body.appendChild(otCard);
 
+    // ---- 2.7) Head Barista incentive card ----
+    const hbStaff = staff.filter(p => p.role === "head_barista" && p.active);
+    if (hbStaff.length > 0) {
+      const cfg = state.hb_incentive_config || {};
+      const hbCard = el("div", { class: "card", style: { marginTop: "12px" } });
+      hbCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", marginBottom:"10px" } }, "Head barista incentive — branch targets"));
+
+      for (const p of hbStaff) {
+        const { total, breakdown } = calcHBIncentive(p, month);
+        const baseSal = getSalaryForMonth(p.id, month);
+        const hbSection = el("div", { style: { marginBottom: "14px" } });
+        hbSection.appendChild(el("div", { style: { fontWeight:"600", marginBottom:"6px" } }, p.name));
+
+        for (const b of breakdown) {
+          const branchLabel = b.branch === "maadi" ? "🏠 Maadi" : "🏢 Zawya";
+          const statusPill  = b.met
+            ? el("span", { class: "pill ok", style: { fontSize:"11px" } }, "✓ Target met")
+            : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, "✗ Target not met");
+          const note = b.branch === "zawya"
+            ? `Raw net ${money(b.rawSales)} → ÷1.14 VAT → ×0.90 share = ${money(b.sales)} vs target ${money(b.target)}`
+            : `Net sales ${money(b.sales)} vs target ${money(b.target)}`;
+          hbSection.appendChild(el("div", { class: "kv", style: { marginBottom:"4px" } }, [
+            el("div", { class: "k" }, [
+              el("div", {}, `${branchLabel} · 1% = ${money(b.bonus)}`),
+              el("div", { class: "muted small" }, note),
+            ]),
+            el("div", { class: "v", style: { display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"4px" } }, [
+              statusPill,
+            ]),
+          ]));
+        }
+
+        const capNote = total >= (cfg.cap || 5000) ? ` (capped at ${money(cfg.cap || 5000)})` : "";
+        hbSection.appendChild(el("div", { class: "kv", style: { borderTop:"1px solid var(--border)", marginTop:"6px", paddingTop:"6px" } }, [
+          el("div", { class: "k" }, [
+            el("div", { style: { fontWeight:"600" } }, `Total incentive${capNote}`),
+            el("div", { class: "muted small" }, `Base ${money(baseSal)} + incentive ${money(total)} = ${money(baseSal + total)}`),
+          ]),
+          el("div", { class: "v", style: { fontWeight:"700", color: total > 0 ? "var(--ok)" : "var(--ink-dim)" } }, money(total)),
+        ]));
+
+        hbCard.appendChild(hbSection);
+      }
+
+      // Config edit for owner
+      if (u.role === "owner") {
+        hbCard.appendChild(el("button", { class: "btn ghost", style: { marginTop:"6px", fontSize:"12px" }, onClick: () => {
+          openPrompt({
+            title: "Edit HB incentive config",
+            fields: [
+              { key: "maadi_target",     label: "Maadi target (EGP)",          type: "number", value: cfg.maadi_target     || 80000  },
+              { key: "zawya_target",     label: "Zawya target after deductions (EGP)", type: "number", value: cfg.zawya_target     || 130000 },
+              { key: "rate",             label: "Incentive rate (e.g. 0.01 = 1%)", type: "number", value: cfg.rate             || 0.01   },
+              { key: "cap",              label: "Monthly incentive cap (EGP)",  type: "number", value: cfg.cap              || 5000   },
+              { key: "base_salary_low",  label: "Base salary Jun–Aug 2026 (EGP)", type: "number", value: cfg.base_salary_low  || 12000  },
+              { key: "base_salary_high", label: "Base salary Sep 2026+ (EGP)", type: "number", value: cfg.base_salary_high || 13000  },
+            ],
+            onSubmit: (vals) => {
+              state.hb_incentive_config = {
+                ...cfg,
+                maadi_target:     Number(vals.maadi_target)     || 80000,
+                zawya_target:     Number(vals.zawya_target)     || 130000,
+                rate:             Number(vals.rate)             || 0.01,
+                cap:              Number(vals.cap)              || 5000,
+                base_salary_low:  Number(vals.base_salary_low)  || 12000,
+                base_salary_high: Number(vals.base_salary_high) || 13000,
+              };
+              saveState(); toast("HB incentive config saved"); drawBody();
+            },
+          });
+        } }, "⚙ Edit targets & rates"));
+      }
+
+      body.appendChild(hbCard);
+    }
+
     // ---- 3) Total due THIS MONTH (per person + grand total) ----
     const dueCard = el("div", { class: "card", style: { marginTop: "12px" } });
     dueCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, `Total due · ${month}`));
@@ -5457,12 +5624,14 @@ routes.salaries = function (u) {
                                         .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
                                          .reduce((s,r)=>s+(Number(r.amount)||0),0);
-      const due = Math.max(0, salary + otSum - penSum - loanSum - sickSum);
+      const hbIncentive = p.role === "head_barista" ? calcHBIncentive(p, month).total : 0;
+      const due = Math.max(0, salary + otSum + hbIncentive - penSum - loanSum - sickSum);
       grandDue += due;
+      const incentivePart = hbIncentive > 0 ? ` + Incentive ${money(hbIncentive)}` : "";
       dueCard.appendChild(el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
         el("div", { class: "k" }, [
           el("div", {}, p.name + (p.active ? "" : " (archived)")),
-          el("div", { class: "muted small" }, `Salary ${money(salary)} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}`),
+          el("div", { class: "muted small" }, `Salary ${money(salary)}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}`),
         ]),
         el("div", { class: "v" }, money(due)),
       ]));
@@ -6135,7 +6304,61 @@ function getSalaryForMonth(uid, month) {
   const snaps = (state.salary_snapshots || {})[uid] || {};
   const months = Object.keys(snaps).filter(m => m <= month).sort();
   if (months.length > 0) return Number(snaps[months[months.length - 1]]) || 0;
+  // Head baristas use tiered base salary unless manually configured
+  const user = (state.users || []).find(x => x.id === uid);
+  if (user && user.role === "head_barista") {
+    const manual = Number((state.salary_config[uid] || {}).monthly_salary || 0);
+    if (!manual) return calcHBBaseSalary(month);
+  }
   return Number((state.salary_config[uid] || {}).monthly_salary || 0);
+}
+
+function calcHBBaseSalary(month) {
+  const cfg = state.hb_incentive_config || {};
+  const lo = cfg.low_salary_from  || "2026-06";
+  const hi = cfg.low_salary_to    || "2026-08";
+  if (month >= lo && month <= hi) return cfg.base_salary_low  || 12000;
+  if (month >= lo)                return cfg.base_salary_high || 13000;
+  return cfg.base_salary_low || 12000;
+}
+
+// Returns { maadi: number, zawya: number, total: number, breakdown: [...] }
+function calcHBIncentive(person, month) {
+  const cfg  = state.hb_incentive_config || {};
+  const rate = cfg.rate  || 0.01;
+  const cap  = cfg.cap   || 5000;
+  const branches = person.branches || [];
+  let total = 0;
+  const breakdown = [];
+
+  if (branches.includes("maadi")) {
+    const target = cfg.maadi_target || 80000;
+    const sales  = state.sales.filter(s => {
+      const b = String(s.branch || "").toLowerCase();
+      return b.includes("maadi") && (s.date || "").slice(0,7) === month;
+    }).reduce((sum, s) => sum + (Number(s.net_sales) || 0), 0);
+    const met    = sales >= target;
+    const bonus  = met ? Math.round(sales * rate) : 0;
+    total += bonus;
+    breakdown.push({ branch: "maadi", sales, target, met, bonus });
+  }
+
+  if (branches.includes("zawya")) {
+    const target = cfg.zawya_target || 130000;
+    const rawSales = state.sales.filter(s => {
+      const b = String(s.branch || "").toLowerCase();
+      return b.includes("zawya") && (s.date || "").slice(0,7) === month
+        && !isZawyaExcluded(s.category, s.item);
+    }).reduce((sum, s) => sum + (Number(s.net_sales) || 0), 0);
+    const adjustedSales = Math.round((rawSales / 1.14) * 0.90);
+    const met    = adjustedSales >= target;
+    const bonus  = met ? Math.round(adjustedSales * rate) : 0;
+    total += bonus;
+    breakdown.push({ branch: "zawya", sales: adjustedSales, rawSales, target, met, bonus });
+  }
+
+  total = Math.min(total, cap);
+  return { total, breakdown };
 }
 
 function getPresetAmtForMonth(pk, month) {
