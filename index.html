@@ -1042,6 +1042,7 @@ function migrateState(s) {
   s.overhead_presets        = s.overhead_presets        || {}; // category → default amount
   s.overhead_monthly_amts   = s.overhead_monthly_amts   || {}; // branch|category|month → amount override
   s.overhead_preset_history = s.overhead_preset_history || {}; // pk → [{from_month, amount}]
+  s.maintenance_config      = s.maintenance_config      || {}; // engineers + schedule anchors for equipment maintenance
   s.salary_snapshots        = s.salary_snapshots        || {}; // userId → {month → amount}
   s.purchase_units         = s.purchase_units         || {}; // inv_item_id → { unit_label, pack_size_canonical }
   s.inventory_alerts = s.inventory_alerts || {}; // inv_item_id → { reorder_threshold_days }
@@ -1272,7 +1273,7 @@ const STATE_CHUNKS = {
   roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
   hr_meta:       ["barista_dates", "salary_snapshots"], // per-barista history, kept separate to avoid crowding hr chunk
-  overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history"],
+  overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "maintenance_config"],
   media:         ["photo_log", "assets"],
   kpi:           ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
   meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times", "sales_meta"],
@@ -6027,7 +6028,91 @@ const OVERHEAD_CATEGORIES = [
   { value: "gardener_salary",   label: "Gardener salary",    recurring: true  },
   { value: "marketing_fees",    label: "Marketing fees",     recurring: false },
   { value: "misc",              label: "Miscellaneous (specify)", recurring: false },
+  // Maintenance & pest control — logged through the dedicated Maintenance card
+  // (see drawMaintenanceCard), never the generic "marketing/misc" prompt.
+  { value: "maintenance_1",  label: "Maintenance — Cooling (fridges & ice maker)",        recurring: false, maintenance: true },
+  { value: "maintenance_2",  label: "Maintenance — Machines (coffee, water, grinders, blender)", recurring: false, maintenance: true },
+  { value: "insect_control", label: "Insect / pest control",                              recurring: false, maintenance: true },
 ];
+
+// ── Maintenance plans ──────────────────────────────────────────────
+// Every piece of equipment belongs to a plan. Each plan runs on its own
+// cadence; maintenance_1 and maintenance_2 alternate so exactly one falls
+// due each month. Engineer name/phone live in state.maintenance_config and
+// fall back to these defaults.
+const MAINTENANCE_EQUIPMENT = [
+  { value: "coffee_machine",        label: "Coffee machine" },
+  { value: "water_filter_softener", label: "Water filter & softener" },
+  { value: "over_counter_fridge",   label: "Over counter fridge" },
+  { value: "display_fridge",        label: "Display fridge" },
+  { value: "under_counter_fridge",  label: "Under counter fridge" },
+  { value: "under_counter_freezer", label: "Under counter freezer" },
+  { value: "manual_grinder",        label: "Manual grinder" },
+  { value: "automatic_grinder",     label: "Automatic grinder" },
+  { value: "blender",               label: "Blender" },
+  { value: "ice_maker",             label: "Ice maker" },
+];
+
+const MAINTENANCE_PLANS = [
+  {
+    value: "maintenance_1",
+    label: "Maintenance 1 — Cooling",
+    desc: "Ice maker & all fridges/freezer",
+    every_months: 2,
+    equipment: ["ice_maker","over_counter_fridge","display_fridge","under_counter_fridge","under_counter_freezer"],
+    engineer: "Eng Mohamed", phone: "01274407779",
+  },
+  {
+    value: "maintenance_2",
+    label: "Maintenance 2 — Machines",
+    desc: "Coffee machine, water filtration, grinders, blender",
+    every_months: 2,
+    equipment: ["coffee_machine","water_filter_softener","manual_grinder","automatic_grinder","blender"],
+    engineer: "Eng Adel", phone: "01158783769",
+  },
+  {
+    value: "insect_control",
+    label: "Insect / pest control",
+    desc: "Whole-branch pest control treatment",
+    every_months: 3,
+    equipment: [],
+    engineer: "", phone: "",
+  },
+];
+
+const equipLabel = (v) => (MAINTENANCE_EQUIPMENT.find(e => e.value === v) || {}).label || v;
+const maintPlan  = (v) => MAINTENANCE_PLANS.find(p => p.value === v) || null;
+
+// Engineer assigned to a plan — config override first, then plan default.
+function maintEngineer(planValue) {
+  const cfg = (state.maintenance_config || {}).engineers || {};
+  const plan = maintPlan(planValue) || {};
+  const ov = cfg[planValue] || {};
+  return { name: ov.name || plan.engineer || "", phone: ov.phone || plan.phone || "" };
+}
+
+function monthIdx(m) {
+  const parts = String(m || "").split("-").map(Number);
+  return (parts[0] || 0) * 12 + ((parts[1] || 1) - 1);
+}
+
+// Is a given plan due in `month` (YYYY-MM)? maintenance_1 anchors on the
+// configured month then alternates with maintenance_2 every other month;
+// insect control repeats every 3 months from its own anchor.
+function maintenanceDueInMonth(planValue, month) {
+  const cfg = state.maintenance_config || {};
+  const anchor = cfg.anchor_month || "2026-06";
+  if (planValue === "maintenance_1" || planValue === "maintenance_2") {
+    let d = (monthIdx(month) - monthIdx(anchor)) % 2; if (d < 0) d += 2;
+    return planValue === "maintenance_1" ? d === 0 : d === 1;
+  }
+  if (planValue === "insect_control") {
+    const ia = cfg.insect_anchor_month || anchor;
+    let d = (monthIdx(month) - monthIdx(ia)) % 3; if (d < 0) d += 3;
+    return d === 0;
+  }
+  return false;
+}
 
 function presetKey(branch, category) { return `${branch}|${category}`; }
 function monthlyKey(branch, category, month) { return `${branch}|${category}|${month}`; }
@@ -6182,6 +6267,7 @@ routes.overheads = function (u) {
     for (const br of ["maadi","zawya"]) twoCols.appendChild(drawBranchPanel(br));
     body.appendChild(twoCols);
     body.appendChild(drawSalaryCard());
+    body.appendChild(drawMaintenanceCard());
     body.appendChild(drawTotalsCard());
   }
 
@@ -6372,6 +6458,174 @@ routes.overheads = function (u) {
     return card;
   }
 
+  function drawMaintenanceCard() {
+    const card = el("div", { class:"card", style:{ marginTop:"12px" } });
+    card.appendChild(el("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"6px", flexWrap:"wrap", gap:"6px" } }, [
+      el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700" } }, "🔧 Maintenance & pest control"),
+      el("button", { class:"btn ghost", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px" }, onClick: editMaintEngineers }, "✎ Engineers"),
+    ]));
+    card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px", fontSize:"12px" } },
+      "Equipment maintenance runs every 2 months (1 & 2 alternate → one per month). Pest control every 3 months. Logged amounts feed each branch's overheads."));
+
+    for (const plan of MAINTENANCE_PLANS) {
+      const due = maintenanceDueInMonth(plan.value, month);
+      const eng = maintEngineer(plan.value);
+      const cadence = `every ${plan.every_months} months`;
+
+      const row = el("div", { style:{ borderBottom:"1px solid var(--border)", paddingBottom:"10px", marginBottom:"10px" } });
+      row.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:"8px", flexWrap:"wrap" } }, [
+        el("div", { style:{ flex:"1 1 200px" } }, [
+          el("div", { style:{ fontWeight:"600", fontSize:"14px" } }, plan.label),
+          el("div", { class:"muted small", style:{ fontSize:"12px" } }, `${plan.desc} · ${cadence}`),
+          el("div", { class:"muted small", style:{ fontSize:"12px" } }, eng.name ? `👷 ${eng.name}${eng.phone ? " · " + eng.phone : ""}` : "👷 No engineer set"),
+        ]),
+        due
+          ? el("span", { style:{ background:"var(--warn)", color:"#fff", borderRadius:"6px", padding:"3px 8px", fontSize:"11px", fontWeight:"700", whiteSpace:"nowrap" } }, "Due this month")
+          : el("span", { class:"muted small", style:{ fontSize:"11px", whiteSpace:"nowrap" } }, "Not scheduled"),
+      ]));
+
+      // Per-branch status + log buttons
+      const branchRow = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px", marginTop:"8px" } });
+      for (const br of ["maadi","zawya"]) {
+        const logged = state.overheads.filter(o =>
+          o.branch === br && o.category === plan.value &&
+          ((o.month || (o.date||"").slice(0,7)) === month));
+        const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
+        const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
+        cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
+        if (logged.length) {
+          cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--ok)", fontSize:"14px" } }, `✓ ${money(total)}`));
+          for (const o of logged) {
+            cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
+              el("div", { class:"muted small", style:{ flex:"1" } }, (o.paid_on || (o.date||"").slice(0,10)) + (o.equipment && o.equipment.length ? ` · ${o.equipment.length} item${o.equipment.length>1?"s":""}` : "")),
+              el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
+                if (!confirm("Delete this maintenance entry?")) return;
+                state.overheads = state.overheads.filter(x => x.id !== o.id);
+                saveState(); toast("Deleted"); draw();
+              }}, "🗑"),
+            ]));
+          }
+        } else {
+          cell.appendChild(el("div", { class:"muted small", style:{ fontSize:"12px", marginBottom:"4px" } }, due ? "Not logged yet" : "—"));
+        }
+        cell.appendChild(el("button", { class:"btn secondary", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", width:"100%", marginTop:"6px" }, onClick:() => logMaintenance(br, plan.value) },
+          logged.length ? "➕ Add" : "➕ Log"));
+        branchRow.appendChild(cell);
+      }
+      row.appendChild(branchRow);
+      card.appendChild(row);
+    }
+    return card;
+  }
+
+  function logMaintenance(br, planValue) {
+    const plan = maintPlan(planValue) || {};
+    const eng = maintEngineer(planValue);
+    const today = new Date().toISOString().slice(0,10);
+
+    const body = el("div", {}, [ el("h2", {}, `${plan.label} — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
+    body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `${plan.desc} · ${month}`));
+
+    // Engineer
+    body.appendChild(el("label", {}, "Engineer name"));
+    const engName = el("input", { type:"text", value: eng.name });
+    body.appendChild(engName);
+    body.appendChild(el("label", {}, "Engineer phone"));
+    const engPhone = el("input", { type:"tel", value: eng.phone });
+    body.appendChild(engPhone);
+
+    // Equipment checkboxes (skip for pest control, which has none)
+    const checks = [];
+    if (plan.equipment && plan.equipment.length) {
+      body.appendChild(el("label", {}, "Equipment maintained"));
+      const eqWrap = el("div", { style:{ display:"grid", gap:"6px", marginBottom:"6px" } });
+      for (const ev of plan.equipment) {
+        const lbl = el("label", { style:{ display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", fontSize:"14px" } });
+        const cb = el("input", { type:"checkbox" });
+        cb.checked = true;
+        cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--ok)";
+        cb.dataset.equip = ev;
+        checks.push(cb);
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(equipLabel(ev)));
+        eqWrap.appendChild(lbl);
+      }
+      body.appendChild(eqWrap);
+    }
+
+    body.appendChild(el("label", {}, "Amount (EGP)"));
+    const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
+    body.appendChild(amountInp);
+    body.appendChild(el("label", {}, "Date"));
+    const dateInp = el("input", { type:"date", value: today });
+    body.appendChild(dateInp);
+    body.appendChild(el("label", {}, "Note"));
+    const noteInp = el("input", { type:"text", value:"" });
+    body.appendChild(noteInp);
+
+    const actions = el("div", { class:"sticky-actions" });
+    actions.appendChild(el("button", { class:"btn", onClick:() => {
+      const amt = Number(amountInp.value) || 0;
+      if (amt <= 0) return toast("Enter a positive amount", "error");
+      const equipment = checks.filter(c => c.checked).map(c => c.dataset.equip);
+      if (plan.equipment && plan.equipment.length && equipment.length === 0) {
+        return toast("Select at least one piece of equipment", "error");
+      }
+      const s = stamp();
+      const engN = (engName.value || "").trim();
+      state.overheads.push({
+        id: uuid(),
+        branch: br, category: planValue,
+        label: engN,
+        equipment,
+        engineer: engN,
+        engineer_phone: (engPhone.value || "").trim(),
+        amount: amt,
+        month,
+        date: dateInp.value || today,
+        paid: true,
+        paid_on: dateInp.value || today,
+        note: (noteInp.value || "").trim(),
+        by: s.by, by_name: s.by_name, at: s.at,
+      });
+      // Persist any engineer edits as the new default for this plan.
+      state.maintenance_config = state.maintenance_config || {};
+      state.maintenance_config.engineers = state.maintenance_config.engineers || {};
+      state.maintenance_config.engineers[planValue] = { name: engN, phone: (engPhone.value || "").trim() };
+      $("#modal-root").innerHTML = "";
+      saveState(); toast(`${plan.label} logged`); draw();
+    } }, "Save"));
+    body.appendChild(actions);
+    openSheet(body);
+  }
+
+  function editMaintEngineers() {
+    openPrompt({
+      title: "Maintenance engineers & schedule",
+      fields: [
+        { key: "m1_name",  label: "Maintenance 1 (Cooling) — engineer", type: "text", value: maintEngineer("maintenance_1").name },
+        { key: "m1_phone", label: "Maintenance 1 — phone", type: "tel", value: maintEngineer("maintenance_1").phone },
+        { key: "m2_name",  label: "Maintenance 2 (Machines) — engineer", type: "text", value: maintEngineer("maintenance_2").name },
+        { key: "m2_phone", label: "Maintenance 2 — phone", type: "tel", value: maintEngineer("maintenance_2").phone },
+        { key: "ic_name",  label: "Insect / pest control — engineer", type: "text", value: maintEngineer("insect_control").name },
+        { key: "ic_phone", label: "Insect / pest control — phone", type: "tel", value: maintEngineer("insect_control").phone },
+        { key: "anchor",   label: "Maintenance 1 due-month anchor (YYYY-MM)", type: "month", value: (state.maintenance_config||{}).anchor_month || "2026-06" },
+        { key: "ianchor",  label: "Pest control due-month anchor (YYYY-MM)", type: "month", value: (state.maintenance_config||{}).insect_anchor_month || (state.maintenance_config||{}).anchor_month || "2026-06" },
+      ],
+      onSubmit: (vals) => {
+        state.maintenance_config = state.maintenance_config || {};
+        state.maintenance_config.engineers = {
+          maintenance_1:  { name: (vals.m1_name||"").trim(), phone: (vals.m1_phone||"").trim() },
+          maintenance_2:  { name: (vals.m2_name||"").trim(), phone: (vals.m2_phone||"").trim() },
+          insect_control: { name: (vals.ic_name||"").trim(), phone: (vals.ic_phone||"").trim() },
+        };
+        if (vals.anchor)  state.maintenance_config.anchor_month = vals.anchor;
+        if (vals.ianchor) state.maintenance_config.insect_anchor_month = vals.ianchor;
+        saveState(); toast("Maintenance settings saved"); draw();
+      }
+    });
+  }
+
   function editMonthlyAmount(br, cat, current, mk) {
     openPrompt({
       title: `${cat.label} (${br === "maadi" ? "Maadi" : "Zawya"}) — override for ${month}`,
@@ -6443,7 +6697,7 @@ routes.overheads = function (u) {
   }
 
   function addOverhead(defaultCat, defaultBranch) {
-    const catOptions = OVERHEAD_CATEGORIES.filter(c => !c.recurring)
+    const catOptions = OVERHEAD_CATEGORIES.filter(c => !c.recurring && !c.maintenance)
       .map(c => ({ label: c.label, value: c.value }));
     const branchOptions = [{ label: "🏠 Maadi", value: "maadi" }, { label: "🏢 Zawya", value: "zawya" }];
     openPrompt({
@@ -9324,7 +9578,7 @@ routes.dashboard = function (u, params) {
       card.appendChild(el("h2", {}, `Overheads + salaries — ${rangeLabel}`));
       for (const o of ohRows) {
         card.appendChild(el("div", { class: "kv" }, [
-          el("div", { class: "k" }, `${o.category || "overhead"}${o.note ? " — " + o.note : ""}`),
+          el("div", { class: "k" }, `${(OVERHEAD_CATEGORIES.find(c=>c.value===o.category)||{}).label || o.category || "overhead"}${o.engineer ? " · " + o.engineer : ""}${o.note ? " — " + o.note : ""}`),
           el("div", { class: "v" }, money(o.amount)),
         ]));
       }
