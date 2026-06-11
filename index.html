@@ -387,7 +387,7 @@
   // PWA cache-bust: if the stored build stamp differs from the one baked into this HTML,
   // the device is serving a stale cached version — reload once to fetch fresh content.
   (function() {
-    var BUILD = "20260611-002";
+    var BUILD = "20260611-003";
     var key = "cb_build";
     try {
       var stored = sessionStorage.getItem(key);
@@ -5710,7 +5710,8 @@ routes.salaries = function (u) {
         // Snapshot so past months are not retroactively affected
         state.salary_snapshots = state.salary_snapshots || {};
         state.salary_snapshots[person.id] = state.salary_snapshots[person.id] || {};
-        state.salary_snapshots[person.id][month] = amt;
+        const curMonth = monthInput.value || new Date().toISOString().slice(0,7);
+        state.salary_snapshots[person.id][curMonth] = amt;
         saveState(); toast(`${person.name}: salary set to ${money(amt)}`); render();
       }
     });
@@ -5761,7 +5762,7 @@ routes.salaries = function (u) {
         if (days <= 0) return toast("Enter a positive number of sick days", "error");
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
-        const sal = getSalaryForMonth(person.id, vals.month || (vals.date||"").slice(0,7) || month);
+        const sal = getSalaryForMonth(person.id, vals.month || (vals.date||"").slice(0,7) || monthInput.value);
         const quarterDay = Math.round((sal / 30 / 4) * 100) / 100;
         const amount = Math.round(quarterDay * days * 100) / 100;
         const s = stamp();
@@ -5799,7 +5800,7 @@ routes.salaries = function (u) {
         if (hrs <= 0) return toast("Enter a positive number of hours", "error");
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
-        const sal = getSalaryForMonth(person.id, (vals.date||"").slice(0,7) || month);
+        const sal = getSalaryForMonth(person.id, (vals.date||"").slice(0,7) || monthInput.value);
         const hrRate = sal > 0 ? sal / 30 / 8 : 0;
         const multiplier = (vals.ot_type === "eid_fitr" || vals.ot_type === "eid_adha") ? 2 : 1.5;
         const amount = Math.round(hrRate * hrs * multiplier * 100) / 100;
