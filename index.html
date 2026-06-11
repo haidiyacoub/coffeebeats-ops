@@ -387,7 +387,7 @@
   // PWA cache-bust: if the stored build stamp differs from the one baked into this HTML,
   // the device is serving a stale cached version — reload once to fetch fresh content.
   (function() {
-    var BUILD = "20260609-001";
+    var BUILD = "20260611-002";
     var key = "cb_build";
     try {
       var stored = sessionStorage.getItem(key);
@@ -1337,6 +1337,7 @@ function queueSync() {
 }
 
 let _syncRetryCount = 0;
+let _authRetryCount = 0;
 // Group an array of records by a month key derived from each record.
 // keyFn(record) should return a YYYY-MM string (or falsy to use a fallback bucket).
 function _groupByMonth(arr, keyFn) {
@@ -1532,6 +1533,14 @@ async function doSync() {
   const batchSize = pendingWrites;
   updateSyncBadge("syncing");
   try {
+    // Never push on a missing or stale auth token. Writes with an expired token come
+    // back as permission-denied, which used to strand edits locally forever. Require a
+    // signed-in user and force a fresh ID token (carrying the staff role claim) before
+    // every sync. If signed out, keep the edits pending — autoPullOnStart flushes them
+    // on the next login.
+    const _cu = firebase.auth().currentUser;
+    if (!_cu) { return; }
+    try { await _cu.getIdToken(); } catch (_) { /* best-effort refresh */ }
     const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
       // menu_data is merged (not overwritten) to protect item costs — see _menuMergeDoc.
       if (chunk === "menu_data") {
@@ -1557,6 +1566,7 @@ async function doSync() {
     state.settings.last_sync = now();
     pendingWrites = Math.max(0, pendingWrites - batchSize);
     _syncRetryCount = 0;
+    _authRetryCount = 0;
     try { localStorage.setItem(SYNC_DIRTY_KEY, String(pendingWrites)); } catch(e) {}
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     if (pendingWrites === 0) updateSyncBadge("synced");
@@ -1565,9 +1575,24 @@ async function doSync() {
     const code = e.code || e.name || "unknown";
     const chunk = e._chunk ? ` (chunk: ${e._chunk})` : "";
     console.error(`Firebase sync failed [${code}]${chunk}`, e);
-    // Auto-retry up to 3 times with exponential backoff (5s, 15s, 45s)
-    // Skip retry for permanent errors like permission-denied or quota-exceeded
-    const permanent = ["permission-denied", "unauthenticated", "resource-exhausted"].includes(code);
+    // permission-denied / unauthenticated is almost always a stale or expired ID token,
+    // NOT a real permission problem (every signed-in staff member may write /state).
+    // Force-refresh the token and retry a couple of times BEFORE giving up, so a
+    // transient token blip can't permanently strand the user's edits in local storage
+    // (the root cause of "I logged it but it never showed on the other device").
+    const authIssue = ["permission-denied", "unauthenticated"].includes(code);
+    if (authIssue && _authRetryCount < 2) {
+      _authRetryCount++;
+      try { const cu = firebase.auth().currentUser; if (cu) await cu.getIdToken(true); } catch (_) {}
+      const delay = 1500 * _authRetryCount;
+      console.warn(`[sync] auth error [${code}] — refreshed token, retrying in ${delay/1000}s (attempt ${_authRetryCount}/2)`);
+      updateSyncBadge("syncing");
+      setTimeout(() => { syncInFlight = false; doSync(); }, delay);
+      return;
+    }
+    // Auto-retry transient errors up to 3 times with exponential backoff (5s, 15s, 45s).
+    // Only quota and (now-exhausted) auth failures are treated as permanent.
+    const permanent = ["resource-exhausted"].includes(code) || authIssue;
     if (!permanent && _syncRetryCount < 3) {
       _syncRetryCount++;
       const delay = 5000 * Math.pow(3, _syncRetryCount - 1);
@@ -6503,6 +6528,12 @@ routes.overheads = function (u) {
 
     for (const cat of OVERHEAD_CATEGORIES.filter(c => c.recurring)) {
       const pk = presetKey(br, cat.value);
+      // `preset` is passed to togglePaid for the default amount + note. It was never
+      // defined here, so marking a recurring bill (electricity, internet…) as paid threw
+      // "ReferenceError: preset is not defined" and silently did nothing — the entry was
+      // never created, so there was nothing to sync. Use the month-aware amount so the
+      // "Mark paid" dialog prefills exactly what's shown.
+      const preset = { amount: getPresetAmtForMonth(pk, month), note: (state.overhead_presets[pk] || {}).note || "" };
       const mk = monthlyKey(br, cat.value, month);
       const monthlyOverride = state.overhead_monthly_amts[mk] != null ? state.overhead_monthly_amts[mk] : null;
       const existing = state.overheads.find(o =>
