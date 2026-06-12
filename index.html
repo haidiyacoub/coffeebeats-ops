@@ -1533,6 +1533,29 @@ async function _overheadMergeDoc() {
   };
 }
 
+// Snapshot of each chunk's JSON after the last successful sync.
+// Used to skip chunks that haven't changed, so a salary save doesn't
+// rewrite all 14+ Firestore documents — only the dirty ones.
+const _lastSyncedChunk = {};
+// Mark all chunks dirty on first sync (nothing snapshotted yet).
+let _firstSync = true;
+
+function _chunkDoc(chunk, keys) {
+  const doc = {};
+  for (const k of keys) { const v = state[k]; doc[k] = v !== undefined ? v : null; }
+  return doc;
+}
+
+function _chunkChanged(chunk, keys) {
+  if (_firstSync) return true;
+  const current = JSON.stringify(_chunkDoc(chunk, keys));
+  return current !== _lastSyncedChunk[chunk];
+}
+
+function _snapshotChunk(chunk, keys) {
+  _lastSyncedChunk[chunk] = JSON.stringify(_chunkDoc(chunk, keys));
+}
+
 async function doSync() {
   if (syncInFlight) return;
   syncInFlight = true;
@@ -1550,25 +1573,34 @@ async function doSync() {
     const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
       // menu_data is merged (not overwritten) to protect item costs — see _menuMergeDoc.
       if (chunk === "menu_data") {
+        if (!_chunkChanged(chunk, keys)) return Promise.resolve();
         return _menuMergeDoc().then(doc =>
-          db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; }));
+          db.collection("state").doc(chunk).set(doc)
+            .then(() => _snapshotChunk(chunk, keys))
+            .catch(err => { err._chunk = chunk; throw err; }));
       }
       // overhead is merged so a stale device can't drop another device's entries —
       // see _overheadMergeDoc (fixes "maintenance log missing on the other phone").
       if (chunk === "overhead") {
+        if (!_chunkChanged(chunk, keys)) return Promise.resolve();
         return _overheadMergeDoc().then(doc =>
-          db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; }));
+          db.collection("state").doc(chunk).set(doc)
+            .then(() => _snapshotChunk(chunk, keys))
+            .catch(err => { err._chunk = chunk; throw err; }));
       }
-      const doc = {};
-      for (const k of keys) { const v = state[k]; doc[k] = v !== undefined ? v : null; }
+      if (!_chunkChanged(chunk, keys)) return Promise.resolve();
+      const doc = _chunkDoc(chunk, keys);
       const approxBytes = JSON.stringify(doc).length;
       if (approxBytes > 800_000) {
         console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
         toast(`⚠️ Data chunk "${chunk}" is getting large (${(approxBytes/1024).toFixed(0)} KB). Contact support to archive old records.`, "error");
       }
-      return db.collection("state").doc(chunk).set(doc).catch(err => { err._chunk = chunk; throw err; });
+      return db.collection("state").doc(chunk).set(doc)
+        .then(() => _snapshotChunk(chunk, keys))
+        .catch(err => { err._chunk = chunk; throw err; });
     });
     await Promise.all([...writes, _syncSalesShards(), _syncMonthShards()]);
+    _firstSync = false;
     state.settings.last_sync = now();
     pendingWrites = Math.max(0, pendingWrites - batchSize);
     _syncRetryCount = 0;
@@ -1722,6 +1754,10 @@ async function pullFromFirestore() {
     // Remap any legacy UUIDs in HR/KPI records to Firebase UIDs
     _remapLegacyIds();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    // Snapshot every chunk so the first doSync after a pull only writes chunks
+    // that were actually changed locally (migration fixes, etc.) — not all 14+.
+    for (const [chunk, keys] of Object.entries(STATE_CHUNKS)) _snapshotChunk(chunk, keys);
+    _firstSync = false;
     doSync(); // push back any migration fixes (also writes new shard format if migrating)
     startReviewsListener();
     startSalesSyncListener(); // begin watching for other devices' uploads
@@ -3813,7 +3849,7 @@ routes.snapshot_new = function (u) {
       { value: "puree", label: "Puree" }, { value: "syrup", label: "Syrup" },
       { value: "sauce", label: "Sauce" }, { value: "dairy-extras", label: "Dairy Extras" },
       { value: "halo-snacks", label: "Halo Snacks" }, { value: "beverages", label: "Beverages" },
-      { value: "packaging", label: "Packaging" },
+      { value: "packaging", label: "Packaging" }, { value: "maintenance", label: "Maintenance" },
     ];
     const addItemBtn = el("button", { class: "btn ghost", style: { marginBottom: "10px", fontSize: "13px" } }, "＋ Add Item");
     addItemBtn.addEventListener("click", () => {
@@ -3897,7 +3933,7 @@ routes.snapshot_new = function (u) {
             { value: "puree", label: "Puree" }, { value: "syrup", label: "Syrup" },
             { value: "sauce", label: "Sauce" }, { value: "dairy-extras", label: "Dairy Extras" },
             { value: "halo-snacks", label: "Halo Snacks" }, { value: "beverages", label: "Beverages" },
-            { value: "packaging", label: "Packaging" },
+            { value: "packaging", label: "Packaging" }, { value: "maintenance", label: "Maintenance" },
           ];
           openPrompt({
             title: `Edit item: ${it.name}`,
@@ -4269,6 +4305,7 @@ routes.supplier_list = function (u) {
     { value: "sauce",        label: "Sauce" },         { value: "dairy-extras", label: "Dairy Extras" },
     { value: "halo-snacks",  label: "Halo Snacks" },   { value: "snacks",       label: "Snacks" },
     { value: "beverages",    label: "Beverages" },     { value: "packaging",    label: "Packaging" },
+    { value: "maintenance",  label: "Maintenance" },
   ];
 
   let items = (state.items || []).filter(it => it.active !== false).sort((a,b) => a.name.localeCompare(b.name));
@@ -4597,6 +4634,7 @@ routes.items_list = function (u) {
     { value: "halo-snacks",   label: "Halo Snacks" },
     { value: "beverages",     label: "Beverages" },
     { value: "packaging",     label: "Packaging" },
+    { value: "maintenance",   label: "Maintenance" },
   ];
   const catLabel = v => (INV_CATEGORIES.find(c => c.value === v) || {}).label || v;
 
