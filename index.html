@@ -1540,6 +1540,12 @@ const _lastSyncedChunk = {};
 // Mark all chunks dirty on first sync (nothing snapshotted yet).
 let _firstSync = true;
 
+// Diff guards for shard arrays — same idea: skip the expensive read+write when nothing changed.
+const _lastShardSig = {};
+function _shardSig(key) { return JSON.stringify(state[key]); }
+function _shardChanged(key) { return _firstSync || _shardSig(key) !== _lastShardSig[key]; }
+function _snapshotShard(key) { _lastShardSig[key] = _shardSig(key); }
+
 function _chunkDoc(chunk, keys) {
   const doc = {};
   for (const k of keys) { const v = state[k]; doc[k] = v !== undefined ? v : null; }
@@ -1599,7 +1605,19 @@ async function doSync() {
         .then(() => _snapshotChunk(chunk, keys))
         .catch(err => { err._chunk = chunk; throw err; });
     });
-    await Promise.all([...writes, _syncSalesShards(), _syncMonthShards()]);
+    const salesChanged = _shardChanged("sales") || _shardChanged("order_items") || _shardChanged("orders");
+    const logsChanged  = _shardChanged("shift_closes") || _shardChanged("cleaning_logs") ||
+                         _shardChanged("signin_stamps") || _shardChanged("snapshots");
+    const shardWrites = [
+      salesChanged ? _syncSalesShards().then(() => {
+        _snapshotShard("sales"); _snapshotShard("order_items"); _snapshotShard("orders");
+      }) : Promise.resolve(),
+      logsChanged ? _syncMonthShards().then(() => {
+        _snapshotShard("shift_closes"); _snapshotShard("cleaning_logs");
+        _snapshotShard("signin_stamps"); _snapshotShard("snapshots");
+      }) : Promise.resolve(),
+    ];
+    await Promise.all([...writes, ...shardWrites]);
     _firstSync = false;
     state.settings.last_sync = now();
     pendingWrites = Math.max(0, pendingWrites - batchSize);
@@ -1754,9 +1772,10 @@ async function pullFromFirestore() {
     // Remap any legacy UUIDs in HR/KPI records to Firebase UIDs
     _remapLegacyIds();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    // Snapshot every chunk so the first doSync after a pull only writes chunks
-    // that were actually changed locally (migration fixes, etc.) — not all 14+.
+    // Snapshot every chunk and shard array so the first doSync after a pull only
+    // writes things that were actually changed locally — not all 14+ docs.
     for (const [chunk, keys] of Object.entries(STATE_CHUNKS)) _snapshotChunk(chunk, keys);
+    for (const key of ["sales","order_items","orders","shift_closes","cleaning_logs","signin_stamps","snapshots"]) _snapshotShard(key);
     _firstSync = false;
     doSync(); // push back any migration fixes (also writes new shard format if migrating)
     startReviewsListener();
