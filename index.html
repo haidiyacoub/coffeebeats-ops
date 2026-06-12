@@ -1840,13 +1840,8 @@ function startOverheadSyncListener() {
 let _hrUnsub = null;
 let _lastHrSig = null;
 function _hrSig(d) {
-  const sal = Array.isArray(d.salaries) ? d.salaries : [];
-  const loans = Array.isArray(d.salary_loans) ? d.salary_loans : [];
-  const ot = Array.isArray(d.overtime_logs) ? d.overtime_logs : [];
-  const pen = Array.isArray(d.penalties) ? d.penalties : [];
-  const lv = Array.isArray(d.leaves) ? d.leaves : [];
-  return JSON.stringify([sal.length, loans.length, ot.length, pen.length, lv.length,
-    sal.map(s => `${s.id||s.barista_id}:${s.month}:${s.base_salary||""}`).sort().join("|")]);
+  // Full document hash — any field change in any HR record triggers a pull.
+  return JSON.stringify(d);
 }
 function startHrSyncListener() {
   if (_hrUnsub) return;
