@@ -387,7 +387,7 @@
   // PWA cache-bust: if the stored build stamp differs from the one baked into this HTML,
   // the device is serving a stale cached version — reload once to fetch fresh content.
   (function() {
-    var BUILD = "20260611-003";
+    var BUILD = "20260612-001";
     var key = "cb_build";
     try {
       var stored = sessionStorage.getItem(key);
@@ -1322,6 +1322,12 @@ function updateSyncBadge(status, detail) {
   else if (status === "synced") {
     badge.textContent = "✓ Synced";
     badge.style.background = "#d1fae5"; badge.style.color = "#065f46";
+    // Everything is pushed — clear any stale "could not be saved" banner. This is the
+    // state that banner explicitly tells the user to wait for, so it must auto-dismiss
+    // here (the banner was previously only removed by its own "Retry now" button, so a
+    // later successful auto-sync left it stuck on screen alongside a green badge).
+    const _warn = document.getElementById("syncWarnBanner");
+    if (_warn) _warn.remove();
     // The badge means "nothing left to PUSH" — clarify in the tooltip when we last
     // pulled DOWN, so users don't assume green == up to date with other devices.
     const lp = state.settings && state.settings.last_pull;
@@ -1720,6 +1726,7 @@ async function pullFromFirestore() {
     startReviewsListener();
     startSalesSyncListener(); // begin watching for other devices' uploads
     startOverheadSyncListener(); // watch overhead/maintenance changes from other devices
+    startHrSyncListener();    // watch hr doc so salary/payroll edits cross devices live
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -1791,6 +1798,36 @@ function startOverheadSyncListener() {
       pullFromFirestore().then(r => { if (r.ok) { updateSyncBadge("synced"); render(); } });
     }, err => console.warn("[sync] overhead listener error", err));
   } catch (e) { console.warn("[sync] could not start overhead listener", e); }
+}
+
+// Watch the hr doc so salary/payroll edits on one device appear on others in real time.
+let _hrUnsub = null;
+let _lastHrSig = null;
+function _hrSig(d) {
+  const sal = Array.isArray(d.salaries) ? d.salaries : [];
+  const loans = Array.isArray(d.salary_loans) ? d.salary_loans : [];
+  const ot = Array.isArray(d.overtime_logs) ? d.overtime_logs : [];
+  const pen = Array.isArray(d.penalties) ? d.penalties : [];
+  const lv = Array.isArray(d.leaves) ? d.leaves : [];
+  return JSON.stringify([sal.length, loans.length, ot.length, pen.length, lv.length,
+    sal.map(s => `${s.id||s.barista_id}:${s.month}:${s.base_salary||""}`).sort().join("|")]);
+}
+function startHrSyncListener() {
+  if (_hrUnsub) return;
+  try {
+    _hrUnsub = db.collection("state").doc("hr").onSnapshot(snap => {
+      if (!snap.exists) return;
+      if (snap.metadata && snap.metadata.hasPendingWrites) return;
+      const sig = _hrSig(snap.data() || {});
+      if (_lastHrSig === null) { _lastHrSig = sig; return; }
+      if (sig === _lastHrSig) return;
+      _lastHrSig = sig;
+      if (hasPending()) return;
+      console.log("[sync] remote hr changed — auto-pulling fresh data");
+      updateSyncBadge("syncing");
+      pullFromFirestore().then(r => { if (r.ok) { updateSyncBadge("synced"); render(); } });
+    }, err => console.warn("[sync] hr listener error", err));
+  } catch (e) { console.warn("[sync] could not start hr listener", e); }
 }
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
