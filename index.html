@@ -1760,9 +1760,17 @@ async function pullFromFirestore() {
     _firstSync = false;
     doSync(); // push back any migration fixes (also writes new shard format if migrating)
     startReviewsListener();
-    startSalesSyncListener(); // begin watching for other devices' uploads
-    startOverheadSyncListener(); // watch overhead/maintenance changes from other devices
-    startHrSyncListener();    // watch hr doc so salary/payroll edits cross devices live
+    startSalesSyncListener();
+    startOverheadSyncListener();
+    startHrSyncListener();
+    startWasteSyncListener();
+    startShiftsSyncListener();
+    startPurchasesSyncListener();
+    startInventorySyncListener();
+    startRosterSyncListener();
+    startKpiSyncListener();
+    startSuggestionsSyncListener();
+    startLogShardSyncListener(); // covers shift-close, cleaning log, sign-in stamp, inventory snapshot
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -1860,6 +1868,41 @@ function startHrSyncListener() {
     }, err => console.warn("[sync] hr listener error", err));
   } catch (e) { console.warn("[sync] could not start hr listener", e); }
 }
+
+// Generic live-listener factory — watches a single Firestore doc and auto-pulls
+// when its content changes on another device.  sig is always the full JSON string
+// of the doc so any field change triggers a pull.
+function _makeLiveListener(docId, label) {
+  let unsub = null, lastSig = null;
+  return function start() {
+    if (unsub) return;
+    try {
+      unsub = db.collection("state").doc(docId).onSnapshot(snap => {
+        if (!snap.exists) return;
+        if (snap.metadata && snap.metadata.hasPendingWrites) return;
+        const sig = JSON.stringify(snap.data() || {});
+        if (lastSig === null) { lastSig = sig; return; }
+        if (sig === lastSig) return;
+        lastSig = sig;
+        if (hasPending()) return;
+        console.log(`[sync] remote ${label} changed — auto-pulling`);
+        updateSyncBadge("syncing");
+        pullFromFirestore().then(r => { if (r.ok) { updateSyncBadge("synced"); render(); } });
+      }, err => console.warn(`[sync] ${label} listener error`, err));
+    } catch (e) { console.warn(`[sync] could not start ${label} listener`, e); }
+  };
+}
+
+const startWasteSyncListener       = _makeLiveListener("waste",      "waste");
+const startShiftsSyncListener      = _makeLiveListener("shifts",     "shifts");
+const startPurchasesSyncListener   = _makeLiveListener("purchases",  "purchases");
+const startInventorySyncListener   = _makeLiveListener("users_items","inventory/suppliers");
+const startRosterSyncListener      = _makeLiveListener("roster",     "roster");
+const startKpiSyncListener         = _makeLiveListener("kpi",        "kpi");
+const startSuggestionsSyncListener = _makeLiveListener("suggestions","suggestions");
+// log_shard_index is updated whenever a shift-close, cleaning log, sign-in stamp,
+// or inventory snapshot is added — one listener covers all four month-sharded arrays.
+const startLogShardSyncListener    = _makeLiveListener("log_shard_index", "logs (shift-close/cleaning/signin/snapshot)");
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
