@@ -1840,10 +1840,14 @@ let _overheadUnsub = null;
 let _lastOverheadSig = null;
 function _overheadSig(d) {
   const oh = Array.isArray(d.overheads) ? d.overheads : [];
+  // Hash the actual VALUES of presets, monthly overrides and history — not just key
+  // counts — so editing an existing bill's amount (key already present) is detected.
+  const mapSig = (m) => JSON.stringify(Object.entries(m || {}).sort((a, b) => a[0].localeCompare(b[0])));
   return JSON.stringify([
-    oh.map(o => `${o.id}:${o.at || o.updated_at || ""}:${o.paid ? 1 : 0}`).sort(),
-    Object.keys(d.overhead_presets || {}).length,
-    Object.keys(d.overhead_monthly_amts || {}).length,
+    oh.map(o => `${o.id}:${o.at || o.updated_at || ""}:${o.paid ? 1 : 0}:${o.amount ?? ""}`).sort(),
+    mapSig(d.overhead_presets),
+    mapSig(d.overhead_monthly_amts),
+    mapSig(d.overhead_preset_history),
   ]);
 }
 function startOverheadSyncListener() {
