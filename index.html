@@ -1268,7 +1268,7 @@ const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
 // NOTE: `users` is no longer synced here — staff come from Firestore `staff_public`
 // via staffDir.load() and are kept as an in-memory computed view (state.users).
 const STATE_CHUNKS = {
-  config:        ["settings", "salary_config", "gcal_api_key", "events_config", "om_overrides", "om_ar_overrides", "blocked_feedback_ids"],
+  config:        ["settings", "salary_config", "hb_incentive_config", "gcal_api_key", "events_config", "om_overrides", "om_ar_overrides", "blocked_feedback_ids"],
   menu_data:     ["menu"],
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
@@ -1790,6 +1790,7 @@ async function pullFromFirestore() {
     startKpiSyncListener();
     startSuggestionsSyncListener();
     startLogShardSyncListener(); // covers shift-close, cleaning log, sign-in stamp, inventory snapshot
+    startConfigSyncListener();   // salary_config, hb_incentive_config, settings
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -1889,9 +1890,11 @@ function startHrSyncListener() {
 }
 
 // Generic live-listener factory — watches a single Firestore doc and auto-pulls
-// when its content changes on another device.  sig is always the full JSON string
-// of the doc so any field change triggers a pull.
-function _makeLiveListener(docId, label) {
+// when its content changes on another device.  sig defaults to the full JSON string
+// of the doc so any field change triggers a pull; pass sigFn to ignore volatile fields
+// (e.g. the config doc's settings.last_sync, which would otherwise ping-pong forever).
+function _makeLiveListener(docId, label, sigFn) {
+  const _sig = sigFn || (d => JSON.stringify(d || {}));
   let unsub = null, lastSig = null;
   return function start() {
     if (unsub) return;
@@ -1899,7 +1902,7 @@ function _makeLiveListener(docId, label) {
       unsub = db.collection("state").doc(docId).onSnapshot(snap => {
         if (!snap.exists) return;
         if (snap.metadata && snap.metadata.hasPendingWrites) return;
-        const sig = JSON.stringify(snap.data() || {});
+        const sig = _sig(snap.data() || {});
         if (lastSig === null) { lastSig = sig; return; }
         if (sig === lastSig) return;
         lastSig = sig;
@@ -1919,6 +1922,13 @@ const startInventorySyncListener   = _makeLiveListener("users_items","inventory/
 const startRosterSyncListener      = _makeLiveListener("roster",     "roster");
 const startKpiSyncListener         = _makeLiveListener("kpi",        "kpi");
 const startSuggestionsSyncListener = _makeLiveListener("suggestions","suggestions");
+// Ignore the volatile settings.last_sync/last_pull timestamps so two devices don't
+// endlessly pull each other after every sync — watch only the meaningful config.
+const startConfigSyncListener      = _makeLiveListener("config", "config (salary/HB-incentive)", d => {
+  const { settings, ...rest } = d || {};
+  const { last_sync, last_pull, ...sigSettings } = settings || {};
+  return JSON.stringify([rest, sigSettings]);
+});
 // log_shard_index is updated whenever a shift-close, cleaning log, sign-in stamp,
 // or inventory snapshot is added — one listener covers all four month-sharded arrays.
 const startLogShardSyncListener    = _makeLiveListener("log_shard_index", "logs (shift-close/cleaning/signin/snapshot)");
