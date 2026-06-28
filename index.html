@@ -387,7 +387,7 @@
   // PWA cache-bust: if the stored build stamp differs from the one baked into this HTML,
   // the device is serving a stale cached version — reload once to fetch fresh content.
   (function() {
-    var BUILD = "20260612-001";
+    var BUILD = "20260628-001";
     var key = "cb_build";
     try {
       var stored = sessionStorage.getItem(key);
@@ -1046,6 +1046,25 @@ function migrateState(s) {
   s.sick_leave_deductions   = s.sick_leave_deductions   || [];
   s.salaries                = s.salaries                || [];
   s.overtime_logs  = s.overtime_logs  || [];
+  // One-time fix: double-shift OT was historically paid at 8 h × 1.5× rate.
+  // New rule = a full extra day at 1× rate (doubles the daily wage). Recorrect history.
+  if (!s._double_shift_1x_migrated) {
+    s.overtime_logs.forEach(r => {
+      if (r.kind === "double_shift" && (r.multiplier === 1.5 || r.multiplier == null)) {
+        const hrs = Number(r.hours) || 8;
+        // Prefer the stored hourly rate; otherwise back it out of the old 1.5× amount.
+        const newAmt = (Number(r.rate) > 0)
+          ? Math.round(Number(r.rate) * hrs * 100) / 100
+          : Math.round((Number(r.amount) || 0) / 1.5 * 100) / 100;
+        r.amount = newAmt;
+        r.multiplier = 1;
+        if (r.note && /1\.5×|1\.5x/.test(r.note)) {
+          r.note = `⏰ Double shift — extra 8 h × 1× rate (doubles the day)${(r.date ? " on " + r.date : "")}`;
+        }
+      }
+    });
+    s._double_shift_1x_migrated = true;
+  }
   s.penalties      = s.penalties      || [];
   s.maadi_deposits = s.maadi_deposits || [];
   s.overheads     = s.overheads     || [];
@@ -1282,7 +1301,7 @@ const STATE_CHUNKS = {
   suggestions:   ["suggestions"],
   roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
-  hr_meta:       ["barista_dates", "salary_snapshots"], // per-barista history, kept separate to avoid crowding hr chunk
+  hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "maintenance_config"],
   media:         ["photo_log", "assets"],
   kpi:           ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
@@ -1365,11 +1384,11 @@ function _groupByMonth(arr, keyFn) {
 async function _mergeShardWrite(writes, docId, arrayName, localRows) {
   const localBranches = new Set(localRows.map(r => r.branch));
   let kept = [];
-  try {
-    const snap = await db.collection("state").doc(docId).get();
-    const ex = snap.exists ? snap.data()[arrayName] : null;
-    if (Array.isArray(ex)) kept = ex.filter(r => !localBranches.has(r.branch));
-  } catch (_) { /* offline / first write — local rows only */ }
+  // A failed read must ABORT (throw), never fall back to local-only — otherwise a transient
+  // read blip drops the OTHER branch's rows that live in the same month shard.
+  const snap = await db.collection("state").doc(docId).get();
+  const ex = snap.exists ? snap.data()[arrayName] : null;
+  if (Array.isArray(ex)) kept = ex.filter(r => !localBranches.has(r.branch));
   const doc = { [arrayName]: [...kept, ...localRows] };
   const bytes = JSON.stringify(doc).length;
   if (bytes > 800_000) toast(`⚠️ ${arrayName} shard ${docId} is ${(bytes / 1024).toFixed(0)} KB — approaching limit`, "error");
@@ -1406,11 +1425,10 @@ async function _syncSalesShards() {
   // remotely-but-not-locally still has its data doc intact — keeping it in the index is
   // correct and safe. (Genuine month deletions are rare and intentionally not propagated
   // here; that avoids the multi-device data-loss reported in the field.)
-  let remoteIdx = {};
-  try {
-    const idxSnap = await db.collection("state").doc("sales_index").get();
-    if (idxSnap.exists) remoteIdx = idxSnap.data() || {};
-  } catch (_) { /* offline / first write — fall back to local-only index */ }
+  // A failed index read must ABORT (throw) — falling back to a local-only index could
+  // shrink it and orphan month shards another device wrote.
+  const idxSnap = await db.collection("state").doc("sales_index").get();
+  const remoteIdx = idxSnap.exists ? (idxSnap.data() || {}) : {};
   const mergedMonths = [...new Set([...(remoteIdx.months    || []), ...salesMonths])];
   const mergedOi     = [...new Set([...(remoteIdx.oi_months  || []), ...oiMonths])];
   const mergedOrd    = [...new Set([...(remoteIdx.ord_months || []), ...ordMonths])];
@@ -1443,11 +1461,9 @@ const MONTH_SHARDED = {
 // orphan another device's shards.
 async function _syncMonthShards() {
   const writes = [];
-  let remoteIdx = {};
-  try {
-    const s = await db.collection("state").doc("log_shard_index").get();
-    if (s.exists) remoteIdx = s.data() || {};
-  } catch (_) { /* offline / first write */ }
+  // A failed index read must ABORT (throw) — a local-only index could orphan shards.
+  const s = await db.collection("state").doc("log_shard_index").get();
+  const remoteIdx = s.exists ? (s.data() || {}) : {};
 
   const mergedIdx = {};
   const shardOps = [];
@@ -1473,11 +1489,10 @@ async function _syncMonthShards() {
 // on the server — the cause of "menu costs missing from margins". Local edits win, but a
 // blank local cost/price never clobbers a known remote value.
 async function _menuMergeDoc() {
-  let remoteMenu = [];
-  try {
-    const snap = await db.collection("state").doc("menu_data").get();
-    if (snap.exists && Array.isArray(snap.data().menu)) remoteMenu = snap.data().menu;
-  } catch (_) { /* offline / first write */ }
+  // A failed read must ABORT (throw), never fall back to local-only — writing a stale/empty
+  // local menu over a populated remote is how costs/items get wiped.
+  const snap = await db.collection("state").doc("menu_data").get();
+  const remoteMenu = (snap.exists && Array.isArray(snap.data().menu)) ? snap.data().menu : [];
   const byId = new Map(remoteMenu.map(m => [m.id, m]));
   for (const lm of (state.menu || [])) {
     const rm = byId.get(lm.id);
@@ -1498,11 +1513,10 @@ async function _menuMergeDoc() {
 // lost. NOTE: like sales/log shards, entry *deletions* are not propagated by the merge —
 // a deleted overhead may reappear from another device until that device also deletes it.
 async function _overheadMergeDoc() {
-  let remote = {};
-  try {
-    const snap = await db.collection("state").doc("overhead").get();
-    if (snap.exists) remote = snap.data() || {};
-  } catch (_) { /* offline / first write — local only */ }
+  // Read remote; a failed read must ABORT (throw), never fall back to local-only —
+  // writing local-only over a populated remote is exactly how data gets wiped.
+  const snap = await db.collection("state").doc("overhead").get();
+  const remote = snap.exists ? (snap.data() || {}) : {};
 
   // overheads[]: union by id, keep the most recently updated version on conflict.
   const byId = new Map((Array.isArray(remote.overheads) ? remote.overheads : []).map(o => [o.id, o]));
@@ -1531,6 +1545,76 @@ async function _overheadMergeDoc() {
     overhead_preset_history: mergeMap("overhead_preset_history"),
     maintenance_config: mergeMap("maintenance_config"),
   };
+}
+
+// ---- Generic merge-on-write (data-loss prevention) -----------------------------
+// CRITICAL: chunks used to be blind-overwritten (db.set(localDoc)). That meant a device
+// booting with empty/stale localStorage (mobile Safari evicts it; quota errors clear it)
+// could flush an EMPTY state over Firestore and wipe everyone's data. These helpers
+// union local with remote instead, so an empty/stale device can never erase remote data
+// and two devices editing at once combine cleanly. Tradeoff (same as sales/overhead):
+// record *deletions* do not propagate — a deleted record reappears until deleted on every
+// device. We accept that to guarantee zero data loss.
+function _recTime(r) { return (r && (r.updated_at || r.at || r.updated || r.ts || r.date)) || ""; }
+function _isPlainObj(v) { return v && typeof v === "object" && !Array.isArray(v); }
+
+function _mergeArrays(local, rem) {
+  const L = Array.isArray(local) ? local : [];
+  const R = Array.isArray(rem)   ? rem   : [];
+  const hasId = L.some(x => x && x.id != null) || R.some(x => x && x.id != null);
+  if (hasId) {
+    const m = new Map();
+    for (const r of R) { if (r && r.id != null) m.set(r.id, r); }
+    for (const l of L) {
+      if (!l) continue;
+      if (l.id == null) { m.set("__noid__" + JSON.stringify(l), l); continue; }
+      const ex = m.get(l.id);
+      m.set(l.id, !ex ? l : (_recTime(l) >= _recTime(ex) ? l : ex));
+    }
+    return [...m.values()];
+  }
+  // No stable ids — union by JSON identity (keeps remote-only and local-only entries).
+  const seen = new Set(), out = [];
+  for (const x of [...R, ...L]) { const k = JSON.stringify(x); if (!seen.has(k)) { seen.add(k); out.push(x); } }
+  return out;
+}
+
+function _mergeObjects(local, rem) {
+  const out = { ...(_isPlainObj(rem) ? rem : {}) };
+  for (const [k, v] of Object.entries(local || {})) out[k] = _mergeValue(v, rem ? rem[k] : undefined);
+  return out;
+}
+
+function _mergeValue(local, rem) {
+  if (local === undefined) return rem === undefined ? null : rem;
+  if (rem === undefined || rem === null) return local;
+  if (Array.isArray(local) || Array.isArray(rem)) return _mergeArrays(local, rem);
+  if (_isPlainObj(local) && _isPlainObj(rem)) {
+    // If BOTH sides are timestamped records (carry updated_at/at/…), the NEWER one wins
+    // as a whole. Without this, the recursion below bottoms out at scalars where "local
+    // wins" — so a device holding a stale record (e.g. an old salary_config entry) would
+    // silently revert a fresh edit another device just made. This is the root cause of
+    // "I changed Khaled's salary on the laptop and it never showed on mobile": the stale
+    // device clobbered the new value on its next merge-write. Last-edit-wins per record
+    // fixes the whole class (salary_config, hb_incentive_config, any future record map).
+    const lt = _recTime(local), rt = _recTime(rem);
+    if (lt || rt) return rt > lt ? rem : local;
+    // Neither is timestamped → it's a keyed MAP (or plain container); merge key-by-key so
+    // a record only one device knows about is never dropped.
+    return _mergeObjects(local, rem);
+  }
+  return local; // scalar — this device's value wins
+}
+
+// Read the remote chunk and return a union of remote + local for each key. If the read
+// FAILS (network blip), we throw so doSync aborts and retries — we must NEVER fall back to
+// writing local-only, which is exactly how a transient failure could wipe remote data.
+async function _mergeChunkDoc(chunk, keys) {
+  const snap = await db.collection("state").doc(chunk).get(); // throws on failure → safe abort
+  const remote = snap.exists ? (snap.data() || {}) : {};
+  const doc = {};
+  for (const k of keys) doc[k] = _mergeValue(state[k], remote[k]);
+  return doc;
 }
 
 // Snapshot of each chunk's JSON after the last successful sync.
@@ -1595,15 +1679,16 @@ async function doSync() {
             .catch(err => { err._chunk = chunk; throw err; }));
       }
       if (!_chunkChanged(chunk, keys)) return Promise.resolve();
-      const doc = _chunkDoc(chunk, keys);
-      const approxBytes = JSON.stringify(doc).length;
-      if (approxBytes > 800_000) {
-        console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
-        toast(`⚠️ Data chunk "${chunk}" is getting large (${(approxBytes/1024).toFixed(0)} KB). Contact support to archive old records.`, "error");
-      }
-      return db.collection("state").doc(chunk).set(doc)
-        .then(() => _snapshotChunk(chunk, keys))
-        .catch(err => { err._chunk = chunk; throw err; });
+      // Merge-on-write: union with remote so an empty/stale device can never wipe data.
+      return _mergeChunkDoc(chunk, keys).then(doc => {
+        const approxBytes = JSON.stringify(doc).length;
+        if (approxBytes > 800_000) {
+          console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
+          toast(`⚠️ Data chunk "${chunk}" is getting large (${(approxBytes/1024).toFixed(0)} KB). Contact support to archive old records.`, "error");
+        }
+        return db.collection("state").doc(chunk).set(doc)
+          .then(() => _snapshotChunk(chunk, keys));
+      }).catch(err => { err._chunk = chunk; throw err; });
     });
     const salesChanged = _shardChanged("sales") || _shardChanged("order_items") || _shardChanged("orders");
     const logsChanged  = _shardChanged("shift_closes") || _shardChanged("cleaning_logs") ||
@@ -1939,7 +2024,13 @@ const startLogShardSyncListener    = _makeLiveListener("log_shard_index", "logs 
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
-  if (hasPending()) {
+  // Only flush BEFORE pulling when the local state is genuinely real — i.e. it came from a
+  // prior successful pull (settings.last_pull is set). A fresh/seed default state must NEVER
+  // be flushed first: even with merge-on-write it would inject duplicate seed rows (petty-cash
+  // opening balances, the seed inventory snapshot — each built with a new uuid every boot).
+  // In that case we pull first and let the real remote data replace the seed defaults.
+  const localIsReal = !!(state.settings && state.settings.last_pull);
+  if (hasPending() && localIsReal) {
     console.log("Flushing pending local writes to Firestore before pull…");
     await doSync();
     // If flush failed, DO NOT overwrite local (unsaved) state with older Firestore data.
@@ -5684,7 +5775,7 @@ routes.salaries = function (u) {
           : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, "⏳ Pending");
         const rateLabel = r.kind === "leadership_bonus" ? "👑 Leadership role bonus"
           : r.kind === "events_bonus" ? "🎪 Events bonus"
-          : r.kind === "double_shift" ? "×1.5 Double shift"
+          : r.kind === "double_shift" ? "×2 day · Double shift"
           : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
           : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
           : r.multiplier === 2   ? "×2 Holiday"
@@ -5771,6 +5862,7 @@ routes.salaries = function (u) {
                 cap:              Number(vals.cap)              || 5000,
                 base_salary_low:  Number(vals.base_salary_low)  || 12000,
                 base_salary_high: Number(vals.base_salary_high) || 13000,
+                updated_at:       now(),   // last-edit-wins on merge across devices
               };
               saveState(); toast("HB incentive config saved"); drawBody();
             },
@@ -6483,6 +6575,115 @@ function getSalaryForMonth(uid, month) {
     if (!manual) return calcHBBaseSalary(month);
   }
   return Number((state.salary_config[uid] || {}).monthly_salary || 0);
+}
+
+// ── End-of-month worked-days payroll cross-check (info only) ──
+// Pay runs on a 25-to-25 cycle, paid on the 1st of the following month. The cycle
+// for month M = days 26–30 of month M-1 (the "carry", 5 days; the 31st is not
+// counted) + days 1–25 of month M (25 days) = a 30-day basis. Each part is paid
+// at the salary rate in effect for ITS calendar month, so a mid-cycle raise is
+// split automatically (e.g. 5 days at the old rate + 25 days at the new rate).
+// Worked days also drop approved sick/annual leave and no-show days. Returns a
+// per-part breakdown plus a `discrepancy` flag vs the flat salary on record.
+function workedDaysReport(uid, month, flatSalary) {
+  const DENOM = 30;
+  const [y, m] = month.split("-").map(Number);
+  const toDate   = s => { const [yy, mm, dd] = s.split("-").map(Number); return new Date(yy, mm - 1, dd); };
+  const iso      = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const ymOf     = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const dayCount = (a, b) => b >= a ? Math.round((b - a) / 86400000) + 1 : 0;
+  const notes    = [];
+
+  // 25-to-25 cycle windows
+  const prevY = m === 1 ? y - 1 : y;
+  const prevM = m === 1 ? 12 : m - 1;
+  const lastPrev   = new Date(prevY, prevM, 0).getDate();
+  const carryStart = new Date(prevY, prevM - 1, 26);
+  const carryEnd   = new Date(prevY, prevM - 1, Math.min(30, lastPrev)); // drop the 31st
+  const mainStart  = new Date(y, m - 1, 1);
+  const mainEnd    = new Date(y, m - 1, 25);
+  const payDate    = new Date(y, m, 1); // paid on the 1st of the next month
+
+  // Hire / exit dates from barista_dates history
+  const hist  = ((state.barista_dates || {})[uid] || []);
+  const joins = hist.filter(e => e.type === "joined" && e.date).map(e => e.date).sort();
+  const lefts = hist.filter(e => e.type === "left"   && e.date).map(e => e.date).sort();
+  const hireDate = joins.length ? joins[0] : null;
+  const exitDate = lefts.length ? lefts[lefts.length - 1] : null;
+  const hireD = hireDate ? toDate(hireDate) : null;
+  const exitD = exitDate ? toDate(exitDate) : null;
+  if (!hireDate) notes.push("No hire date on record — assumed employed the whole cycle.");
+
+  // Map each leave/no-show day → type, for fast per-day lookup
+  const dayKind = {}; // iso → "sick" | "annual" | "no_show"
+  for (const lv of (state.leaves || [])) {
+    if (lv.user_id !== uid || lv.status !== "approved") continue;
+    if (lv.type !== "sick" && lv.type !== "annual") continue;
+    if (!lv.from_date || !lv.to_date) continue;
+    for (let d = toDate(lv.from_date), end = toDate(lv.to_date); d <= end; d.setDate(d.getDate() + 1)) {
+      if (!dayKind[iso(d)]) dayKind[iso(d)] = lv.type;
+    }
+  }
+  for (const pen of (state.penalties || [])) {
+    if (pen.user_id !== uid) continue;
+    if (pen.reason !== "no_show" && pen.kind !== "no_show") continue;
+    if (pen.date) dayKind[pen.date] = "no_show";
+  }
+
+  let totalWorked = 0, totalPay = 0, sickDays = 0, annualDays = 0, noShowDays = 0;
+  const portions = [];
+  const addPortion = (key, pStart, pEnd, rate) => {
+    let s = new Date(pStart), e = new Date(pEnd);
+    if (hireD && hireD > s) s = new Date(hireD);
+    if (exitD && exitD < e) e = new Date(exitD);
+    const employed = dayCount(s, e);
+    if (employed <= 0) { portions.push({ key, rate, days: 0, worked: 0, pay: 0, range: null }); return; }
+    let lv = 0;
+    for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+      const k = dayKind[iso(d)];
+      if (k === "sick")    { lv++; sickDays++; }
+      else if (k === "annual") { lv++; annualDays++; }
+      else if (k === "no_show") { lv++; noShowDays++; }
+    }
+    const worked = Math.max(0, employed - lv);
+    const pay = worked * rate / DENOM;
+    totalWorked += worked; totalPay += pay;
+    portions.push({ key, rate, days: employed, worked, pay, range: [new Date(s), new Date(e)] });
+  };
+
+  addPortion("carry", carryStart, carryEnd, getSalaryForMonth(uid, ymOf(carryStart)));
+  addPortion("main",  mainStart,  mainEnd,  getSalaryForMonth(uid, ymOf(mainStart)));
+
+  const prorated = Math.round(totalPay);
+
+  // Weekly-roster cross-check across the whole cycle window
+  const rosterDates = new Set();
+  for (const r of (state.rosters || [])) {
+    if (r.user_id !== uid || !r.week_of) continue;
+    const di = ROSTER_DAYS.indexOf(r.day);
+    if (di < 0) continue;
+    const d = toDate(r.week_of); d.setDate(d.getDate() + di);
+    if (d >= carryStart && d <= mainEnd) rosterDates.add(iso(d));
+  }
+
+  const startedMidCycle = hireD && hireD > carryStart && hireD <= mainEnd;
+  const exitedMidCycle  = exitD && exitD >= carryStart && exitD < mainEnd;
+  const rateChanged     = portions[0].days > 0 && portions[1].days > 0 && portions[0].rate !== portions[1].rate;
+
+  if (startedMidCycle) notes.push(`Started mid-cycle (${hireDate}).`);
+  if (exitedMidCycle)  notes.push(`Exited mid-cycle (${exitDate}).`);
+  if (rateChanged)     notes.push(`Salary changed mid-cycle: ${money(portions[0].rate)} → ${money(portions[1].rate)}.`);
+  if (sickDays)        notes.push(`${sickDays} sick day${sickDays > 1 ? "s" : ""}.`);
+  if (annualDays)      notes.push(`${annualDays} annual leave day${annualDays > 1 ? "s" : ""}.`);
+  if (noShowDays)      notes.push(`${noShowDays} no-show day${noShowDays > 1 ? "s" : ""}.`);
+  if (rosterDates.size === 0 && totalWorked > 0) notes.push("Not found on the weekly roster this cycle — verify scheduling.");
+
+  const discrepancy = Math.abs(prorated - flatSalary) >= 1;
+  return { denom: DENOM, cycleStart: carryStart, cycleEnd: mainEnd, payDate,
+           portions, totalWorked, prorated, flatSalary, hireDate, exitDate,
+           startedMidCycle, exitedMidCycle, rateChanged,
+           sickDays, annualDays, noShowDays, rosterDayCount: rosterDates.size,
+           discrepancy, notes };
 }
 
 function calcHBBaseSalary(month) {
@@ -8699,20 +8900,21 @@ routes.roster = function (u) {
                   const _person = (state.users || []).find(p => p.id === _uid);
                   const _sal = getSalaryForMonth(_uid, dayDateStr.slice(0, 7));
                   const _hrRate = _sal > 0 ? _sal / 30 / 8 : 0;
-                  // 2nd shift = 8 h at 1.5× hourly rate
+                  // 2nd shift = a full extra 8 h day paid at the normal 1× rate
+                  // → working morning + night doubles the daily wage (8 h normal + 8 h OT).
                   const _otHours = 8;
-                  const _otAmt = Math.round(_hrRate * _otHours * 1.5 * 100) / 100;
+                  const _otAmt = Math.round(_hrRate * _otHours * 100) / 100;
                   if (_otAmt > 0) {
                     const _sb = stamp();
                     state.overtime_logs.push({
                       id: uuid(), user_id: _uid, barista: _person ? _person.name : _uid,
                       date: dayDateStr, month: dayDateStr.slice(0, 7),
-                      hours: _otHours, rate: _hrRate, multiplier: 1.5, amount: _otAmt, kind: "double_shift",
-                      note: `⏰ Double shift — 8 h × 1.5× rate on ${dayDateStr}`,
+                      hours: _otHours, rate: _hrRate, multiplier: 1, amount: _otAmt, kind: "double_shift",
+                      note: `⏰ Double shift — extra 8 h × 1× rate (doubles the day) on ${dayDateStr}`,
                       approved: true,
                       by: _sb.by, by_name: _sb.by_name, at: _sb.at,
                     });
-                    toast(`${_person ? _person.name : _uid} — double shift OT auto-logged (+${_otAmt} L.E.)`);
+                    toast(`${_person ? _person.name : _uid} — double shift OT auto-logged, day pay doubled (+${_otAmt} L.E.)`);
                   }
                 }
               }
@@ -9110,7 +9312,7 @@ routes.users = function (u) {
         style: { background: "var(--accent-bg,#fff8e1)", color: "var(--ink)", border: "1px solid var(--accent,#e8a020)", fontSize: "11px" },
       }, leaderBadgeLabel));
     }
-    if ((usr.id_photo_urls || []).length > 0) {
+    if (((state.staff_ids || {})[usr.uid] || []).length > 0 || (usr.id_photo_urls || []).length > 0) {
       rowChildren.push(el("span", { class: "pill ok", style: { fontSize: "11px" } }, "\ud83e\udeb9 ID"));
     }
     const rowOpts = (u.role === "owner" || u.uid === usr.uid)
@@ -9480,37 +9682,102 @@ routes.users = function (u) {
   }
 
   function staffIdSheet(usr) {
+    const isOwner = u.role === "owner";
     const sheet = el("div", {});
     sheet.appendChild(el("h2", {}, `\ud83e\udeb9 Government ID \u2014 ${usr.name}`));
+    sheet.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+      "ID images are private \u2014 visible only to the owner and accountant. " + usr.name.split(" ")[0] + " can also upload their own from \u201cMy ID\u201d."));
+
+    state.staff_ids = state.staff_ids || {};
     const photosWrap = el("div", {});
     sheet.appendChild(photosWrap);
+
     function renderPhotos() {
       photosWrap.innerHTML = "";
-      const urls = usr.id_photo_urls || [];
-      if (urls.length === 0) {
+      // Unified store baristas use (state.staff_ids[uid]) + any legacy id_photo_urls
+      const entries = (state.staff_ids[usr.uid] || []).slice();
+      const legacy  = (usr.id_photo_urls || []).map((url, i) => ({ legacyIndex: i, url }));
+      if (entries.length === 0 && legacy.length === 0) {
         photosWrap.appendChild(el("div", { class: "muted small", style: { margin: "8px 0 16px" } }, "No ID uploaded yet."));
-      } else {
-        const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", margin: "8px 0 16px" } });
-        urls.forEach((url, i) => {
-          const card = el("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" } });
-          card.appendChild(el("img", { src: url, style: { width: "90px", height: "64px", objectFit: "cover", borderRadius: "6px", border: "1px solid var(--border,#ddd)" } }));
-          const linkRow = el("div", { style: { display: "flex", gap: "6px" } });
-          linkRow.appendChild(el("a", { href: url, target: "_blank", class: "btn ghost", style: { fontSize: "12px", padding: "2px 8px" } }, "View"));
-          if (u.role === "owner") {
-            linkRow.appendChild(el("button", { class: "btn bad", style: { fontSize: "12px", padding: "2px 8px" },
-              onClick: () => {
-                usr.id_photo_urls = (usr.id_photo_urls || []).filter((_, j) => j !== i);
-                saveState(); toast("ID photo removed"); renderPhotos();
-              }
-            }, "\u2715 Remove"));
-          }
-          card.appendChild(linkRow);
-          grid.appendChild(card);
-        });
-        photosWrap.appendChild(grid);
+        return;
       }
+      const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", margin: "8px 0 16px" } });
+      const addCard = (url, onRemove) => {
+        const card = el("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" } });
+        card.appendChild(el("img", { src: url, style: { width: "90px", height: "64px", objectFit: "cover", borderRadius: "6px", border: "1px solid var(--border,#ddd)" } }));
+        const linkRow = el("div", { style: { display: "flex", gap: "6px" } });
+        linkRow.appendChild(el("a", { href: url, target: "_blank", class: "btn ghost", style: { fontSize: "12px", padding: "2px 8px" } }, "View"));
+        if (isOwner && onRemove) {
+          linkRow.appendChild(el("button", { class: "btn bad", style: { fontSize: "12px", padding: "2px 8px" }, onClick: onRemove }, "\u2715 Remove"));
+        }
+        card.appendChild(linkRow);
+        grid.appendChild(card);
+      };
+      entries.forEach(entry => addCard(entry.url, () => {
+        state.staff_ids[usr.uid] = (state.staff_ids[usr.uid] || []).filter(x => x.id !== entry.id);
+        saveState(); toast("ID photo removed"); renderPhotos();
+      }));
+      legacy.forEach(l => addCard(l.url, () => {
+        usr.id_photo_urls = (usr.id_photo_urls || []).filter((_, j) => j !== l.legacyIndex);
+        saveState(); toast("ID photo removed"); renderPhotos();
+      }));
+      photosWrap.appendChild(grid);
     }
     renderPhotos();
+
+    // \u2500\u2500 Owner upload on behalf of the staff member \u2500\u2500
+    if (isOwner) {
+      const upCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+      upCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "8px" } }, "\ud83d\udcce Upload ID for " + usr.name.split(" ")[0]));
+
+      const fileInput = el("input", { type: "file", accept: "image/*" });
+      fileInput.setAttribute("multiple", "true");
+      fileInput.style.display = "none";
+      const previewGrid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", margin: "0 0 10px" } });
+      let selectedBlobs = [];
+
+      const pickBtn = el("button", { class: "btn secondary" }, "\ud83d\udcf7 Choose photos");
+      pickBtn.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", () => {
+        selectedBlobs = [...fileInput.files].filter(f => f.type.startsWith("image/"));
+        previewGrid.innerHTML = "";
+        for (const f of selectedBlobs) {
+          previewGrid.appendChild(el("img", { src: URL.createObjectURL(f),
+            style: { width: "80px", height: "80px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)" } }));
+        }
+        fileInput.value = "";
+      });
+
+      const saveBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "\u2b06 Upload & Save");
+      saveBtn.addEventListener("click", async () => {
+        if (!selectedBlobs.length) return toast("Choose at least one photo first", "warn");
+        saveBtn.disabled = true; saveBtn.textContent = "Uploading\u2026";
+        state.staff_ids[usr.uid] = state.staff_ids[usr.uid] || [];
+        let ok = 0;
+        for (const blob of selectedBlobs) {
+          try {
+            const filename = `ID_${(usr.name || "staff").replace(/\s+/g, "_")}`;
+            const data = await Cloudinary.uploadPhoto(blob, filename);
+            state.staff_ids[usr.uid].push({ id: uuid(), url: data.secure_url, at: new Date().toISOString(), name: usr.name, by: u.name });
+            ok++;
+          } catch (e) { console.warn("Owner ID upload error:", e); }
+        }
+        saveBtn.disabled = false; saveBtn.textContent = "\u2b06 Upload & Save";
+        if (ok > 0) {
+          saveState(); selectedBlobs = []; previewGrid.innerHTML = ""; renderPhotos();
+          toast(`${ok} image${ok > 1 ? "s" : ""} saved`);
+        } else {
+          toast("Upload failed \u2014 check your connection", "error");
+        }
+      });
+
+      upCard.appendChild(fileInput);
+      upCard.appendChild(pickBtn);
+      upCard.appendChild(previewGrid);
+      upCard.appendChild(saveBtn);
+      sheet.appendChild(upCard);
+    }
+
     sheet.appendChild(el("div", { class: "btn-row" }, [
       el("button", { class: "btn ghost", onClick: () => closeSheet() }, "Close"),
     ]));
@@ -10260,6 +10527,8 @@ routes.settings = function (u) {
   const teamBody = el("div", {});
   tm.appendChild(teamBody);
 
+  let teamTab = "active"; // "active" | "archived"
+
   async function renderTeam() {
     teamBody.innerHTML = '<div class="muted small" style="padding:8px">Loading…</div>';
 
@@ -10276,7 +10545,37 @@ routes.settings = function (u) {
     teamBody.innerHTML = "";
     const roleLabel = { owner: "Owner", accountant: "Accountant", head_barista: "Head Barista", barista: "Barista", manager: "Manager", helper: "Helper" };
 
-    for (const s of allStaff) {
+    const activeStaff   = allStaff.filter(s => s.active !== false);
+    const archivedStaff = allStaff.filter(s => s.active === false);
+
+    // ── Tab bar: Active team / Archived (exited) ──
+    const tabBar = el("div", { style: { display: "flex", gap: "6px", marginBottom: "12px" } });
+    const mkTab = (key, label, count) => {
+      const on = teamTab === key;
+      const t = el("button", {
+        class: on ? "btn secondary" : "btn ghost",
+        style: { width: "auto", flex: "1", padding: "8px 10px", fontSize: "13px", fontWeight: on ? "700" : "500" }
+      }, `${label} (${count})`);
+      t.addEventListener("click", () => { teamTab = key; renderTeam(); });
+      return t;
+    };
+    tabBar.appendChild(mkTab("active", "👥 Active team", activeStaff.length));
+    tabBar.appendChild(mkTab("archived", "🗄️ Archived", archivedStaff.length));
+    teamBody.appendChild(tabBar);
+
+    const list = teamTab === "archived" ? archivedStaff : activeStaff;
+
+    if (teamTab === "archived") {
+      teamBody.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px", lineHeight: "1.4" } },
+        "Exited staff are kept here — their profile, ID and full history are preserved, not deleted. Tap 📅 to view hire/exit dates and re-hire notes, or Reactivate to restore their access."));
+    }
+
+    if (list.length === 0) {
+      teamBody.appendChild(el("div", { class: "muted small", style: { padding: "16px 8px", textAlign: "center" } },
+        teamTab === "archived" ? "No archived staff yet." : "No active staff."));
+    }
+
+    for (const s of list) {
       const row = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "9px 10px", background: s.active ? "var(--surface-2)" : "#fdecea", borderRadius: "8px", marginBottom: "6px" } });
 
       const info = el("div", { style: { flex: "1" } });
@@ -10329,6 +10628,56 @@ routes.settings = function (u) {
         }
       }
 
+      // ── Dates & notes editor (hire / exit / rehire notes) ──
+      const datesArr  = ((state.barista_dates || {})[s.uid] || []);
+      const lastJoin  = datesArr.filter(e => e.type === "joined").slice().sort((a,b) => (a.date||"").localeCompare(b.date||"")).pop();
+      const lastLeave = datesArr.filter(e => e.type === "left").slice().sort((a,b) => (a.date||"").localeCompare(b.date||"")).pop();
+
+      const datesPanel = el("div", { style: { display: "none", background: "var(--surface)", border: "1px solid var(--border,#ddd)", borderRadius: "8px", padding: "12px", marginTop: "6px" } });
+      const fieldStyle = { width: "100%", padding: "8px", borderRadius: "8px", border: "1px solid var(--border,#ddd)", background: "var(--surface,#fff)", color: "var(--ink,#222)", boxSizing: "border-box", marginBottom: "10px" };
+
+      datesPanel.appendChild(el("label", { style: { fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "3px" } }, "📅 Date of hire"));
+      const hireIn = el("input", { type: "date", value: lastJoin ? lastJoin.date : "", style: fieldStyle });
+      datesPanel.appendChild(hireIn);
+
+      datesPanel.appendChild(el("label", { style: { fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "3px" } }, "🚪 Date of exit (resignation)"));
+      const exitIn = el("input", { type: "date", value: lastLeave ? lastLeave.date : "", style: fieldStyle });
+      datesPanel.appendChild(exitIn);
+
+      datesPanel.appendChild(el("label", { style: { fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "3px" } }, "📝 Exit notes (for possible re-hire)"));
+      const exitNoteIn = el("textarea", { rows: "3", placeholder: "e.g. Strong on bar, left for studies — good re-hire candidate.", style: { ...fieldStyle, resize: "vertical", fontFamily: "inherit", fontSize: "13px" } });
+      exitNoteIn.value = lastLeave ? (lastLeave.note || "") : "";
+      datesPanel.appendChild(exitNoteIn);
+
+      const saveDatesBtn = el("button", { class: "btn", style: { width: "100%" } }, "Save dates & notes");
+      saveDatesBtn.addEventListener("click", () => {
+        const hireV = hireIn.value;
+        const exitV = exitIn.value;
+        const noteV = exitNoteIn.value.trim();
+        state.barista_dates = state.barista_dates || {};
+        const arr = state.barista_dates[s.uid] = state.barista_dates[s.uid] || [];
+        // Update or create the latest "joined" entry
+        if (hireV) {
+          if (lastJoin) lastJoin.date = hireV;
+          else arr.push({ type: "joined", date: hireV, note: "", at: now() });
+        }
+        // Update or create the latest "left" entry (date and/or note)
+        if (exitV || noteV) {
+          if (lastLeave) { if (exitV) lastLeave.date = exitV; lastLeave.note = noteV; }
+          else arr.push({ type: "left", date: exitV || new Date().toISOString().slice(0,10), note: noteV, at: now() });
+        }
+        saveState();
+        toast("Dates & notes saved ✓");
+        renderTeam();
+      });
+      datesPanel.appendChild(saveDatesBtn);
+
+      const datesBtn = el("button", { class: "btn ghost", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, "📅 Dates");
+      datesBtn.addEventListener("click", () => {
+        datesPanel.style.display = datesPanel.style.display === "none" ? "block" : "none";
+      });
+      row.appendChild(datesBtn);
+
       const activeBtn = el("button", { class: s.active ? "btn ghost" : "btn secondary", style: { width: "auto", padding: "5px 10px", fontSize: "12px" } }, s.active ? "Deactivate" : "Reactivate");
       activeBtn.addEventListener("click", () => {
         const isDeactivating = s.active;
@@ -10354,10 +10703,15 @@ routes.settings = function (u) {
         });
       });
       row.appendChild(activeBtn);
-      teamBody.appendChild(row);
+      row.style.marginBottom = "0";
+      const rowWrap = el("div", { style: { marginBottom: "6px" } });
+      rowWrap.appendChild(row);
+      rowWrap.appendChild(datesPanel);
+      teamBody.appendChild(rowWrap);
     }
 
-    // ── Add new staff member ──
+    // ── Add new staff member (Active tab only) ──
+    if (teamTab !== "active") return;
     const addCard = el("div", { style: { background: "var(--surface-2)", borderRadius: "10px", padding: "12px", marginTop: "8px" } });
     addCard.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", marginBottom: "10px" } }, "Add new staff member"));
     const nameIn = el("input", { type: "text", placeholder: "Full name", style: { marginBottom: "8px" } });
@@ -14962,7 +15316,7 @@ routes.my_hr = function(u, params) {
       const tb = el("tbody", {});
       otList.forEach(r => {
         const typeLabel = r.kind === "events_bonus" ? "🎪 Events bonus"
-          : r.kind === "double_shift" ? "×1.5 Double shift"
+          : r.kind === "double_shift" ? "×2 day · Double shift"
           : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
           : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
           : r.multiplier === 2   ? "×2 Holiday"
@@ -15200,6 +15554,67 @@ routes.staff_hr = function(u) {
     t.appendChild(tb);
     tableCard.appendChild(t);
     body.appendChild(tableCard);
+
+    // ── Worked-days salary check (info only) — 25-to-25 pay cycle ──
+    const fmtD  = d => d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    const fmtDY = d => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    const wdCard = el("div", { class: "card", style: { marginTop: "12px" } });
+    wdCard.appendChild(el("h2", { style: { marginBottom: "2px" } }, "📅 Worked-Days Salary Check"));
+
+    const cycleRef = staffData.length ? workedDaysReport(staffData[0].p.id, selMonth, staffData[0].salary) : null;
+    if (cycleRef) {
+      wdCard.appendChild(el("div", { class: "small", style: { fontWeight: "700", marginBottom: "2px" } },
+        `Pay cycle: ${fmtD(cycleRef.cycleStart)} → ${fmtD(cycleRef.cycleEnd)} · paid ${fmtDY(cycleRef.payDate)}`));
+    }
+    wdCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px", lineHeight: "1.45" } },
+      "Cross-check only — does not change pay above. Salaries run 25-to-25 (5 carry days + 25 days = 30-day basis), paid on the 1st. Each part uses the rate for its own month, so a mid-cycle raise is split. Worked days drop sick, annual & no-show days. ⚠️ marks a gap vs the flat salary on record."));
+
+    let flaggedCount = 0;
+    staffData.forEach(({ p, salary }) => {
+      const r = workedDaysReport(p.id, selMonth, salary);
+      if (r.discrepancy) flaggedCount++;
+      const row = el("div", {
+        style: {
+          padding: "9px 10px", borderRadius: "8px", marginBottom: "6px",
+          background: r.discrepancy ? "rgba(245,158,11,0.10)" : "var(--surface-2)",
+          border: r.discrepancy ? "1px solid var(--warn,#f59e0b)" : "1px solid transparent",
+        }
+      });
+      const top = el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" } });
+      top.appendChild(el("div", { style: { fontWeight: "600", fontSize: "14px" } },
+        (r.discrepancy ? "⚠️ " : "") + p.name + (p.active ? "" : " (archived)")));
+      top.appendChild(el("div", { style: { fontSize: "13px", fontWeight: "700" } },
+        `${r.totalWorked}/${r.denom} days · ${money(r.prorated)}`));
+      row.appendChild(top);
+
+      // Per-part breakdown (carry + main), only when it adds information
+      const activeParts = r.portions.filter(pt => pt.days > 0);
+      if (r.rateChanged || r.startedMidCycle || r.exitedMidCycle || (r.discrepancy && activeParts.length)) {
+        activeParts.forEach(pt => {
+          const lbl = pt.range ? `${fmtD(pt.range[0])}–${fmtD(pt.range[1])}` : "";
+          const dayPart = pt.worked === pt.days ? `${pt.worked} d` : `${pt.worked}/${pt.days} d`;
+          row.appendChild(el("div", { class: "small", style: { marginTop: "2px", color: "var(--ink-dim)" } },
+            `${lbl}: ${dayPart} × ${money(pt.rate)}/30 = ${money(Math.round(pt.pay))}`));
+        });
+      }
+
+      if (r.discrepancy) {
+        row.appendChild(el("div", { class: "small", style: { marginTop: "3px", color: "var(--ink-dim)" } },
+          `Flat salary on record: ${money(r.flatSalary)} · Cycle basis: ${money(r.prorated)} (Δ ${money(r.flatSalary - r.prorated)})`));
+      }
+      if (r.notes.length) {
+        row.appendChild(el("div", { class: "muted small", style: { marginTop: "3px", lineHeight: "1.4" } }, r.notes.join(" ")));
+      }
+      wdCard.appendChild(row);
+    });
+
+    if (staffData.length === 0) {
+      wdCard.appendChild(el("div", { class: "muted small" }, "No staff for this month."));
+    } else if (flaggedCount === 0) {
+      wdCard.appendChild(el("div", { class: "small", style: { color: "var(--ok)", marginTop: "2px" } },
+        "✓ No discrepancies — every barista's flat salary matches their worked-days cycle."));
+    }
+    body.appendChild(wdCard);
   }
 
   drawBody();
