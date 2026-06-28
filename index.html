@@ -387,7 +387,7 @@
   // PWA cache-bust: if the stored build stamp differs from the one baked into this HTML,
   // the device is serving a stale cached version — reload once to fetch fresh content.
   (function() {
-    var BUILD = "20260628-001";
+    var BUILD = "20260628-002";
     var key = "cb_build";
     try {
       var stored = sessionStorage.getItem(key);
@@ -812,7 +812,7 @@ const IDB = (() => {
 })();
 
 // ─── Firebase Storage photo upload ───────────────────────────
-const Cloudinary = (() => {
+const CloudPhoto = (() => {
   const isConfigured = () => true; // always available via Firebase
 
   async function uploadPhoto(blob, filename) {
@@ -1081,6 +1081,10 @@ function migrateState(s) {
   s.rosters             = s.rosters || []; // weekly shift rosters
   s.roaster_schedules   = s.roaster_schedules || []; // weekly roaster — head barista posts to whole team
   s.kpi_logs      = s.kpi_logs      || []; // kept for migration only — scores now derived from source tiles
+  // Global deletion tombstones: ids of records deleted on ANY device. Synced (unioned,
+  // never shrunk) so a deletion propagates everywhere and the union-by-id merge can't
+  // resurrect a record another device still holds. See recordDeletion / _applyTombstones.
+  s.deleted_ids   = s.deleted_ids   || []; // [{ id, at }]
   s.kpi_manual    = s.kpi_manual    || []; // owner-entered monthly manual scores: craft, upselling, customer, teamwork
   s.customer_feedback = s.customer_feedback || []; // reviews from coffeebeats.art or manual entry
   s.blocked_feedback_ids = s.blocked_feedback_ids || []; // Firestore review IDs permanently deleted by owner
@@ -1304,7 +1308,8 @@ const STATE_CHUNKS = {
   hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "maintenance_config"],
   media:         ["photo_log", "assets"],
-  kpi:           ["kpi_manual", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
+  kpi:           ["kpi_manual", "kpi_logs", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
+  tombstones:    ["deleted_ids"],   // ids deleted on any device — unioned, applied on every merge/pull
   meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times", "sales_meta"],
   inv_engine:       ["inv_engine"],
   inv_engine_sales: ["inv_engine_sales_data"],
@@ -1606,6 +1611,65 @@ function _mergeValue(local, rem) {
   return local; // scalar — this device's value wins
 }
 
+// ---- Deletion propagation (tombstones) -----------------------------------------
+// Union-by-id merge can never represent a deletion: a stale device that still holds a
+// record re-adds it to the server on its next sync, so deletions "come back" (the real
+// "I deleted the penalty and it reappeared" bug). We fix this globally without touching
+// the ~40 delete sites: every sync we DIFF each synced array against the snapshot of what
+// this device last had on the server (_lastSyncedChunk). An id that WAS there and is now
+// gone locally is a genuine deletion (vs. one we simply never received) → we tombstone it.
+// Tombstones sync in their own chunk and are applied on every merge-write and pull.
+// Arrays whose ids are reused across imports (sheet-managed catalogs): deleting then
+// re-importing the same id is a legitimate workflow, so we must NOT tombstone them or a
+// re-imported row would be stripped. The deletion-resurrection pain is in HR / financial /
+// log records, which all get fresh unique ids — those are fully covered.
+const _NO_TOMBSTONE_KEYS = new Set(["menu", "items"]);
+function _tombstoneSet() {
+  const s = new Set();
+  for (const t of (state.deleted_ids || [])) if (t && t.id != null) s.add(t.id);
+  return s;
+}
+function recordDeletion(...ids) {
+  state.deleted_ids = state.deleted_ids || [];
+  const have = _tombstoneSet();
+  const at = now();
+  for (const id of ids) if (id != null && !have.has(id)) { state.deleted_ids.push({ id, at }); have.add(id); }
+}
+// Undo a deletion (e.g. the penalty "restore" button): drop the tombstone so the
+// re-added record isn't filtered straight back out.
+function _untombstone(...ids) {
+  const drop = new Set(ids);
+  if (state.deleted_ids) state.deleted_ids = state.deleted_ids.filter(t => !(t && drop.has(t.id)));
+}
+// Detect records this device deleted since its last successful sync, by id, across every
+// regular chunk array (sharded high-volume logs are excluded — they're bulk-replaced, not
+// individually deleted, and would bloat the tombstone list). Runs synchronously at the top
+// of doSync so the tombstones chunk is correctly seen as dirty in the same pass.
+function _collectDeletions() {
+  for (const [chunk, keys] of Object.entries(STATE_CHUNKS)) {
+    if (chunk === "tombstones") continue;            // never tombstone the tombstone list
+    const prevRaw = _lastSyncedChunk[chunk];
+    if (!prevRaw) continue;                            // nothing confirmed yet → can't tell deletions from never-had
+    let prev; try { prev = JSON.parse(prevRaw); } catch (_) { continue; }
+    for (const k of keys) {
+      if (_NO_TOMBSTONE_KEYS.has(k)) continue;
+      if (!Array.isArray(prev[k]) || !Array.isArray(state[k])) continue;
+      const cur = new Set(state[k].map(r => r && r.id).filter(x => x != null));
+      for (const r of prev[k]) if (r && r.id != null && !cur.has(r.id)) recordDeletion(r.id);
+    }
+  }
+}
+// Remove any tombstoned record from every array in `state` (used after a pull, where remote
+// may still carry records another device hasn't deleted yet).
+function _applyTombstones() {
+  const tomb = _tombstoneSet();
+  if (!tomb.size) return;
+  for (const [k, v] of Object.entries(state)) {
+    if (k === "deleted_ids" || _NO_TOMBSTONE_KEYS.has(k) || !Array.isArray(v)) continue;
+    state[k] = v.filter(r => !(r && r.id != null && tomb.has(r.id)));
+  }
+}
+
 // Read the remote chunk and return a union of remote + local for each key. If the read
 // FAILS (network blip), we throw so doSync aborts and retries — we must NEVER fall back to
 // writing local-only, which is exactly how a transient failure could wipe remote data.
@@ -1613,7 +1677,14 @@ async function _mergeChunkDoc(chunk, keys) {
   const snap = await db.collection("state").doc(chunk).get(); // throws on failure → safe abort
   const remote = snap.exists ? (snap.data() || {}) : {};
   const doc = {};
-  for (const k of keys) doc[k] = _mergeValue(state[k], remote[k]);
+  const tomb = chunk === "tombstones" ? null : _tombstoneSet();
+  for (const k of keys) {
+    let v = _mergeValue(state[k], remote[k]);
+    // Strip resurrected records: the union may have re-added an id we (or another device)
+    // deleted. Never filter the tombstone list itself.
+    if (tomb && tomb.size && Array.isArray(v)) v = v.filter(r => !(r && r.id != null && tomb.has(r.id)));
+    doc[k] = v;
+  }
   return doc;
 }
 
@@ -1660,6 +1731,9 @@ async function doSync() {
     const _cu = firebase.auth().currentUser;
     if (!_cu) { return; }
     try { await _cu.getIdToken(); } catch (_) { /* best-effort refresh */ }
+    // Detect any records deleted locally since the last sync and tombstone them, so the
+    // merge below strips them instead of letting another device resurrect them.
+    _collectDeletions();
     const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
       // menu_data is merged (not overwritten) to protect item costs — see _menuMergeDoc.
       if (chunk === "menu_data") {
@@ -1850,6 +1924,9 @@ async function pullFromFirestore() {
     const settingsBak = state.settings;
     Object.assign(state, remote);
     migrateState(state);
+    // Honor deletions made on any device: drop records the remote still carries but that
+    // have been tombstoned (the union-by-id merge can't express a deletion on its own).
+    _applyTombstones();
     state.settings = { ...remote.settings, ...settingsBak };
     state.settings.last_pull = now();
     // Load staff directory from staff_public (single source of truth for users)
@@ -3624,7 +3701,7 @@ routes.waste_new = function (u) {
       el("div", { class: "small muted", style: { marginTop: "6px", textAlign: "center" } }, `Will reduce ${it.name} at ${branch} by ${qty || 0} ${it.unit}.`),
     ]));
   }
-  // ── Photo evidence (multi-image, auto-uploads to Cloudinary) ──
+  // ── Photo evidence (multi-image, auto-uploads to Firebase Storage) ──
   const wastePhotoField = makePhotoField({ label: "Evidence photo(s)", multiple: true, formLabel: "Record Waste" });
   wrap.appendChild(wastePhotoField.el);
 
@@ -6265,6 +6342,7 @@ routes.penalties = function (u) {
           onClick: () => {
             const { deleted_at, deleted_by, ...original } = r;
             state.penalties.push(original);
+            _untombstone(original.id); // clear the deletion tombstone so it isn't re-stripped
             state.deleted_penalties = state.deleted_penalties.filter(x => x.id !== r.id);
             saveState();
             toast(`Penalty for ${r.barista} restored ✓`);
@@ -9757,7 +9835,7 @@ routes.users = function (u) {
         for (const blob of selectedBlobs) {
           try {
             const filename = `ID_${(usr.name || "staff").replace(/\s+/g, "_")}`;
-            const data = await Cloudinary.uploadPhoto(blob, filename);
+            const data = await CloudPhoto.uploadPhoto(blob, filename);
             state.staff_ids[usr.uid].push({ id: uuid(), url: data.secure_url, at: new Date().toISOString(), name: usr.name, by: u.name });
             ok++;
           } catch (e) { console.warn("Owner ID upload error:", e); }
@@ -12734,7 +12812,7 @@ routes.handbook = function (u) {
 };
 
 // ==============================================================
-// PHOTO GALLERY (Cloudinary)
+// PHOTO GALLERY (Firebase Storage)
 // ==============================================================
 // ==============================================================
 // ASSETS — upload and store files/documents with title & notes
@@ -12963,7 +13041,8 @@ routes.photo_gallery = function (u) {
                  overflow: "hidden", background: "var(--surface-2)", border: "1px solid var(--border)" },
       });
       if (ph.url) {
-        // Cloudinary thumbnail: append w_72,h_72,c_fill transform
+        // Legacy Cloudinary thumbnail transform — a no-op on Firebase Storage URLs
+        // (they have no "/upload/" segment), so the full-size image is shown.
         const thumbUrl = ph.url.replace("/upload/", "/upload/w_144,h_144,c_fill/");
         thumb.appendChild(el("img", {
           src: thumbUrl, loading: "lazy",
@@ -13000,7 +13079,7 @@ routes.photo_gallery = function (u) {
           title: "Delete photo",
           onClick: (e) => {
             e.preventDefault(); e.stopPropagation();
-            if (!confirm(`Delete "${ph.name || "this photo"}"? This only removes it from the log — the file on Cloudinary is unaffected.`)) return;
+            if (!confirm(`Delete "${ph.name || "this photo"}"? This only removes it from the log — the file in cloud storage is unaffected.`)) return;
             state.photo_log = (state.photo_log || []).filter(p => p !== ph);
             saveState();
             toast("Photo removed from log");
@@ -13027,7 +13106,7 @@ routes.photo_gallery = function (u) {
  * makePhotoField({ label, required, multiple, formLabel })
  * Returns { el, getBlobs(), getCloudUrls(), count() }
  * Renders a drag-drop zone with live thumbnail previews.
- * Auto-uploads to Cloudinary (free) if configured in Settings.
+ * Auto-uploads to Firebase Storage.
  * formLabel: used for photo_log context (e.g. "Cleaning Log")
  */
 function makePhotoField({ label = "Photo(s)", required = false, multiple = true, formLabel = "" } = {}) {
@@ -13051,10 +13130,10 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
   container.appendChild(grid);
 
   let blobs = [];
-  let cloudUrls = []; // Cloudinary secure_url per photo
+  let cloudUrls = []; // Firebase Storage download URL per photo
 
   async function tryCloudUpload(file, idx, statusBar, badge) {
-    if (!Cloudinary.isConfigured()) return;
+    if (!CloudPhoto.isConfigured()) return;
     statusBar.className = "ph-status uploading";
     try {
       // Build filename: April28_CleaningLog_Seif
@@ -13066,7 +13145,7 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
         : "Unknown";
       const _label = formLabel ? formLabel.replace(/\s+/g,"") : "Upload";
       const filename = `${_dateStamp}_${_label}_${_uploader}`;
-      const data = await Cloudinary.uploadPhoto(file, filename);
+      const data = await CloudPhoto.uploadPhoto(file, filename);
       cloudUrls[idx] = data.secure_url;
       // Log to state for gallery
       if (typeof state !== "undefined") {
@@ -13086,7 +13165,7 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
       statusBar.className = "ph-status done";
       badge.style.display = "block";
     } catch (e) {
-      console.warn("Cloudinary upload:", e.message);
+      console.warn("Firebase Storage upload:", e.message);
       statusBar.className = "ph-status error";
     }
   }
@@ -13155,7 +13234,7 @@ function showPhotoConfirm({ title = "Submitted!", names = [], driveIds = [], onD
   body.appendChild(el("div", { style: { textAlign: "center", fontWeight: "700", fontSize: "18px", marginBottom: "4px" } }, title));
   body.appendChild(el("div", { class: "muted small", style: { textAlign: "center", marginBottom: "16px" } },
     `${names.length} photo${names.length !== 1 ? "s" : ""} saved` +
-    (driveCount > 0 ? ` · ${driveCount} synced to cloud ☁️` : Cloudinary.isConfigured() ? " · cloud sync in progress…" : " · saved locally")));
+    (driveCount > 0 ? ` · ${driveCount} synced to cloud ☁️` : CloudPhoto.isConfigured() ? " · cloud sync in progress…" : " · saved locally")));
 
   // File list
   if (names.length) {
@@ -16236,7 +16315,7 @@ routes.my_id = function(u) {
     for (const blob of selectedBlobs) {
       try {
         const filename = `ID_${u.name.replace(/\s+/g, "_")}`;
-        const data = await Cloudinary.uploadPhoto(blob, filename);
+        const data = await CloudPhoto.uploadPhoto(blob, filename);
         const entry = { id: uuid(), url: data.secure_url, at: new Date().toISOString(), name: u.name };
         state.staff_ids[u.id].push(entry);
         myUploads.push(entry);
