@@ -387,7 +387,7 @@
   // PWA cache-bust: if the stored build stamp differs from the one baked into this HTML,
   // the device is serving a stale cached version — reload once to fetch fresh content.
   (function() {
-    var BUILD = "20260628-002";
+    var BUILD = "20260629-001";
     var key = "cb_build";
     try {
       var stored = sessionStorage.getItem(key);
@@ -1065,6 +1065,26 @@ function migrateState(s) {
     });
     s._double_shift_1x_migrated = true;
   }
+  // New rule (2026-06): a double shift = the normal 8 h shift (in base salary) + 5 extra
+  // hours of OT at ×1.5 (5 × 1.5 = 7.5 h-equivalent). Recorrect any older-shape entries.
+  // Idempotent: only touches entries that aren't already 5 h × 1.5×.
+  if (!s._double_shift_5x15_migrated) {
+    s.overtime_logs.forEach(r => {
+      if (r.kind !== "double_shift") return;
+      if (r.hours === 5 && r.multiplier === 1.5) return;
+      // Recover the hourly rate: prefer the stored rate, else back it out of the old
+      // amount (old shape was 8 h × 1× → rate = amount / 8).
+      let rate = Number(r.rate) || 0;
+      if (rate <= 0 && Number(r.amount) > 0) rate = Number(r.amount) / (Number(r.hours) || 8);
+      if (rate <= 0) return;
+      r.rate = rate;
+      r.hours = 5;
+      r.multiplier = 1.5;
+      r.amount = Math.round(rate * 5 * 1.5 * 100) / 100;
+      r.note = `⏰ Double shift — 5 extra h × 1.5 OT${(r.date ? " on " + r.date : "")}`;
+    });
+    s._double_shift_5x15_migrated = true;
+  }
   s.penalties      = s.penalties      || [];
   s.maadi_deposits = s.maadi_deposits || [];
   s.overheads     = s.overheads     || [];
@@ -1661,12 +1681,24 @@ function _collectDeletions() {
 }
 // Remove any tombstoned record from every array in `state` (used after a pull, where remote
 // may still carry records another device hasn't deleted yet).
+function _stripTomb(v, tomb) {
+  if (Array.isArray(v)) return v.filter(r => !(r && r.id != null && tomb.has(r.id)));
+  // Map-of-arrays (e.g. staff_ids: uid → [photos]) — strip tombstoned ids one level deep.
+  // Tombstone ids are globally-unique uuids, so removing a matching id from any nested
+  // array is always correct; numbers / non-record arrays are left untouched.
+  if (_isPlainObj(v)) {
+    for (const kk of Object.keys(v)) {
+      if (Array.isArray(v[kk])) v[kk] = v[kk].filter(r => !(r && r.id != null && tomb.has(r.id)));
+    }
+  }
+  return v;
+}
 function _applyTombstones() {
   const tomb = _tombstoneSet();
   if (!tomb.size) return;
   for (const [k, v] of Object.entries(state)) {
-    if (k === "deleted_ids" || _NO_TOMBSTONE_KEYS.has(k) || !Array.isArray(v)) continue;
-    state[k] = v.filter(r => !(r && r.id != null && tomb.has(r.id)));
+    if (k === "deleted_ids" || _NO_TOMBSTONE_KEYS.has(k)) continue;
+    state[k] = _stripTomb(v, tomb);
   }
 }
 
@@ -1681,8 +1713,9 @@ async function _mergeChunkDoc(chunk, keys) {
   for (const k of keys) {
     let v = _mergeValue(state[k], remote[k]);
     // Strip resurrected records: the union may have re-added an id we (or another device)
-    // deleted. Never filter the tombstone list itself.
-    if (tomb && tomb.size && Array.isArray(v)) v = v.filter(r => !(r && r.id != null && tomb.has(r.id)));
+    // deleted. Handles top-level arrays and map-of-arrays (e.g. staff_ids). Never filter
+    // the tombstone list itself.
+    if (tomb && tomb.size) v = _stripTomb(v, tomb);
     doc[k] = v;
   }
   return doc;
@@ -1953,6 +1986,7 @@ async function pullFromFirestore() {
     startSuggestionsSyncListener();
     startLogShardSyncListener(); // covers shift-close, cleaning log, sign-in stamp, inventory snapshot
     startConfigSyncListener();   // salary_config, hb_incentive_config, settings
+    startHrMetaSyncListener();   // barista dates, salary snapshots, ID uploads
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -2095,6 +2129,9 @@ const startConfigSyncListener      = _makeLiveListener("config", "config (salary
   const { last_sync, last_pull, ...sigSettings } = settings || {};
   return JSON.stringify([rest, sigSettings]);
 });
+// hr_meta = barista hire/exit dates, salary snapshots, and ID uploads. Without this
+// listener those changes only appeared on another device after a full reopen.
+const startHrMetaSyncListener      = _makeLiveListener("hr_meta", "hr_meta (dates/salary snapshots/IDs)");
 // log_shard_index is updated whenever a shift-close, cleaning log, sign-in stamp,
 // or inventory snapshot is added — one listener covers all four month-sharded arrays.
 const startLogShardSyncListener    = _makeLiveListener("log_shard_index", "logs (shift-close/cleaning/signin/snapshot)");
@@ -5852,7 +5889,7 @@ routes.salaries = function (u) {
           : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, "⏳ Pending");
         const rateLabel = r.kind === "leadership_bonus" ? "👑 Leadership role bonus"
           : r.kind === "events_bonus" ? "🎪 Events bonus"
-          : r.kind === "double_shift" ? "×2 day · Double shift"
+          : r.kind === "double_shift" ? "Double shift · 5h ×1.5"
           : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
           : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
           : r.multiplier === 2   ? "×2 Holiday"
@@ -5867,6 +5904,12 @@ routes.salaries = function (u) {
           el("div", { class: "v", style: { display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"4px" } }, [
             statusPill,
             ...((!r.approved && (u.role === "owner")) ? [el("button", { class: "btn ghost", style: { fontSize:"11px", padding:"4px 10px", minHeight:"unset" }, onClick: () => { r.approved = true; r.approved_by = state._auth?.uid || null; saveState(); drawBody(); } }, "Approve")] : []),
+            ...((u.role === "owner") ? [el("button", { class: "btn bad", style: { fontSize:"11px", padding:"4px 10px", minHeight:"unset" }, onClick: () => {
+              if (!confirm(`Remove this overtime entry for ${r.barista || "this barista"}${r.date ? " ("+r.date+")" : ""}, +${money(Math.round((r.amount||0)*100)/100)}? This can't be undone.`)) return;
+              if (r.id != null) recordDeletion(r.id);
+              state.overtime_logs = (state.overtime_logs || []).filter(x => x !== r);
+              saveState(); drawBody(); toast("Overtime entry removed");
+            } }, "✕ Remove")] : []),
           ]),
         ]));
       }
@@ -6012,22 +6055,34 @@ routes.salaries = function (u) {
 
   function editSalaryConfig(person) {
     const cur = state.salary_config[person.id] || { monthly_salary: 0 };
+    const defMonth = monthInput.value || new Date().toISOString().slice(0,7);
     openPrompt({
       title: `Monthly salary — ${person.name}`,
       fields: [
         { key: "amount", label: "Monthly salary (EGP)", type: "number", value: cur.monthly_salary || 0 },
+        { key: "effective", label: "Effective from month (YYYY-MM)", type: "text", value: defMonth },
       ],
       onSubmit: (vals) => {
         const amt = Number(vals.amount) || 0;
         if (amt < 0) return toast("Enter a non-negative amount", "error");
+        const eff = (vals.effective || "").trim();
+        if (!/^\d{4}-\d{2}$/.test(eff)) return toast("Effective month must be YYYY-MM", "error");
         const s = stamp();
-        state.salary_config[person.id] = { monthly_salary: amt, updated_at: s.at, updated_by: s.by_name };
-        // Snapshot so past months are not retroactively affected
+        // Snapshot keyed to the effective month so each month is paid at its own rate.
+        // A mid-cycle raise is split automatically by the worked-days cross-check: enter
+        // the old rate effective the earlier month, then the new rate effective its month.
         state.salary_snapshots = state.salary_snapshots || {};
         state.salary_snapshots[person.id] = state.salary_snapshots[person.id] || {};
-        const curMonth = monthInput.value || new Date().toISOString().slice(0,7);
-        state.salary_snapshots[person.id][curMonth] = amt;
-        saveState(); toast(`${person.name}: salary set to ${money(amt)}`); render();
+        state.salary_snapshots[person.id][eff] = amt;
+        // salary_config holds the latest (current) rate — only advance it when the
+        // effective month is the latest snapshot, so back-dating an old rate won't
+        // overwrite a newer current salary.
+        const snaps = state.salary_snapshots[person.id];
+        const latestMonth = Object.keys(snaps).sort().pop();
+        if (eff === latestMonth) {
+          state.salary_config[person.id] = { monthly_salary: amt, updated_at: s.at, updated_by: s.by_name };
+        }
+        saveState(); toast(`${person.name}: ${money(amt)} effective ${eff}`); render();
       }
     });
   }
@@ -6686,7 +6741,9 @@ function workedDaysReport(uid, month, flatSalary) {
   const hist  = ((state.barista_dates || {})[uid] || []);
   const joins = hist.filter(e => e.type === "joined" && e.date).map(e => e.date).sort();
   const lefts = hist.filter(e => e.type === "left"   && e.date).map(e => e.date).sort();
-  const hireDate = joins.length ? joins[0] : null;
+  // Use the most recent "joined" (current tenure start) so editing the start date
+  // in Team / Dates reflects here immediately. Earlier joins are superseded.
+  const hireDate = joins.length ? joins[joins.length - 1] : null;
   const exitDate = lefts.length ? lefts[lefts.length - 1] : null;
   const hireD = hireDate ? toDate(hireDate) : null;
   const exitD = exitDate ? toDate(exitDate) : null;
@@ -8978,21 +9035,22 @@ routes.roster = function (u) {
                   const _person = (state.users || []).find(p => p.id === _uid);
                   const _sal = getSalaryForMonth(_uid, dayDateStr.slice(0, 7));
                   const _hrRate = _sal > 0 ? _sal / 30 / 8 : 0;
-                  // 2nd shift = a full extra 8 h day paid at the normal 1× rate
-                  // → working morning + night doubles the daily wage (8 h normal + 8 h OT).
-                  const _otHours = 8;
-                  const _otAmt = Math.round(_hrRate * _otHours * 100) / 100;
+                  // Double shift = the normal 8 h shift (already in base salary) + 5 extra
+                  // hours of overtime, paid at ×1.5 (5 × 1.5 = 7.5 h-equivalent of pay).
+                  const _otHours = 5;
+                  const _otMult  = 1.5;
+                  const _otAmt = Math.round(_hrRate * _otHours * _otMult * 100) / 100;
                   if (_otAmt > 0) {
                     const _sb = stamp();
                     state.overtime_logs.push({
                       id: uuid(), user_id: _uid, barista: _person ? _person.name : _uid,
                       date: dayDateStr, month: dayDateStr.slice(0, 7),
-                      hours: _otHours, rate: _hrRate, multiplier: 1, amount: _otAmt, kind: "double_shift",
-                      note: `⏰ Double shift — extra 8 h × 1× rate (doubles the day) on ${dayDateStr}`,
+                      hours: _otHours, rate: _hrRate, multiplier: _otMult, amount: _otAmt, kind: "double_shift",
+                      note: `⏰ Double shift — 5 extra h × 1.5 OT on ${dayDateStr}`,
                       approved: true,
                       by: _sb.by, by_name: _sb.by_name, at: _sb.at,
                     });
-                    toast(`${_person ? _person.name : _uid} — double shift OT auto-logged, day pay doubled (+${_otAmt} L.E.)`);
+                    toast(`${_person ? _person.name : _uid} — double shift OT auto-logged (+${_otAmt} L.E.)`);
                   }
                 }
               }
@@ -9780,9 +9838,10 @@ routes.users = function (u) {
         return;
       }
       const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", margin: "8px 0 16px" } });
-      const addCard = (url, onRemove) => {
+      const addCard = (url, onRemove, side) => {
         const card = el("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" } });
         card.appendChild(el("img", { src: url, style: { width: "90px", height: "64px", objectFit: "cover", borderRadius: "6px", border: "1px solid var(--border,#ddd)" } }));
+        if (side) card.appendChild(el("div", { class: "muted small" }, side === "front" ? "Front" : "Back"));
         const linkRow = el("div", { style: { display: "flex", gap: "6px" } });
         linkRow.appendChild(el("a", { href: url, target: "_blank", class: "btn ghost", style: { fontSize: "12px", padding: "2px 8px" } }, "View"));
         if (isOwner && onRemove) {
@@ -9793,8 +9852,9 @@ routes.users = function (u) {
       };
       entries.forEach(entry => addCard(entry.url, () => {
         state.staff_ids[usr.uid] = (state.staff_ids[usr.uid] || []).filter(x => x.id !== entry.id);
+        if (entry.id != null) recordDeletion(entry.id); // propagate the deletion across devices
         saveState(); toast("ID photo removed"); renderPhotos();
-      }));
+      }, entry.side));
       legacy.forEach(l => addCard(l.url, () => {
         usr.id_photo_urls = (usr.id_photo_urls || []).filter((_, j) => j !== l.legacyIndex);
         saveState(); toast("ID photo removed"); renderPhotos();
@@ -9808,50 +9868,64 @@ routes.users = function (u) {
       const upCard = el("div", { class: "card", style: { marginBottom: "12px" } });
       upCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "8px" } }, "\ud83d\udcce Upload ID for " + usr.name.split(" ")[0]));
 
-      const fileInput = el("input", { type: "file", accept: "image/*" });
-      fileInput.setAttribute("multiple", "true");
-      fileInput.style.display = "none";
-      const previewGrid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", margin: "0 0 10px" } });
-      let selectedBlobs = [];
+      upCard.appendChild(el("div", { class: "muted small", style: { margin: "0 0 10px" } }, "Upload the front and back of the ID."));
+      const picks = {};      // side -> File
+      const resetters = [];  // clear each slot after save
 
-      const pickBtn = el("button", { class: "btn secondary" }, "\ud83d\udcf7 Choose photos");
-      pickBtn.addEventListener("click", () => fileInput.click());
-      fileInput.addEventListener("change", () => {
-        selectedBlobs = [...fileInput.files].filter(f => f.type.startsWith("image/"));
-        previewGrid.innerHTML = "";
-        for (const f of selectedBlobs) {
-          previewGrid.appendChild(el("img", { src: URL.createObjectURL(f),
-            style: { width: "80px", height: "80px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)" } }));
-        }
-        fileInput.value = "";
-      });
+      function idSlot(side, label) {
+        const card = el("div", { style: { flex: "1 1 140px", border: "1px dashed var(--border)", borderRadius: "10px", padding: "10px", textAlign: "center" } });
+        card.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", marginBottom: "6px" } }, label));
+        const input = el("input", { type: "file", accept: "image/*" });
+        input.setAttribute("capture", "environment");
+        input.style.display = "none";
+        const preview = el("div", { style: { minHeight: "70px", marginBottom: "6px", display: "flex", alignItems: "center", justifyContent: "center" } });
+        const setEmpty = () => { preview.innerHTML = ""; preview.appendChild(el("div", { class: "muted small" }, "No image")); };
+        setEmpty();
+        const btn = el("button", { class: "btn secondary", style: { width: "100%" } }, "\ud83d\udcf7 Choose / capture");
+        btn.addEventListener("click", () => input.click());
+        input.addEventListener("change", () => {
+          const f = [...input.files].find(x => x.type.startsWith("image/"));
+          if (!f) return;
+          picks[side] = f;
+          preview.innerHTML = "";
+          preview.appendChild(el("img", { src: URL.createObjectURL(f),
+            style: { width: "100px", height: "70px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)" } }));
+          input.value = "";
+        });
+        resetters.push(() => { delete picks[side]; setEmpty(); });
+        card.appendChild(preview); card.appendChild(btn); card.appendChild(input);
+        return card;
+      }
+
+      const slots = el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" } });
+      slots.appendChild(idSlot("front", "\ud83e\udeaa Front of ID"));
+      slots.appendChild(idSlot("back", "\ud83d\udd04 Back of ID"));
+      upCard.appendChild(slots);
 
       const saveBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "\u2b06 Upload & Save");
       saveBtn.addEventListener("click", async () => {
-        if (!selectedBlobs.length) return toast("Choose at least one photo first", "warn");
+        const sides = ["front", "back"].filter(s => picks[s]);
+        if (!sides.length) return toast("Choose the front and/or back first", "warn");
         saveBtn.disabled = true; saveBtn.textContent = "Uploading\u2026";
         state.staff_ids[usr.uid] = state.staff_ids[usr.uid] || [];
         let ok = 0;
-        for (const blob of selectedBlobs) {
+        for (const side of sides) {
           try {
-            const filename = `ID_${(usr.name || "staff").replace(/\s+/g, "_")}`;
-            const data = await CloudPhoto.uploadPhoto(blob, filename);
-            state.staff_ids[usr.uid].push({ id: uuid(), url: data.secure_url, at: new Date().toISOString(), name: usr.name, by: u.name });
+            const filename = `ID_${(usr.name || "staff").replace(/\s+/g, "_")}_${side}`;
+            const data = await CloudPhoto.uploadPhoto(picks[side], filename);
+            state.staff_ids[usr.uid].push({ id: uuid(), url: data.secure_url, side, at: new Date().toISOString(), name: usr.name, by: u.name });
             ok++;
           } catch (e) { console.warn("Owner ID upload error:", e); }
         }
         saveBtn.disabled = false; saveBtn.textContent = "\u2b06 Upload & Save";
         if (ok > 0) {
-          saveState(); selectedBlobs = []; previewGrid.innerHTML = ""; renderPhotos();
+          saveState(); resetters.forEach(fn => fn()); renderPhotos();
           toast(`${ok} image${ok > 1 ? "s" : ""} saved`);
         } else {
           toast("Upload failed \u2014 check your connection", "error");
         }
       });
 
-      upCard.appendChild(fileInput);
-      upCard.appendChild(pickBtn);
-      upCard.appendChild(previewGrid);
       upCard.appendChild(saveBtn);
       sheet.appendChild(upCard);
     }
@@ -11502,19 +11576,31 @@ routes.leave_new = function (u) {
   ]);
   form.appendChild(typeSel);
 
-  // Dates — sick leave defaults to today with no minimum; annual requires 7-day notice
-  const fromLabel = el("div", { class: "label" }, `From date (earliest for annual: ${minAnnual})`);
+  // Dates — sick leave defaults to today with no minimum; annual requires 7-day notice.
+  // Owner / head barista may back-date leave for anyone (no minimum, no 7-day rule).
+  const initFrom = canRequestForOthers ? today : minAnnual;
+  const fromLabel = el("div", { class: "label" },
+    canRequestForOthers ? "From date (retroactive allowed)" : `From date (earliest for annual: ${minAnnual})`);
   form.appendChild(fromLabel);
-  const fromIn = el("input", { type: "date", min: minAnnual, value: minAnnual });
+  const fromIn = el("input", { type: "date", value: initFrom });
+  if (!canRequestForOthers) fromIn.min = minAnnual;
   form.appendChild(fromIn);
 
   form.appendChild(el("label", {}, "To date"));
-  const toIn = el("input", { type: "date", min: minAnnual, value: minAnnual });
+  const toIn = el("input", { type: "date", value: initFrom });
+  if (!canRequestForOthers) toIn.min = minAnnual;
   form.appendChild(toIn);
 
   // Adjust date constraints when type changes
   function updateDateConstraints() {
     const isSick = typeSel.value === "sick";
+    if (canRequestForOthers) {
+      // Privileged: no date floor — any past or future date is allowed
+      fromIn.removeAttribute("min");
+      toIn.removeAttribute("min");
+      fromLabel.textContent = "From date (retroactive allowed)";
+      return;
+    }
     const minVal = isSick ? today : minAnnual;
     fromIn.min = minVal;
     toIn.min   = minVal;
@@ -11550,7 +11636,7 @@ routes.leave_new = function (u) {
     if (!from || !to) return toast("Please fill in both dates", "error");
     if (to < from)    return toast("End date can't be before start date", "error");
     const isSick = typeSel.value === "sick";
-    if (!isSick && from < minAnnual) return toast(`Annual leave must start at least 7 days from today (${minAnnual})`, "error");
+    if (!canRequestForOthers && !isSick && from < minAnnual) return toast(`Annual leave must start at least 7 days from today (${minAnnual})`, "error");
 
     const person = canRequestForOthers
       ? state.users.find(x => x.id === targetUserId)
@@ -11585,6 +11671,7 @@ routes.leave_new = function (u) {
       reviewed_by_name: isSick ? s.by_name : null,
       reviewed_at: isSick ? s.at : null,
       review_note: isSick ? "Auto-approved" : "",
+      updated_at: s.at, // last-edit-wins key so a stale device can't revert an approval
     };
     state.leaves.push(leave);
 
@@ -11775,6 +11862,7 @@ routes.leave_list = function (u) {
             leave.reviewed_by = s.by;
             leave.reviewed_by_name = s.by_name;
             leave.reviewed_at = s.at;
+            leave.updated_at = s.at;
             leave.review_note = note;
             saveState();
             // Notify barista by email
@@ -11805,6 +11893,7 @@ routes.leave_list = function (u) {
             leave.reviewed_by = s.by;
             leave.reviewed_by_name = s.by_name;
             leave.reviewed_at = s.at;
+            leave.updated_at = s.at;
             leave.review_note = note;
             removeSickDeduction();
             saveState();
@@ -11826,6 +11915,7 @@ routes.leave_list = function (u) {
             leave.reviewed_by = s.by;
             leave.reviewed_by_name = s.by_name;
             leave.reviewed_at = s.at;
+            leave.updated_at = s.at;
             leave.review_note = "Cancelled";
             removeSickDeduction();
             saveState();
@@ -15395,7 +15485,7 @@ routes.my_hr = function(u, params) {
       const tb = el("tbody", {});
       otList.forEach(r => {
         const typeLabel = r.kind === "events_bonus" ? "🎪 Events bonus"
-          : r.kind === "double_shift" ? "×2 day · Double shift"
+          : r.kind === "double_shift" ? "Double shift · 5h ×1.5"
           : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
           : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
           : r.multiplier === 2   ? "×2 Holiday"
@@ -16263,11 +16353,16 @@ routes.my_id = function(u) {
         const idx = myUploads.findIndex(x => x.id === entry.id);
         if (idx !== -1) myUploads.splice(idx, 1);
         state.staff_ids[u.id] = myUploads.slice();
+        if (entry.id != null) recordDeletion(entry.id); // propagate the deletion across devices
         saveState();
         renderGallery();
       });
       thumb.appendChild(img);
       thumb.appendChild(del);
+      if (entry.side) {
+        thumb.appendChild(el("div", { class: "muted small", style: { textAlign: "center", marginTop: "2px" } },
+          entry.side === "front" ? "Front" : "Back"));
+      }
       grid.appendChild(thumb);
     }
     gallery.appendChild(grid);
@@ -16276,47 +16371,60 @@ routes.my_id = function(u) {
   renderGallery();
   wrap.appendChild(gallery);
 
-  // ── Upload section ──
+  // ── Upload section: explicit Front + Back slots ──
   const uploadCard = el("div", { class: "card" });
-  uploadCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "10px" } }, "📎 Add ID images"));
+  uploadCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } }, "📎 Add ID images"));
+  uploadCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    "Upload the front and back of your government ID."));
 
-  const fileInput = el("input", { type: "file", accept: "image/*" });
-  fileInput.setAttribute("multiple", "true");
-  fileInput.style.display = "none";
+  const picks = {};      // side -> File
+  const resetters = [];  // clear each slot's preview after save
 
-  const previewGrid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" } });
+  function idSlot(side, label) {
+    const card = el("div", { style: { flex: "1 1 140px", border: "1px dashed var(--border)", borderRadius: "10px", padding: "10px", textAlign: "center" } });
+    card.appendChild(el("div", { style: { fontWeight: "600", fontSize: "13px", marginBottom: "6px" } }, label));
+    const input = el("input", { type: "file", accept: "image/*" });
+    input.setAttribute("capture", "environment");
+    input.style.display = "none";
+    const preview = el("div", { style: { minHeight: "70px", marginBottom: "6px", display: "flex", alignItems: "center", justifyContent: "center" } });
+    const setEmpty = () => { preview.innerHTML = ""; preview.appendChild(el("div", { class: "muted small" }, "No image")); };
+    setEmpty();
+    const btn = el("button", { class: "btn secondary", style: { width: "100%" } }, "📷 Choose / capture");
+    btn.addEventListener("click", () => input.click());
+    input.addEventListener("change", () => {
+      const f = [...input.files].find(x => x.type.startsWith("image/"));
+      if (!f) return;
+      picks[side] = f;
+      preview.innerHTML = "";
+      preview.appendChild(el("img", { src: URL.createObjectURL(f),
+        style: { width: "100px", height: "70px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--border)" } }));
+      input.value = "";
+    });
+    resetters.push(() => { delete picks[side]; setEmpty(); });
+    card.appendChild(preview);
+    card.appendChild(btn);
+    card.appendChild(input);
+    return card;
+  }
 
-  const pickBtn = el("button", { class: "btn secondary" }, "📷 Choose photos");
-  pickBtn.addEventListener("click", () => fileInput.click());
-
-  let selectedBlobs = [];
-
-  fileInput.addEventListener("change", () => {
-    selectedBlobs = [...fileInput.files].filter(f => f.type.startsWith("image/"));
-    previewGrid.innerHTML = "";
-    for (const f of selectedBlobs) {
-      const img = el("img", {
-        src: URL.createObjectURL(f),
-        style: { width: "80px", height: "80px", objectFit: "cover", borderRadius: "8px",
-                 border: "1px solid var(--border)" },
-      });
-      previewGrid.appendChild(img);
-    }
-    fileInput.value = "";
-  });
+  const slots = el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" } });
+  slots.appendChild(idSlot("front", "🪪 Front of ID"));
+  slots.appendChild(idSlot("back", "🔄 Back of ID"));
+  uploadCard.appendChild(slots);
 
   const saveBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "⬆ Upload & Save");
   saveBtn.addEventListener("click", async () => {
-    if (!selectedBlobs.length) return toast("Choose at least one photo first", "warn");
+    const sides = ["front", "back"].filter(s => picks[s]);
+    if (!sides.length) return toast("Choose the front and/or back first", "warn");
     saveBtn.disabled = true;
     saveBtn.textContent = "Uploading…";
     if (!state.staff_ids[u.id]) state.staff_ids[u.id] = [];
     let ok = 0;
-    for (const blob of selectedBlobs) {
+    for (const side of sides) {
       try {
-        const filename = `ID_${u.name.replace(/\s+/g, "_")}`;
-        const data = await CloudPhoto.uploadPhoto(blob, filename);
-        const entry = { id: uuid(), url: data.secure_url, at: new Date().toISOString(), name: u.name };
+        const filename = `ID_${u.name.replace(/\s+/g, "_")}_${side}`;
+        const data = await CloudPhoto.uploadPhoto(picks[side], filename);
+        const entry = { id: uuid(), url: data.secure_url, side, at: new Date().toISOString(), name: u.name };
         state.staff_ids[u.id].push(entry);
         myUploads.push(entry);
         ok++;
@@ -16328,8 +16436,7 @@ routes.my_id = function(u) {
     saveBtn.textContent = "⬆ Upload & Save";
     if (ok > 0) {
       saveState();
-      selectedBlobs = [];
-      previewGrid.innerHTML = "";
+      resetters.forEach(fn => fn());
       renderGallery();
       toast(`${ok} image${ok > 1 ? "s" : ""} saved`);
     } else {
@@ -16337,9 +16444,6 @@ routes.my_id = function(u) {
     }
   });
 
-  uploadCard.appendChild(pickBtn);
-  uploadCard.appendChild(previewGrid);
-  uploadCard.appendChild(fileInput);
   uploadCard.appendChild(saveBtn);
   wrap.appendChild(uploadCard);
   wrap.appendChild(btnBack());
