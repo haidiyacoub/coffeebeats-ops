@@ -1316,6 +1316,11 @@ let syncTimer = null;
 let syncInFlight = false;
 let pendingWrites = 0;
 const SYNC_DIRTY_KEY = "cb_ops_sync_dirty_v1";
+// Set when autoPullOnStart() has to skip its pull because the initial flush failed.
+// Once a later retry (via queueSync -> doSync) actually clears pendingWrites, doSync()
+// checks this flag and runs the deferred pull — so the user never has to reload the
+// page just because their very first sync attempt hit a transient network blip.
+let _pullPendingAfterFlush = false;
 
 // Each chunk key maps to the state keys it owns.
 // NOTE: `users` is no longer synced here — staff come from Firestore `staff_public`
@@ -1828,7 +1833,25 @@ async function doSync() {
     _authRetryCount = 0;
     try { localStorage.setItem(SYNC_DIRTY_KEY, String(pendingWrites)); } catch(e) {}
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    if (pendingWrites === 0) updateSyncBadge("synced");
+    if (pendingWrites === 0) {
+      updateSyncBadge("synced");
+      // The very first pull-on-start was skipped because this flush initially failed.
+      // Now that everything local has actually reached Firestore, run the pull we owe
+      // the user — otherwise staffDir and other pulled collections stay empty/stale
+      // for the rest of the session until they manually reload.
+      if (_pullPendingAfterFlush) {
+        _pullPendingAfterFlush = false;
+        pullFromFirestore().then(result => {
+          if (result.ok) {
+            markClean();
+            console.log("Deferred auto-pull from Firestore succeeded after delayed flush");
+            render();
+          } else {
+            console.warn("Deferred auto-pull failed:", result.err);
+          }
+        });
+      }
+    }
     else { updateSyncBadge("syncing"); queueSync(); }
   } catch (e) {
     const code = e.code || e.name || "unknown";
@@ -2164,6 +2187,7 @@ async function autoPullOnStart() {
       console.warn("Sync flush failed — skipping Firestore pull to preserve local changes.");
       updateSyncBadge("error", "Changes not saved yet — check your connection. Retrying…");
       showSyncWarningBanner();
+      _pullPendingAfterFlush = true; // doSync() will run the deferred pull once the retry succeeds
       queueSync();
       return;
     }
