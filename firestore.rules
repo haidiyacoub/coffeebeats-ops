@@ -30,6 +30,12 @@ service cloud.firestore {
       allow write: if false; // managed exclusively via Cloud Functions
     }
 
+    // App-wide security config (e.g. master PIN hash) — never exposed to clients.
+    // All reads/writes go through Cloud Functions (Admin SDK bypasses these rules)
+    match /config/{doc} {
+      allow read, write: if false;
+    }
+
     // Customer reviews from coffeebeats.art — public write, staff read
     match /reviews/{docId} {
       allow create: if true;

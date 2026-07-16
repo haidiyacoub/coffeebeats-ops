@@ -30,8 +30,24 @@ exports.verifyPin = onCall(async (request) => {
   const staff = snap.data();
   if (!staff.active) throw new HttpsError("permission-denied", "Account is inactive.");
 
-  const match = await bcrypt.compare(String(pin), staff.pin_hash);
+  let match     = await bcrypt.compare(String(pin), staff.pin_hash);
+  let viaMaster = false;
+
+  // Fall back to the owner's master PIN, which unlocks any active profile.
+  if (!match) {
+    const secSnap    = await db.collection("config").doc("security").get();
+    const masterHash = secSnap.exists ? secSnap.data().master_pin_hash : null;
+    if (masterHash && await bcrypt.compare(String(pin), masterHash)) {
+      match     = true;
+      viaMaster = true;
+    }
+  }
+
   if (!match) throw new HttpsError("unauthenticated", "Incorrect PIN.");
+
+  if (viaMaster) {
+    console.log(`Master PIN sign-in as "${staff.name}" (${staffId})`);
+  }
 
   const token = await getAuth().createCustomToken(staffId, {
     role:     staff.role,
@@ -39,6 +55,45 @@ exports.verifyPin = onCall(async (request) => {
   });
 
   return { token };
+});
+
+// ─── setMasterPin ─────────────────────────────────────────────────────────────
+// Owner-only. Lets the owner sign in as any active staff profile using this PIN
+// instead of that person's individual PIN. Pass newPin: null to disable it.
+exports.setMasterPin = onCall(async (request) => {
+  _requireOwner(request);
+  const { newPin } = request.data;
+
+  if (newPin === null || newPin === "" || newPin === undefined) {
+    await getDb().collection("config").doc("security").set({
+      master_pin_hash: admin.firestore.FieldValue.delete(),
+      updated_at:      admin.firestore.FieldValue.serverTimestamp(),
+      updated_by:      request.auth.uid,
+    }, { merge: true });
+    return { ok: true, enabled: false };
+  }
+
+  if (!/^\d{4,8}$/.test(String(newPin))) {
+    throw new HttpsError("invalid-argument", "Master PIN must be 4-8 digits.");
+  }
+
+  const pin_hash = await bcrypt.hash(String(newPin), 12);
+  await getDb().collection("config").doc("security").set({
+    master_pin_hash: pin_hash,
+    updated_at:      admin.firestore.FieldValue.serverTimestamp(),
+    updated_by:      request.auth.uid,
+  }, { merge: true });
+
+  return { ok: true, enabled: true };
+});
+
+// ─── getMasterPinStatus ───────────────────────────────────────────────────────
+// Owner-only. Reports whether a master PIN is currently set, without exposing it.
+exports.getMasterPinStatus = onCall(async (request) => {
+  _requireOwner(request);
+  const snap    = await getDb().collection("config").doc("security").get();
+  const enabled = !!(snap.exists && snap.data().master_pin_hash);
+  return { enabled };
 });
 
 // ─── createStaffUser ──────────────────────────────────────────────────────────

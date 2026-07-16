@@ -2305,6 +2305,14 @@ function stamp() {
   return { by: u?.id || "anon", by_name: u?.name || "—", at: now(), device: deviceId };
 }
 
+// Detects a phone/tablet browser so photo-attachment fields can offer a
+// dedicated "take a photo" camera entry point alongside the gallery picker.
+function isMobileDevice() {
+  const ua = navigator.userAgent || navigator.vendor || "";
+  return /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua)
+    || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || ""));
+}
+
 // ----- running stock (computed) -----
 function computeStock(branch) {
   // start from latest snapshot
@@ -2316,6 +2324,7 @@ function computeStock(branch) {
   const tsAfter = last ? last.created_at : "0000";
   // apply purchases & waste recorded AFTER the snapshot
   for (const p of state.purchases) {
+    if (p.is_test) continue;
     if (p.branch !== branch) continue;
     if (p.at <= tsAfter) continue;
     for (const ln of p.lines) {
@@ -2325,6 +2334,7 @@ function computeStock(branch) {
     }
   }
   for (const w of state.waste) {
+    if (w.is_test) continue;
     if (w.branch !== branch) continue;
     if (w.at <= tsAfter) continue;
     if (w.inv_item_id && stock[w.inv_item_id] != null) {
@@ -2364,6 +2374,7 @@ function computeDailyUsage(itemId, branch) {
   // Purchases in the window that added this item to this branch
   let purchased = 0;
   for (const p of state.purchases) {
+    if (p.is_test) continue;
     if (p.branch !== branch) continue;
     if (p.at <= prev.created_at || p.at > curr.created_at) continue;
     for (const ln of p.lines) {
@@ -2435,7 +2446,7 @@ function scanAndNotifyLowStock() {
 
 // Returns true if item has been logged in the purchase log since alertDate.
 function isReorderResolved(itemId, alertDate) {
-  return (state.purchases || []).some(p => {
+  return (state.purchases || []).filter(notTest).some(p => {
     if ((p.date || p.at || "").slice(0,10) < alertDate) return false;
     return (p.lines || []).some(l => l.inv_item_id === itemId);
   });
@@ -3122,7 +3133,7 @@ function invParseRecipeBOM(wb) {
 }
 
 function pettyCashBalance(branch) {
-  const rows = state.petty_cash.filter(p => p.branch === branch)
+  const rows = state.petty_cash.filter(p => notTest(p) && p.branch === branch)
     .sort((a,b) => a.at.localeCompare(b.at));
   const last = rows[rows.length - 1];
   return last ? Number(last.balance_after) || 0 : 0;
@@ -3153,6 +3164,24 @@ function setUiLang(l) {
 }
 // Pick the Arabic string when uiLang is "ar", else the English string.
 function T(en, ar) { return uiLang === "ar" ? ar : en; }
+
+// ----- Test Mode (per-device toggle; not synced) -----
+// While on, new Shift Close / Waste entries are tagged is_test:true so they show up
+// (with a TEST badge) in their own list but are excluded from stock math, KPI scoring,
+// dashboards, and CSV/backup exports. Lets staff try the forms without polluting real data.
+const TEST_MODE_KEY = "cb_test_mode";
+let testMode = false;
+try { testMode = localStorage.getItem(TEST_MODE_KEY) === "1"; } catch(e) {}
+function isTestMode() { return testMode; }
+function setTestMode(on) {
+  testMode = !!on;
+  try { localStorage.setItem(TEST_MODE_KEY, testMode ? "1" : "0"); } catch(e) {}
+  render();
+}
+function notTest(r) { return !(r && r.is_test); }
+function testBadge() {
+  return el("span", { style: { fontSize: "11px", fontWeight: "800", color: "#92400e", background: "#fef3c7", padding: "1px 6px", borderRadius: "999px" } }, T("TEST","تجربة"));
+}
 
 // ----- role access policy -----
 // Barista: inventory count + record waste + record purchases only
@@ -3255,9 +3284,28 @@ function topbar(u) {
       title: "Switch language / تبديل اللغة",
     }, uiLang === "ar" ? "EN 🇬🇧" : "AR 🇪🇬"));
   }
+  children.push(el("button", {
+    class: "chip",
+    style: testMode
+      ? { fontWeight: "800", background: "#f59e0b", color: "#1a1a1a", border: "1px solid #b45309" }
+      : { fontWeight: "600" },
+    onClick: () => setTestMode(!testMode),
+    title: T("New Shift Close / Waste entries won't count toward real data while this is on.",
+             "لن تُحتسب سجلات إغلاق الشيفت/الهدر الجديدة كبيانات حقيقية أثناء التفعيل."),
+  }, testMode ? T("🧪 Test Mode: ON", "🧪 وضع التجربة: مفعّل") : T("🧪 Test Mode", "🧪 وضع التجربة")));
   children.push(el("span", { class: "chip" }, roleLabel));
   children.push(el("button", { class: "chip", onClick: () => { if (confirm("Sign out?")) auth.signOut(); } }, "Logout"));
   const t = el("div", { class: "topbar" }, children);
+  if (testMode) {
+    t.style.flexWrap = "wrap";
+    t.appendChild(el("div", {
+      style: {
+        flexBasis: "100%", background: "#f59e0b", color: "#1a1a1a", fontWeight: "700",
+        fontSize: "12px", textAlign: "center", padding: "4px 8px", borderRadius: "8px", marginTop: "8px",
+      },
+    }, T("🧪 TEST MODE — new Shift Close / Waste entries will NOT count toward real data",
+         "🧪 وضع التجربة — سجلات إغلاق الشيفت/الهدر الجديدة لن تُحتسب كبيانات حقيقية")));
+  }
   return t;
 }
 
@@ -3671,8 +3719,8 @@ routes.home = function (u) {
 
   // quick today stats
   const today = fmtDay(now());
-  const todayWaste = state.waste.filter(w => fmtDay(w.at) === today);
-  const todayPurch = state.purchases.filter(p => fmtDay(p.at) === today);
+  const todayWaste = state.waste.filter(w => notTest(w) && fmtDay(w.at) === today);
+  const todayPurch = state.purchases.filter(p => notTest(p) && fmtDay(p.at) === today);
   const kpis = el("div", { class: "grid c2", style: { marginTop: "16px" } }, [
     el("div", { class: "card" }, [
       el("div", { class: "muted" }, "Today's waste entries"),
@@ -3728,6 +3776,7 @@ routes.waste_new = function (u) {
           inv_item_id: null, item_name: "— No waste —", unit: "",
           qty_canonical: 0,
           reason: "No waste", note: "Barista confirmed: no waste this shift.",
+          ...(isTestMode() ? { is_test: true } : {}),
         });
         saveState();
         toast(T("✓ Clear shift logged — no waste recorded","✓ تم تسجيل شيفت نظيف — لا يوجد هدر"));
@@ -3746,11 +3795,11 @@ routes.waste_new = function (u) {
   const search = el("input", { type: "search", placeholder: T("Search item (milk, coffee, caramel…)","ابحث عن صنف (حليب، قهوة، كراميل…)") });
   wrap.appendChild(el("div", { class: "search" }, [search]));
 
-  const pickBox = el("div", { class: "list" });
-  wrap.appendChild(pickBox);
-
   const bottom = el("div", { class: "card", style: { marginTop: "14px" } });
   wrap.appendChild(bottom);
+
+  const pickBox = el("div", { class: "list", style: { marginTop: "14px" } });
+  wrap.appendChild(pickBox);
 
   const REASON_LABELS = {
     "سكب": T("Spilled","سكب"),
@@ -3765,6 +3814,7 @@ routes.waste_new = function (u) {
     const q = search.value.trim().toLowerCase();
     const stock = computeStock(branch);
     const list = state.items.filter(i => i.active && (q === "" || i.name.toLowerCase().includes(q)));
+    list.sort((a, b) => (a.id === itemId ? -1 : b.id === itemId ? 1 : 0));
     list.slice(0, 50).forEach(it => {
       const row = el("div", {
         class: "row",
@@ -3782,7 +3832,7 @@ routes.waste_new = function (u) {
 
     bottom.innerHTML = "";
     if (!itemId) {
-      bottom.appendChild(el("div", { class: "muted" }, T("Pick an item above.","اختر صنفاً أعلاه.")));
+      bottom.appendChild(el("div", { class: "muted" }, T("Pick an item below.","اختر صنفاً أدناه.")));
       return;
     }
     const it = state.items.find(x => x.id === itemId);
@@ -3843,6 +3893,7 @@ routes.waste_new = function (u) {
       reason, note,
       photos: photoUrls,
       image_url: photoUrls[0] || "",
+      ...(isTestMode() ? { is_test: true } : {}),
     });
     saveState();
     // KPI waste score is derived live in kpiGetUserScores() from state.waste — no extra storage needed
@@ -3867,6 +3918,7 @@ routes.waste_list = function (u) {
     const titleNode = el("div", { class: "title" });
     titleNode.appendChild(document.createTextNode(`${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`));
     if (photoCount) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "12px", color: "var(--ok)", fontWeight: "600" } }, `📷 ${photoCount}`));
+    if (w.is_test) titleNode.appendChild(el("span", { style: { marginLeft: "6px", fontSize: "11px", fontWeight: "800", color: "#92400e", background: "#fef3c7", padding: "1px 6px", borderRadius: "999px" } }, T("TEST","تجربة")));
     const growParts = [
       titleNode,
       el("div", { class: "sub" }, `${w.branch} · ${w.reason}${w.note ? ` · ${w.note}` : ""}`),
@@ -4117,6 +4169,7 @@ routes.shift_close_new = function (u) {
         discount_photo_ids: discountPhotoIds,
         discount_photo_names: dpNames,
         discount_drive_ids: discountPhotoField ? discountPhotoField.getDriveIds() : [],
+        ...(isTestMode() ? { is_test: true } : {}),
       });
       saveState();
       if (dpNames.length) {
@@ -4153,9 +4206,12 @@ routes.shift_close_list = function (u) {
     const mgmt = (c.mgmt_drinks||[]).map(d => `${d.who}: ${d.drink}`).join(" · ") || "—";
     const baDrinks = (c.barista_allowance_drinks||[]).map(d => `${d.who||"?"}:${d.drink}`).join(" · ") || (c.barista_allowance || "—");
     list.appendChild(el("div", { class: "card", style: { marginBottom: "8px" } }, [
-      el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
+      el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "6px" } }, [
         el("div", { style: { fontWeight: "600" } }, `${c.branch} · ${c.date}${c.closing_barista ? " · " + c.closing_barista : ""}`),
-        el("div", { class: "pill" }, T(`${money(total)} total`, `${money(total)} إجمالي`)),
+        el("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, [
+          c.is_test ? el("span", { style: { fontSize: "11px", fontWeight: "800", color: "#92400e", background: "#fef3c7", padding: "1px 6px", borderRadius: "999px" } }, T("TEST","تجربة")) : null,
+          el("div", { class: "pill" }, T(`${money(total)} total`, `${money(total)} إجمالي`)),
+        ]),
       ]),
       el("div", { class: "muted small", style: { marginTop: "4px" } }, [
         T(`Cash ${money(c.cash||0)} · Instapay ${money(c.instapay||0)} · CC ${money(c.cc||0)} · Talabat cr ${money(c.talabat_credit||0)} · Talabat ca ${money(c.talabat_cash||0)}`,
@@ -5410,25 +5466,30 @@ routes.purchase_new = function (u) {
       receipt_photo_names: photoNames,
       receipt_drive_ids: receiptPhotoField.getDriveIds(),
       image_url: (receiptPhotoField.getCloudUrls().filter(Boolean)[0]) || "",
+      ...(isTestMode() ? { is_test: true } : {}),
     };
     state.purchases.push(purch);
-    // ledger side-effects
+    // ledger side-effects — also tagged is_test so a test purchase never moves the real
+    // petty cash / bank balance (pettyCashBalance and the bank total both filter these out).
     if (paid_by === "petty_cash") {
       const bal = pettyCashBalance(branch);
       state.petty_cash.push({
         id: uuid(), branch, date, type: "purchase", amount: -total,
         balance_after: bal - total, ref: purch.id,
         by: s.by, by_name: s.by_name, at: s.at, note: `Purchase from ${supplier}`,
+        ...(isTestMode() ? { is_test: true } : {}),
       });
     } else if (paid_by === "owner_bank") {
       state.bank_ledger.push({
         id: uuid(), date, amount: -total, supplier, ref: purch.id, type: "purchase_payment",
         by: s.by, by_name: s.by_name, at: s.at, note: `Bank transfer to ${supplier}`,
+        ...(isTestMode() ? { is_test: true } : {}),
       });
     } else if (paid_by === "credit_card") {
       state.bank_ledger.push({
         id: uuid(), date, amount: -total, supplier, ref: purch.id, type: "purchase_credit_card",
         by: s.by, by_name: s.by_name, at: s.at, note: `Credit card payment to ${supplier}`,
+        ...(isTestMode() ? { is_test: true } : {}),
       });
     }
     saveState();
@@ -5457,7 +5518,7 @@ routes.purchase_list = function (u) {
   for (const p of rows) {
     list.appendChild(el("div", { class: "row", onClick: () => showPurchase(p) }, [
       el("div", { class: "grow" }, [
-        el("div", { class: "title" }, `${p.supplier} — ${money(p.total)}`),
+        el("div", { class: "title" }, [`${p.supplier} — ${money(p.total)}`, p.is_test ? testBadge() : null]),
         el("div", { class: "sub" }, T(`${p.branch} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`, `${p.branch} · ${p.date} · ${p.lines.length} بند · ${p.paid_by}`)),
         el("div", { class: "sub" }, T(`by ${p.by_name} · ${fmtDate(p.at)}`, `بواسطة ${p.by_name} · ${fmtDate(p.at)}`)),
       ]),
@@ -5553,6 +5614,7 @@ function checkNoStampAlert() {
     if (state.settings.no_stamp_alerted[alertKey]) continue; // already fired today
 
     const hasStamp = (state.signin_stamps || []).some(s =>
+      notTest(s) &&
       s.by === entry.user_id &&
       localISODate(new Date(s.at)) === todayStr &&
       (s.branch || "").toLowerCase() === branch
@@ -5607,6 +5669,7 @@ function weeklyExpenditure(scope /* "maadi" | "zawya" | "combined" */) {
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   return state.petty_cash
     .filter(p => {
+      if (p.is_test) return false;
       if ((p.at || "") < weekAgo) return false;
       if ((Number(p.amount) || 0) >= 0) return false; // only outflows
       if (scope === "combined") return true;
@@ -7595,7 +7658,7 @@ routes.bank = function (u) {
 
   // ── Bank entries only (exclude petty_cash_topup) ────────────
   const BANK_TYPES = new Set(["purchase_payment","purchase_credit_card","manual","maadi_deposit"]);
-  const allSorted  = state.bank_ledger.slice().sort((a,b) => b.at.localeCompare(a.at));
+  const allSorted  = state.bank_ledger.filter(notTest).sort((a,b) => b.at.localeCompare(a.at));
   const bankRows   = allSorted.filter(r => r.type !== "petty_cash_topup").slice(0, 200);
   const topupRows  = allSorted.filter(r => r.type === "petty_cash_topup").slice(0, 200);
   const bankTotal  = bankRows.reduce((s,r) => s + (Number(r.amount)||0), 0);
@@ -10304,11 +10367,11 @@ routes.dashboard = function (u, params) {
       return branchKey(s.branch) === branch && inRange(s.date) && !(branch === "zawya" && isZawyaExcluded(s.category, s.item));
     });
     const waste = branch === "events"
-      ? state.waste.filter(w => branchKey(w.branch) === "maadi" && _isEventDay((w.at||"").slice(0,10)))
-      : state.waste.filter(w => branchKey(w.branch) === branch && (w.at||"").slice(0,7) >= monthFrom && (w.at||"").slice(0,7) <= monthTo);
+      ? state.waste.filter(w => notTest(w) && branchKey(w.branch) === "maadi" && _isEventDay((w.at||"").slice(0,10)))
+      : state.waste.filter(w => notTest(w) && branchKey(w.branch) === branch && (w.at||"").slice(0,7) >= monthFrom && (w.at||"").slice(0,7) <= monthTo);
     const purch = branch === "events"
-      ? state.purchases.filter(p => branchKey(p.branch) === "maadi" && _isEventDay(p.date))
-      : state.purchases.filter(p => branchKey(p.branch) === branch && inRange(p.date));
+      ? state.purchases.filter(p => notTest(p) && branchKey(p.branch) === "maadi" && _isEventDay(p.date))
+      : state.purchases.filter(p => notTest(p) && branchKey(p.branch) === branch && inRange(p.date));
 
     // Empty-state: tell the user exactly what went wrong if their current filter has no data
     if (sales.length === 0 && state.sales.length > 0) {
@@ -10350,9 +10413,9 @@ routes.dashboard = function (u, params) {
 
     function lastUnitCost(inv_item_id) {
       let last = null, lastAt = "";
-      for (const p of state.purchases) for (const ln of p.lines) {
+      for (const p of state.purchases) { if (p.is_test) continue; for (const ln of p.lines) {
         if (ln.inv_item_id === inv_item_id && p.at > lastAt) { last = Number(ln.unit_cost)||0; lastAt = p.at; }
-      }
+      } }
       return last;
     }
     let wasteCost = 0;
@@ -11035,6 +11098,61 @@ routes.settings = function (u) {
     wrap.appendChild(tc);
   }
 
+  // ── Master PIN — owner-only override to sign in as any profile ─────────────
+  if (u.role === "owner") {
+    const mp = el("div", { class: "card", style: { marginTop: "14px" } });
+    mp.appendChild(el("h2", {}, "🗝️ Master PIN"));
+    mp.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+      "A PIN that unlocks any active profile on the login screen, without knowing that person's own PIN — handy for checking or troubleshooting an account. Keep it secret: anyone who has it can sign in as anyone."));
+
+    const mpStatus = el("div", { class: "muted small", style: { marginBottom: "10px" } }, "Checking status…");
+    mp.appendChild(mpStatus);
+    functions.httpsCallable("getMasterPinStatus")({}).then(({ data }) => {
+      mpStatus.textContent = data.enabled ? "Status: ✅ Master PIN is set." : "Status: — Master PIN is not set.";
+    }).catch(() => { mpStatus.textContent = "Status: unable to check."; });
+
+    mp.appendChild(el("label", {}, "New master PIN"));
+    const mpIn  = el("input", { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8", placeholder: "4-8 digits", style: { letterSpacing: "4px" } });
+    mp.appendChild(mpIn);
+    mp.appendChild(el("label", {}, "Confirm master PIN"));
+    const mpCfmIn = el("input", { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8", placeholder: "4-8 digits", style: { letterSpacing: "4px" } });
+    mp.appendChild(mpCfmIn);
+
+    const mpRow = el("div", { class: "btn-row", style: { marginTop: "10px" } });
+    const mpSave = el("button", { class: "btn secondary" }, "Save master PIN");
+    mpSave.addEventListener("click", async () => {
+      const newPin = mpIn.value.trim();
+      if (!/^\d{4,8}$/.test(newPin)) { toast("PIN must be 4-8 digits", "error"); return; }
+      if (newPin !== mpCfmIn.value.trim()) { toast("PINs don't match", "error"); return; }
+      mpSave.disabled = true; mpSave.textContent = "Saving…";
+      try {
+        await functions.httpsCallable("setMasterPin")({ newPin });
+        mpIn.value = ""; mpCfmIn.value = "";
+        mpStatus.textContent = "Status: ✅ Master PIN is set.";
+        toast("Master PIN saved ✓");
+      } catch (e) { toast(e.message || "Failed to save master PIN", "error"); }
+      mpSave.disabled = false; mpSave.textContent = "Save master PIN";
+    });
+    mpRow.appendChild(mpSave);
+
+    const mpDisable = el("button", { class: "btn ghost" }, "Disable master PIN");
+    mpDisable.addEventListener("click", async () => {
+      if (!confirm("Disable the master PIN? You'll only be able to sign in with each person's own PIN.")) return;
+      mpDisable.disabled = true;
+      try {
+        await functions.httpsCallable("setMasterPin")({ newPin: null });
+        mpIn.value = ""; mpCfmIn.value = "";
+        mpStatus.textContent = "Status: — Master PIN is not set.";
+        toast("Master PIN disabled");
+      } catch (e) { toast(e.message || "Failed to disable master PIN", "error"); }
+      mpDisable.disabled = false;
+    });
+    mpRow.appendChild(mpDisable);
+
+    mp.appendChild(mpRow);
+    wrap.appendChild(mp);
+  }
+
   // ── Firebase Auth migration (owner only, one-time) ─────────────────────────
   if (u.role === "owner") {
     const migCard = el("div", { class: "card", style: { marginTop: "14px" } });
@@ -11213,6 +11331,7 @@ routes.cleaning_log_new = function (u) {
           note: note.trim(),
           checklist_score,
           checklist_items: checkedItems.map((v,i) => ({ item: CLEAN_ITEMS_EN_LOC[i], checked: v })),
+          ...(isTestMode() ? { is_test: true } : {}),
         });
         saveState();
         showPhotoConfirm({
@@ -11242,7 +11361,10 @@ routes.cleaning_log_list = function (u) {
   for (const c of mine) {
     list.appendChild(el("div", { class: "row" }, [
       el("div", { class: "grow" }, [
-        el("div", { class: "title" }, `${c.branch} · ${c.date}`),
+        el("div", { class: "title" }, [
+          document.createTextNode(`${c.branch} · ${c.date}`),
+          c.is_test ? testBadge() : null,
+        ]),
         el("div", { class: "sub" }, T(`by ${c.by_name} · ${fmtDate(c.at)}${c.note ? " · " + c.note : ""}`, `بواسطة ${c.by_name} · ${fmtDate(c.at)}${c.note ? " · " + c.note : ""}`)),
       ]),
       el("span", { class: "pill", style: { color: "var(--ok)" } }, "📷"),
@@ -11315,10 +11437,13 @@ routes.signin_stamp_new = function (u) {
           note: note.trim(),
           early_bonus: _earlyBonus,
           mins_late: _stampMinsLate,
+          ...(isTestMode() ? { is_test: true } : {}),
         });
 
         // ── Auto late-penalty from photo upload timestamp ─────
-        (function() {
+        // Skipped entirely in Test Mode — a test stamp must never create a real
+        // penalty, substitute-cover bonus, or send a late-arrival email/notification.
+        if (!isTestMode()) (function() {
           const submitTime = new Date(s.at);
           const todayStr   = localISODate(submitTime); // local date, not UTC
           const dayIndex   = (submitTime.getDay() + 6) % 7; // 0=Mon … 6=Sun
@@ -11487,7 +11612,7 @@ routes.signin_stamp_list = function (u) {
     const minStr = isEarly ? T(`${Math.abs(minsLate)} min early`, `مبكر ${Math.abs(minsLate)} دقيقة`) : minsLate > 0 ? T(`${minsLate} min late`, `متأخر ${minsLate} دقيقة`) : T("on time","في الموعد");
     list.appendChild(el("div", { class: "row" }, [
       el("div", { class: "grow" }, [
-        el("div", { class: "title" }, `${s.by_name} · ${s.branch}`),
+        el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, s.is_test ? testBadge() : null]),
         el("div", { class: "sub" }, `${fmtDate(s.at)} · ${minStr}${s.note ? " · " + s.note : ""}`),
       ]),
       badge,
@@ -12921,12 +13046,11 @@ routes.handbook = function (u) {
       if (!draft.category) { toast("Enter a category."); return; }
       draft.ingredients = draft.ingredients.filter(x => x.trim());
       draft.steps = draft.steps.filter(x => x.trim());
-      if (isNew) {
-        state.handbook_recipes.push(draft);
-      } else {
-        const idx = state.handbook_recipes.findIndex(r => r.id === existing.id);
-        if (idx >= 0) state.handbook_recipes[idx] = draft;
-      }
+      // Collapse any other entry sharing this name (e.g. a stale reseeded duplicate)
+      // so saving an edit never leaves an old copy of the same recipe behind.
+      const normName = draft.name.trim().toLowerCase();
+      state.handbook_recipes = state.handbook_recipes.filter(r => r.name.trim().toLowerCase() !== normName);
+      state.handbook_recipes.push(draft);
       saveState(); root.innerHTML = ""; renderRecipes(); buildTabs();
       toast(isNew ? "Recipe added ✓" : "Recipe updated ✓");
     });
@@ -13299,12 +13423,26 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
     label + (required ? " *" : " (optional)"));
   container.appendChild(labelEl);
 
+  const onMobile = isMobileDevice();
+
+  // Camera button — mobile only, opens the device camera directly
+  if (onMobile) {
+    const camInput = el("input", { type: "file", accept: "image/*" });
+    if (multiple) camInput.setAttribute("multiple", "true");
+    camInput.setAttribute("capture", "environment");
+    camInput.style.display = "none";
+    const camBtn = el("button", { class: "btn secondary", style: { width: "100%", marginBottom: "8px" }, onClick: (e) => { e.preventDefault(); camInput.click(); } }, T("📷 Take photo","📷 التقط صورة"));
+    camInput.addEventListener("change", (e) => { addFiles([...e.target.files]); camInput.value = ""; });
+    container.appendChild(camBtn);
+    container.appendChild(camInput);
+  }
+
   // Drop zone
   const dropZone = el("div", { class: "photo-drop" });
   const fileInput = el("input", { type: "file", accept: "image/*" });
   if (multiple) fileInput.setAttribute("multiple", "true");
   dropZone.appendChild(el("div", { class: "drop-icon" }, "📷"));
-  dropZone.appendChild(el("div", { class: "drop-label" }, multiple ? "Tap to add photos" : "Tap to add a photo"));
+  dropZone.appendChild(el("div", { class: "drop-label" }, onMobile ? (multiple ? "Tap to choose from gallery" : "Tap to choose from gallery") : (multiple ? "Tap to add photos" : "Tap to add a photo")));
   dropZone.appendChild(el("div", { class: "drop-sub" }, multiple ? "Multiple files OK · drag & drop supported" : "Drag & drop supported"));
   dropZone.appendChild(fileInput);
   container.appendChild(dropZone);
@@ -13454,20 +13592,20 @@ function header(title, sub) {
 // Maps route names to a function that returns { rows: Array, name: String }
 // for CSV export. btnBack() checks this and appends an export button automatically.
 const ROUTE_EXPORTS = {
-  waste_list:          () => ({ rows: state.waste || [], name: "waste" }),
-  shift_close_list:    () => ({ rows: state.shift_closes || [], name: "shift-closes" }),
+  waste_list:          () => ({ rows: (state.waste || []).filter(notTest), name: "waste" }),
+  shift_close_list:    () => ({ rows: (state.shift_closes || []).filter(notTest), name: "shift-closes" }),
   reorder_action_list: () => ({ rows: state.reorder_actions || [], name: "reorder-actions" }),
   purchase_list:       () => ({
-    rows: (state.purchases || []).flatMap(p =>
+    rows: (state.purchases || []).filter(notTest).flatMap(p =>
       (p.lines || []).map(l => ({ date: p.date || (p.at || "").slice(0,10), branch: p.branch, supplier: p.supplier, ...l }))),
     name: "purchases" }),
-  petty_cash:          () => ({ rows: state.petty_cash || [], name: "petty-cash" }),
+  petty_cash:          () => ({ rows: (state.petty_cash || []).filter(notTest), name: "petty-cash" }),
   penalties:           () => ({ rows: (state.penalties || []).filter(p => !p._deleted), name: "penalties" }),
   maadi_deposits:      () => ({ rows: state.maadi_deposits || [], name: "maadi-deposits" }),
-  bank:                () => ({ rows: state.bank_ledger || [], name: "bank-ledger" }),
+  bank:                () => ({ rows: (state.bank_ledger || []).filter(notTest), name: "bank-ledger" }),
   shifts:              () => ({ rows: state.shifts || [], name: "shifts" }),
-  cleaning_log_list:   () => ({ rows: state.cleaning_logs || [], name: "cleaning-logs" }),
-  signin_stamp_list:   () => ({ rows: state.signin_stamps || [], name: "signin-stamps" }),
+  cleaning_log_list:   () => ({ rows: (state.cleaning_logs || []).filter(notTest), name: "cleaning-logs" }),
+  signin_stamp_list:   () => ({ rows: (state.signin_stamps || []).filter(notTest), name: "signin-stamps" }),
   leave_list:          () => ({ rows: state.leaves || [], name: "leaves" }),
   assets_list:         () => ({ rows: state.assets || [], name: "assets" }),
   users:               () => ({
@@ -13548,9 +13686,29 @@ function openPrompt({ title, fields, onSubmit, extraButtons }) {
   for (const f of fields) {
     body.appendChild(el("label", {}, f.label));
     if (f.type === "file") {
-      const i = el("input", { type: "file", accept: f.accept || "image/*" });
-      i.addEventListener("change", () => { vals[f.key] = i.files && i.files[0] ? i.files[0] : null; });
-      body.appendChild(i);
+      const accept = f.accept || "image/*";
+      const isImage = accept.includes("image");
+      const preview = el("div", { class: "muted small", style: { margin: "4px 0" } });
+      const setPicked = (file) => { vals[f.key] = file || null; preview.textContent = file ? T(`Selected: ${file.name}`, `تم اختيار: ${file.name}`) : ""; };
+      const i = el("input", { type: "file", accept });
+      i.addEventListener("change", () => setPicked(i.files && i.files[0]));
+      if (isImage && isMobileDevice()) {
+        const cam = el("input", { type: "file", accept });
+        cam.setAttribute("capture", "environment");
+        cam.style.display = "none";
+        cam.addEventListener("change", () => setPicked(cam.files && cam.files[0]));
+        i.style.display = "none";
+        const row = el("div", { style: { display: "flex", gap: "8px" } }, [
+          el("button", { class: "btn secondary", style: { flex: "1" }, onClick: (e) => { e.preventDefault(); cam.click(); } }, T("📷 Take photo","📷 التقط صورة")),
+          el("button", { class: "btn secondary", style: { flex: "1" }, onClick: (e) => { e.preventDefault(); i.click(); } }, T("🖼️ Choose from gallery","🖼️ اختر من المعرض")),
+        ]);
+        body.appendChild(row);
+        body.appendChild(cam);
+        body.appendChild(i);
+      } else {
+        body.appendChild(i);
+      }
+      body.appendChild(preview);
     } else if (f.type === "select" && Array.isArray(f.options)) {
       const sel = el("select", {});
       for (const opt of f.options) {
@@ -14141,7 +14299,7 @@ function kpiPunctualityScore(userId, cutoff) {
   const todayStr = localISODate(today);
 
   const stampMap = {};
-  (state.signin_stamps||[]).filter(s => s.by === userId).forEach(s => {
+  (state.signin_stamps||[]).filter(s => notTest(s) && s.by === userId).forEach(s => {
     const key = localISODate(new Date(s.at)) + "|" + (s.branch||"maadi").toLowerCase();
     if (!stampMap[key]) stampMap[key] = s;
   });
@@ -14181,13 +14339,13 @@ function kpiPunctualityScore(userId, cutoff) {
 
   // Substitute cover bonus: +50 per shift covered for someone else
   const subCovers = (state.signin_stamps||[]).filter(s =>
-    s.by === userId && s.substitute_cover && new Date(s.at).getTime() >= cutoff
+    notTest(s) && s.by === userId && s.substitute_cover && new Date(s.at).getTime() >= cutoff
   );
   delta += subCovers.length * 50;
 
   // Fallback when no roster data: score only from submitted stamps, no missing-stamp penalty
   if (shiftsFound === 0) {
-    const stamps = (state.signin_stamps||[]).filter(s => s.by === userId && new Date(s.at).getTime() >= cutoff);
+    const stamps = (state.signin_stamps||[]).filter(s => notTest(s) && s.by === userId && new Date(s.at).getTime() >= cutoff);
     if (!stamps.length) return null;
     stamps.forEach(s => {
       try {
@@ -14230,7 +14388,7 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
     if (!user) continue;
     // Check for existing stamp that day+branch
     const hasStamp = (state.signin_stamps||[]).some(s =>
-      s.by === uid && localISODate(new Date(s.at)) === dateStr &&
+      notTest(s) && s.by === uid && localISODate(new Date(s.at)) === dateStr &&
       (s.branch||"").toLowerCase() === branch
     );
     if (hasStamp) continue;
@@ -14261,7 +14419,7 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
 }
 
 function kpiWasteScore(userId, cutoff) {
-  const entries = (state.waste||[]).filter(w => w.by === userId && new Date(w.at).getTime() >= cutoff);
+  const entries = (state.waste||[]).filter(w => notTest(w) && w.by === userId && new Date(w.at).getTime() >= cutoff);
   // Group submitted entries by calendar day
   const byDay = {};
   entries.forEach(w => {
@@ -14327,7 +14485,7 @@ function kpiWasteScore(userId, cutoff) {
   return Math.round(dayScores.reduce((a,b) => a + b.score, 0) / dayScores.length);
 }
 function kpiCleanlinessScore(userId, cutoff) {
-  const logs = (state.cleaning_logs||[]).filter(l => l.by === userId && new Date(l.at).getTime() >= cutoff);
+  const logs = (state.cleaning_logs||[]).filter(l => notTest(l) && l.by === userId && new Date(l.at).getTime() >= cutoff);
   if (!logs.length) return null;
   const scores = logs.map(l => l.checklist_score != null ? l.checklist_score : 65); // legacy logs without checklist get 65
   return Math.round(scores.reduce((a,b)=>a+b,0)/scores.length);
@@ -14495,6 +14653,7 @@ function kpiLeadershipScore(userId, month) {
         const openStr = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
         const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
         const stamp = (state.signin_stamps || []).find(s =>
+          notTest(s) &&
           s.by === entry.user_id &&
           localISODate(new Date(s.at)) === dateStr &&
           (s.branch || "").toLowerCase() === branch
@@ -18164,12 +18323,12 @@ function exportAllCSVZip() {
     "items.csv": toCSV(state.items),
     "menu.csv": toCSV(state.menu.map(({ branches, ...rest }) => ({ ...rest, branches: (branches||[]).join("|") }))),
     "snapshots.csv": toCSV(state.snapshots.flatMap(s => s.entries.map(e => ({ snapshot_id: s.id, as_of: s.as_of, created_at: s.created_at, created_by: s.created_by_name||s.created_by, branch: e.branch, item_id: e.item_id, qty: e.qty })))),
-    "waste.csv": toCSV(state.waste),
+    "waste.csv": toCSV(state.waste.filter(notTest)),
     "assets.csv": toCSV(state.assets || []),
-    "purchases_header.csv": toCSV(state.purchases.map(({ lines, ...rest }) => rest)),
-    "purchases_lines.csv": toCSV(state.purchases.flatMap(p => p.lines.map(l => ({ purchase_id: p.id, date: p.date, branch: p.branch, supplier: p.supplier, ...l })))),
-    "petty_cash.csv": toCSV(state.petty_cash),
-    "bank_ledger.csv": toCSV(state.bank_ledger),
+    "purchases_header.csv": toCSV(state.purchases.filter(notTest).map(({ lines, ...rest }) => rest)),
+    "purchases_lines.csv": toCSV(state.purchases.filter(notTest).flatMap(p => p.lines.map(l => ({ purchase_id: p.id, date: p.date, branch: p.branch, supplier: p.supplier, ...l })))),
+    "petty_cash.csv": toCSV(state.petty_cash.filter(notTest)),
+    "bank_ledger.csv": toCSV(state.bank_ledger.filter(notTest)),
     "sales.csv": toCSV(state.sales),
     "users.csv": toCSV(staffDir.all().map(({ uid, name, role, branches, active, legacy_id }) => ({ uid, name, role, active, branches: (branches||[]).join("|"), legacy_id: legacy_id||"", pin: "••••" }))),
   };
