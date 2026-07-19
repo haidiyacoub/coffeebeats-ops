@@ -1430,7 +1430,7 @@ async function _mergeShardWrite(writes, docId, arrayName, localRows) {
   const snap = await db.collection("state").doc(docId).get();
   const ex = snap.exists ? snap.data()[arrayName] : null;
   if (Array.isArray(ex)) kept = ex.filter(r => !localBranches.has(r.branch));
-  const doc = { [arrayName]: [...kept, ...localRows] };
+  const doc = _sanitizeForFirestore({ [arrayName]: [...kept, ...localRows] });
   const bytes = JSON.stringify(doc).length;
   if (bytes > 800_000) toast(`⚠️ ${arrayName} shard ${docId} is ${(bytes / 1024).toFixed(0)} KB — approaching limit`, "error");
   writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
@@ -1543,7 +1543,7 @@ async function _menuMergeDoc() {
     if (!lm.price_egp && rm.price_egp) merged.price_egp = rm.price_egp;  // don't null out a known price
     byId.set(lm.id, merged);
   }
-  return { menu: [...byId.values()] };
+  return _sanitizeForFirestore({ menu: [...byId.values()] });
 }
 
 // Build the overhead chunk by MERGING local with remote instead of blind-overwriting,
@@ -1579,13 +1579,13 @@ async function _overheadMergeDoc() {
   }
   const mergeMap = (k) => ({ ...(remote[k] && typeof remote[k] === "object" ? remote[k] : {}), ...(state[k] || {}) });
 
-  return {
+  return _sanitizeForFirestore({
     overheads: [...byId.values()],
     overhead_presets: presets,
     overhead_monthly_amts: mergeMap("overhead_monthly_amts"),
     overhead_preset_history: mergeMap("overhead_preset_history"),
     maintenance_config: mergeMap("maintenance_config"),
-  };
+  });
 }
 
 // ---- Generic merge-on-write (data-loss prevention) -----------------------------
@@ -1645,6 +1645,23 @@ function _mergeValue(local, rem) {
     return _mergeObjects(local, rem);
   }
   return local; // scalar — this device's value wins
+}
+
+// Firestore's client SDK rejects Infinity/-Infinity/NaN with a client-side "invalid-argument"
+// error — and since every chunk syncs together in one Promise.all, ONE such value anywhere
+// (e.g. invStockLongevity() legitimately returns Infinity for a zero-consumption item, and an
+// older inv_engine_alerts record stored that raw) permanently blocks EVERY other pending edit
+// on the device too, not just the offending chunk (root cause of "I edited a salary and it
+// never synced" with no error pointing at salaries at all). Deep-clean right before every write.
+function _sanitizeForFirestore(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (Array.isArray(v)) return v.map(_sanitizeForFirestore);
+  if (_isPlainObj(v)) {
+    const out = {};
+    for (const [k, val] of Object.entries(v)) out[k] = _sanitizeForFirestore(val);
+    return out;
+  }
+  return v;
 }
 
 // ---- Deletion propagation (tombstones) -----------------------------------------
@@ -1734,7 +1751,7 @@ async function _mergeChunkDoc(chunk, keys) {
     if (tomb && tomb.size) v = _stripTomb(v, tomb);
     doc[k] = v;
   }
-  return doc;
+  return _sanitizeForFirestore(doc);
 }
 
 // Snapshot of each chunk's JSON after the last successful sync.
