@@ -1647,13 +1647,15 @@ function _mergeValue(local, rem) {
   return local; // scalar — this device's value wins
 }
 
-// Firestore's client SDK rejects Infinity/-Infinity/NaN with a client-side "invalid-argument"
-// error — and since every chunk syncs together in one Promise.all, ONE such value anywhere
-// (e.g. invStockLongevity() legitimately returns Infinity for a zero-consumption item, and an
-// older inv_engine_alerts record stored that raw) permanently blocks EVERY other pending edit
-// on the device too, not just the offending chunk (root cause of "I edited a salary and it
-// never synced" with no error pointing at salaries at all). Deep-clean right before every write.
+// Firestore's client SDK rejects Infinity/-Infinity/NaN and bare `undefined` field values with
+// a client-side "invalid-argument" error — and since every chunk syncs together in one
+// Promise.all, ONE such value anywhere (e.g. invStockLongevity() legitimately returns Infinity
+// for a zero-consumption item, or any record missing an optional field as `undefined` instead
+// of `null`) permanently blocks EVERY other pending edit on the device too, not just the
+// offending chunk (root cause of "I edited a salary and it never synced" with no error pointing
+// at salaries at all). Deep-clean right before every write.
 function _sanitizeForFirestore(v) {
+  if (v === undefined) return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (Array.isArray(v)) return v.map(_sanitizeForFirestore);
   if (_isPlainObj(v)) {
