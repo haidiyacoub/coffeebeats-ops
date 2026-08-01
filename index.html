@@ -1829,6 +1829,15 @@ async function doSync() {
             .then(() => _snapshotChunk(chunk, keys))
             .catch(err => { err._chunk = chunk; throw err; }));
       }
+      // inv_engine_alerts is merged then collapsed so the doc can actually shrink back
+      // under Firestore's 1 MB limit — see _invAlertsMergeDoc.
+      if (chunk === "inv_engine_alerts") {
+        if (!_chunkChanged(chunk, keys)) return Promise.resolve();
+        return _invAlertsMergeDoc().then(doc =>
+          db.collection("state").doc(chunk).set(doc)
+            .then(() => _snapshotChunk(chunk, keys))
+            .catch(err => { err._chunk = chunk; throw err; }));
+      }
       // overhead is merged so a stale device can't drop another device's entries —
       // see _overheadMergeDoc (fixes "maintenance log missing on the other phone").
       if (chunk === "overhead") {
@@ -1951,6 +1960,37 @@ window.addEventListener("online", () => {
 setInterval(() => {
   if (hasPending() && !syncInFlight) doSync();
 }, 60_000);
+
+// Build the inv_engine_alerts chunk by merging local with remote, then collapsing to one
+// row per (type, item_id, branch) among undismissed alerts. A plain union-by-id merge (the
+// generic path every other chunk uses) can only ever GROW this doc: a failed write never
+// gets to shrink what's already sitting in Firestore, so a remote doc that's already past
+// the 1 MB limit stays stuck there forever even after the local dedup migration trims the
+// local copy — the very next sync re-unions with the still-bloated remote and undoes it.
+// Collapsing AFTER the union, right before every write, is the only way to actually shrink
+// the stored doc and keep it bounded regardless of how much historical duplication remote
+// already has.
+async function _invAlertsMergeDoc() {
+  const snap = await db.collection("state").doc("inv_engine_alerts").get();
+  const remote = snap.exists ? (snap.data() || {}) : {};
+  const merged = _mergeArrays(state.inv_engine_alerts, remote.inv_engine_alerts);
+
+  const latest = new Map();
+  const dismissed = [];
+  for (const a of merged) {
+    if (!a) continue;
+    if (a.dismissed) { dismissed.push(a); continue; }
+    const key = `${a.type}|${a.item_id}|${a.branch}`;
+    const prev = latest.get(key);
+    if (!prev || String(a.fired_at || "") > String(prev.fired_at || "")) latest.set(key, a);
+  }
+  const collapsed = [...dismissed, ...latest.values()];
+  // Keep local state in sync with what we just decided is canonical, so the in-memory
+  // alert list (and the notification badge count) reflects the collapse immediately
+  // instead of waiting on a subsequent pull.
+  state.inv_engine_alerts = collapsed;
+  return _sanitizeForFirestore({ inv_engine_alerts: collapsed });
+}
 
 // Pull full state from Firestore (makes Firestore the single source of truth)
 async function pullFromFirestore() {
