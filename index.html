@@ -1166,6 +1166,24 @@ function migrateState(s) {
     s.inv_engine_alerts = s.inv_engine_alerts.concat(s.inv_engine.engine_alerts);
     delete s.inv_engine.engine_alerts;
   }
+  // One-time cleanup: runEngineAlertScan used to push a NEW alert record every day an
+  // ongoing issue (e.g. dead inventory) was still unresolved, instead of updating the
+  // existing one — so a single stuck item generated one row per day forever. That grew
+  // this chunk past Firestore's 1 MB doc limit (root cause of permanent sync failure).
+  // Collapse to one row per (type, item_id, branch) among undismissed alerts, keeping
+  // the most recent occurrence; dismissed history is untouched (already 90-day pruned).
+  if (!s._inv_alerts_dedup_migrated_v1 && s.inv_engine_alerts.length) {
+    const latest = new Map();
+    for (const a of s.inv_engine_alerts) {
+      if (a.dismissed) continue;
+      const key = `${a.type}|${a.item_id}|${a.branch}`;
+      const prev = latest.get(key);
+      if (!prev || String(a.fired_at || "") > String(prev.fired_at || "")) latest.set(key, a);
+    }
+    const keepIds = new Set([...latest.values()].map(a => a.id));
+    s.inv_engine_alerts = s.inv_engine_alerts.filter(a => a.dismissed || keepIds.has(a.id));
+    s._inv_alerts_dedup_migrated_v1 = true;
+  }
   s.inv_engine_sales_data = s.inv_engine_sales_data || [];
   s.inv_engine_recipes    = s.inv_engine_recipes    || [];
   s.events_config         = s.events_config         || [];
@@ -1916,6 +1934,23 @@ async function doSync() {
 window.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && hasPending()) doSync();
 });
+
+// Once the 5s/15s/45s retry backoff is exhausted after a network drop, doSync never
+// tries again on its own — it sits on the error banner until the user manually clicks
+// "Retry now". Wifi blips longer than ~65s (common on café/mobile networks) then leave
+// edits permanently stuck even after connectivity is back. Resume automatically: the
+// 'online' event covers the common case, and a periodic safety-net poll covers
+// networks/browsers where 'online' doesn't reliably fire (e.g. captive portals).
+window.addEventListener("online", () => {
+  if (hasPending() && !syncInFlight) {
+    _syncRetryCount = 0;
+    _authRetryCount = 0;
+    doSync();
+  }
+});
+setInterval(() => {
+  if (hasPending() && !syncInFlight) doSync();
+}, 60_000);
 
 // Pull full state from Firestore (makes Firestore the single source of truth)
 async function pullFromFirestore() {
@@ -2969,14 +3004,24 @@ function runEngineAlertScan() {
     newAlerts.push(...invDetectConsumptionSpike(b, sd, rc));
   }
 
-  // Deduplicate: don't add if same type+item+branch already fired today and not dismissed
+  // Dedupe against any still-active alert of the same type+item+branch, regardless of
+  // date: an ongoing issue (e.g. dead inventory that's still dead a week later) refreshes
+  // the existing row instead of adding a new one every scan. Pushing a new row per day
+  // for persistent issues is what grew this chunk past Firestore's 1 MB doc limit and
+  // caused permanent sync failure — this keeps the array bounded by (branch × item × type)
+  // instead of growing without limit.
+  state.inv_engine_alerts = state.inv_engine_alerts || [];
   for (const a of newAlerts) {
-    const exists = (state.inv_engine_alerts || []).some(e =>
-      !e.dismissed && e.type === a.type && e.item_id === a.item_id &&
-      e.branch === a.branch && (e.fired_at || "").slice(0, 10) === today
+    const existing = state.inv_engine_alerts.find(e =>
+      !e.dismissed && e.type === a.type && e.item_id === a.item_id && e.branch === a.branch
     );
-    if (!exists) {
-      state.inv_engine_alerts = state.inv_engine_alerts || [];
+    if (existing) {
+      existing.fired_at = a.fired_at;
+      existing.detail = a.detail;
+      existing.item_name = a.item_name;
+      existing.updated_at = new Date().toISOString();
+      dirty = true;
+    } else {
       state.inv_engine_alerts.push(a);
       dirty = true;
       // Fire push notifications for critical alerts
