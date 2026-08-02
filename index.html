@@ -1838,6 +1838,16 @@ async function doSync() {
             .then(() => _snapshotChunk(chunk, keys))
             .catch(err => { err._chunk = chunk; throw err; }));
       }
+      // kpi is merged then retention-pruned so its two unbounded append-only logs
+      // (alert_log, leadership_notifications) can't grow the doc past Firestore's 1 MB
+      // limit again — see _kpiMergeDoc.
+      if (chunk === "kpi") {
+        if (!_chunkChanged(chunk, keys)) return Promise.resolve();
+        return _kpiMergeDoc().then(doc =>
+          db.collection("state").doc(chunk).set(doc)
+            .then(() => _snapshotChunk(chunk, keys))
+            .catch(err => { err._chunk = chunk; throw err; }));
+      }
       // overhead is merged so a stale device can't drop another device's entries —
       // see _overheadMergeDoc (fixes "maintenance log missing on the other phone").
       if (chunk === "overhead") {
@@ -2007,6 +2017,40 @@ async function _invAlertsMergeDoc() {
   // instead of waiting on a subsequent pull.
   state.inv_engine_alerts = collapsed;
   return _sanitizeForFirestore({ inv_engine_alerts: collapsed });
+}
+
+// Build the kpi chunk by merging local with remote, then retention-pruning the two
+// unbounded append-only logs it carries: alert_log (low-stock history) and
+// leadership_notifications. Neither has a dismiss/read lifecycle, and nothing in the app
+// reads more than a 30-day window from either (e.g. the low-stock alert history view) — so
+// entries older than that carry no product value but were never capped, which is what grew
+// this chunk past Firestore's 1 MB limit (alert_log alone reached 614 KB / 1915 records).
+// Pruning AFTER the union, right before every write, is required for the same reason as
+// _invAlertsMergeDoc: a plain union-by-id merge can only ever grow the doc.
+async function _kpiMergeDoc() {
+  const keys = STATE_CHUNKS.kpi;
+  const snap = await db.collection("state").doc("kpi").get();
+  const remote = snap.exists ? (snap.data() || {}) : {};
+  const tomb = _tombstoneSet();
+  const doc = {};
+  for (const k of keys) {
+    let v = _mergeValue(state[k], remote[k]);
+    if (tomb.size) v = _stripTomb(v, tomb);
+    doc[k] = v;
+  }
+  const RETENTION_DAYS = 180;
+  const cutoffDate = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString().slice(0, 10);
+  const cutoffISO   = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
+  if (Array.isArray(doc.alert_log)) {
+    doc.alert_log = doc.alert_log.filter(a => (a.date || "") >= cutoffDate);
+  }
+  if (Array.isArray(doc.leadership_notifications)) {
+    doc.leadership_notifications = doc.leadership_notifications.filter(n => (n.at || "") >= cutoffISO);
+  }
+  // Keep local state in sync with what we just decided is canonical.
+  state.alert_log = doc.alert_log;
+  state.leadership_notifications = doc.leadership_notifications;
+  return _sanitizeForFirestore(doc);
 }
 
 // Pull full state from Firestore (makes Firestore the single source of truth)
