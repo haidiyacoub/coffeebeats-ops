@@ -1853,6 +1853,15 @@ async function doSync() {
         const approxBytes = JSON.stringify(doc).length;
         if (approxBytes > 800_000) {
           console.warn(`[sync] chunk "${chunk}" is ${(approxBytes/1024).toFixed(0)} KB — approaching Firestore 1 MB limit`);
+          // Self-diagnose which field within this multi-key chunk is actually driving the
+          // size, right in the console, so a future oversized-chunk report doesn't require
+          // pasting a diagnostic script (some browsers/users can't get past the DevTools
+          // paste guard) — the breakdown is right there the moment the warning fires.
+          console.warn(`[sync] "${chunk}" field breakdown:`, keys
+            .map(k => [k, JSON.stringify(doc[k] ?? null).length, Array.isArray(doc[k]) ? doc[k].length : "n/a"])
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, size, count]) => `${k}: ${(size/1024).toFixed(0)} KB (count: ${count})`)
+            .join(" | "));
           toast(`⚠️ Data chunk "${chunk}" is getting large (${(approxBytes/1024).toFixed(0)} KB). Contact support to archive old records.`, "error");
         }
         return db.collection("state").doc(chunk).set(doc)
