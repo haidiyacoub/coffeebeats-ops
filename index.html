@@ -1878,7 +1878,15 @@ async function doSync() {
     _syncRetryCount = 0;
     _authRetryCount = 0;
     try { localStorage.setItem(SYNC_DIRTY_KEY, String(pendingWrites)); } catch(e) {}
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    // Every Firestore write above already succeeded — localStorage is just a cache from
+    // here on. This used to be unguarded, so a quota overflow (common once years of
+    // sales/log history accumulate client-side) threw INTO doSync's own catch block below,
+    // which treats it as a genuine sync failure: triggers retry/backoff and eventually
+    // shows the "could not be saved" banner, even though every real write had just
+    // succeeded. This is very likely why that banner kept reappearing even once the
+    // actual Firestore-side chunk-size issues were fixed. Mirrors saveState().
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    catch (e) { console.warn("localStorage quota exceeded — state not cached locally, but every change just synced to Firestore successfully.", e); }
     if (pendingWrites === 0) {
       updateSyncBadge("synced");
       // The very first pull-on-start was skipped because this flush initially failed.
@@ -2094,7 +2102,14 @@ async function pullFromFirestore() {
     await staffDir.load();
     // Remap any legacy UUIDs in HR/KPI records to Firebase UIDs
     _remapLegacyIds();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    // localStorage is just a cache (Firestore is the source of truth) — a quota overflow
+    // here must NOT abort the pull. It used to: this call sat inside the same try/catch
+    // as everything below it, so a full local disk (common once years of sales/log
+    // history accumulate client-side) threw straight to the catch and skipped every
+    // live cross-device listener registration and chunk-baseline snapshot below, even
+    // though the actual Firestore read/merge had already succeeded. Mirrors saveState().
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    catch (e) { console.warn("localStorage quota exceeded — state not cached locally, but the pull itself succeeded.", e); }
     // Snapshot every chunk and shard array so the first doSync after a pull only
     // writes things that were actually changed locally — not all 14+ docs.
     for (const [chunk, keys] of Object.entries(STATE_CHUNKS)) _snapshotChunk(chunk, keys);
