@@ -1467,13 +1467,21 @@ async function _syncSalesShards() {
   const oiMonths    = new Set(Object.keys(orderItemsByMonth));
   const ordMonths   = new Set(Object.keys(ordersByMonth));
 
+  // Only touch months whose local rows actually changed since the last successful sync —
+  // see _monthChanged. Re-grouping the full history above is cheap; it's the per-month
+  // Firestore read+write in _mergeShardWrite that must be skipped for untouched months,
+  // or uploading one new month's file fans out to every historical month on every sync.
+  const dirtySales = [...salesMonths].filter(m => _monthChanged(`sales__${m}`, salesByMonth[m]));
+  const dirtyOi    = [...oiMonths].filter(m => _monthChanged(`oi__${m}`, orderItemsByMonth[m]));
+  const dirtyOrd   = [...ordMonths].filter(m => _monthChanged(`ord__${m}`, ordersByMonth[m]));
+
   const writes = [];
 
-  // Merge-write each month shard (reads remote first to preserve other branches' rows)
+  // Merge-write each dirty month shard (reads remote first to preserve other branches' rows)
   await Promise.all([
-    ...[...salesMonths].map(m => _mergeShardWrite(writes, `sales__${m}`, "sales",       salesByMonth[m])),
-    ...[...oiMonths].map(m    => _mergeShardWrite(writes, `oi__${m}`,    "order_items", orderItemsByMonth[m])),
-    ...[...ordMonths].map(m   => _mergeShardWrite(writes, `ord__${m}`,   "orders",      ordersByMonth[m])),
+    ...dirtySales.map(m => _mergeShardWrite(writes, `sales__${m}`, "sales",       salesByMonth[m])),
+    ...dirtyOi.map(m    => _mergeShardWrite(writes, `oi__${m}`,    "order_items", orderItemsByMonth[m])),
+    ...dirtyOrd.map(m   => _mergeShardWrite(writes, `ord__${m}`,   "orders",      ordersByMonth[m])),
   ]);
 
   // Index doc: store which months exist for each type so pullFromFirestore is precise.
@@ -1498,6 +1506,11 @@ async function _syncSalesShards() {
   }).catch(err => { err._chunk = "sales_index"; throw err; }));
 
   await Promise.all(writes);
+  // Snapshot only the months we actually wrote, now that the write succeeded — so an
+  // untouched month doesn't get re-diffed as "changed" by stale/missing signature state.
+  for (const m of dirtySales) _snapshotMonth(`sales__${m}`, salesByMonth[m]);
+  for (const m of dirtyOi)    _snapshotMonth(`oi__${m}`,    orderItemsByMonth[m]);
+  for (const m of dirtyOrd)   _snapshotMonth(`ord__${m}`,   ordersByMonth[m]);
 }
 
 // Append-only high-volume logs, month-sharded so no single doc can hit the 1 MB cap.
@@ -1526,10 +1539,17 @@ async function _syncMonthShards() {
 
   const mergedIdx = {};
   const shardOps = [];
+  const dirty = []; // [sigKey, byMonth, month] triples to snapshot after a successful write
   for (const [arr, cfg] of Object.entries(MONTH_SHARDED)) {
     const byMonth = _groupByMonth(state[arr], cfg.key);
     const months  = Object.keys(byMonth);
     for (const m of months) {
+      // Only touch months whose local rows actually changed since the last successful
+      // sync — see _monthChanged. Without this, every sync re-writes every historical
+      // month shard for every log type, fanning out with years of accumulated history.
+      const sigKey = `${cfg.prefix}__${m}`;
+      if (!_monthChanged(sigKey, byMonth[m])) continue;
+      dirty.push([sigKey, byMonth[m]]);
       // Merge by branch-within-month, same as sales, so a device that only holds one
       // branch's logs can't wipe another branch's logs in the same month shard.
       shardOps.push(_mergeShardWrite(writes, `${cfg.prefix}__${m}`, arr, byMonth[m]));
@@ -1541,6 +1561,8 @@ async function _syncMonthShards() {
     .catch(err => { err._chunk = "log_shard_index"; throw err; }));
 
   await Promise.all(writes);
+  // Snapshot only the months we actually wrote, now that the write succeeded.
+  for (const [sigKey, rows] of dirty) _snapshotMonth(sigKey, rows);
 }
 
 // Build the menu_data doc by MERGING local menu with the remote menu by item id, so a
@@ -1786,6 +1808,23 @@ const _lastShardSig = {};
 function _shardSig(key) { return JSON.stringify(state[key]); }
 function _shardChanged(key) { return _firstSync || _shardSig(key) !== _lastShardSig[key]; }
 function _snapshotShard(key) { _lastShardSig[key] = _shardSig(key); }
+
+// Per-MONTH diff guard for the sharded sales/log arrays. _shardChanged only tells us the
+// array changed SOMEWHERE — it doesn't say where. Without this, _syncSalesShards/
+// _syncMonthShards re-group and re-write EVERY historical month on every single sync (each
+// month shard is its own Firestore read+write), because they had no way to tell which
+// month actually changed. With years of accumulated history that's dozens of months × 3
+// array types = 70+ concurrent Firestore round-trips triggered by uploading ONE new
+// month's file — and every retry (5s/15s/45s backoff, the 'online' resume, the 60s safety
+// poll) repeats the entire storm. That fan-out growing without bound as history
+// accumulates is what can pin the tab's memory/network enough to crash the browser.
+// Track a signature per (type, month) so only months that actually changed get touched.
+const _lastSyncedMonthSig = {};
+function _monthChanged(key, rows) {
+  if (_firstSync) return true;
+  return JSON.stringify(rows) !== _lastSyncedMonthSig[key];
+}
+function _snapshotMonth(key, rows) { _lastSyncedMonthSig[key] = JSON.stringify(rows); }
 
 function _chunkDoc(chunk, keys) {
   const doc = {};
