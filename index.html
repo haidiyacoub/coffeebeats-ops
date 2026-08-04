@@ -1308,9 +1308,9 @@ function migrateState(s) {
     s._inv_ordering_window_seed_v1 = true;
   }
 }
-// `opts.immediate` pushes to Firestore right now instead of waiting for the
-// 2.5s debounce — use it for any write the user expects reflected immediately.
-function saveState(opts) {
+// The actual JSON.stringify(state) + localStorage write, split out of saveState() so
+// it can be debounced (see below) instead of running on every single saveState() call.
+function _flushLocalCache() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
@@ -1318,11 +1318,29 @@ function saveState(opts) {
     // Firestore sync is the source of truth; localStorage is just a cache.
     console.warn("localStorage quota exceeded — state not cached locally, but Firestore sync will still run.", e);
   }
+}
+let _saveStateFlushTimer = null;
+// `opts.immediate` pushes to Firestore right now instead of waiting for the
+// 2.5s debounce — use it for any write the user expects reflected immediately.
+function saveState(opts) {
   markDirty();
   if (opts && opts.immediate) {
+    clearTimeout(_saveStateFlushTimer);
+    _saveStateFlushTimer = null;
+    _flushLocalCache();
     clearTimeout(syncTimer);
     doSync();
   } else {
+    // Coalesce the expensive JSON.stringify(state) call: code paths like
+    // notifyLeadershipRole() call saveState() once per notification inside a loop
+    // (e.g. several reorder alerts escalating in the same scan), which used to
+    // re-serialize the entire multi-MB state on every single call — synchronously
+    // blocking the main thread badly enough to freeze/crash the tab. Deferring the
+    // actual write to the end of the current task collapses any burst of saveState()
+    // calls into one stringify, while markDirty()/queueSync() above still run
+    // synchronously every time so the pending-write count and sync scheduling are
+    // unaffected.
+    if (!_saveStateFlushTimer) _saveStateFlushTimer = setTimeout(() => { _saveStateFlushTimer = null; _flushLocalCache(); }, 0);
     queueSync();
   }
 }
@@ -2621,6 +2639,7 @@ function scanAndNotifyLowStock() {
   const branches = ["maadi","zawya"];
   const today = new Date().toISOString().slice(0,10);
   state.alert_log = state.alert_log || [];
+  let dirty = false;
   for (const b of branches) {
     const rows = lowStockItems(b);
     for (const r of rows) {
@@ -2632,6 +2651,7 @@ function scanAndNotifyLowStock() {
         at: new Date().toISOString(),
         follow_ups: [], // escalation records: [{ level:"3d"|"5d"|"6d", fired_at }]
       });
+      dirty = true;
       notifyHaidi(
         `Low stock — ${r.item.name} (${b})`,
         `~${r.days_of_cover.toFixed(1)}d cover left (threshold ${r.threshold_days}d). ${fmtQty(r.stock, r.item.unit)} on hand.`
@@ -2642,7 +2662,10 @@ function scanAndNotifyLowStock() {
       );
     }
   }
-  saveState();
+  // Was unconditional — every visit to the home screen re-serialized and re-queued
+  // the entire (multi-MB) state even when nothing here changed, adding to the pile of
+  // needless saveState() calls that froze the tab. Only save when a new alert fired.
+  if (dirty) saveState();
 }
 
 // Returns true if item has been logged in the purchase log since alertDate.
@@ -10326,7 +10349,7 @@ routes.dashboard = function (u, params) {
   // Index every sale by canonical branch + month so we can show the user
   // exactly what data is loaded — the dashboard used to look empty even
   // though data was imported, because filter comparisons were case-sensitive.
-  const salesIndex = new Map(); // key "branch|YYYY-MM" -> count
+  const salesIndex = new Map(); // key "branch|YYYY-MM" -> { count, net }
   const monthSet = new Set();
   const branchSet = new Set();
   for (const s of state.sales) {
@@ -10337,7 +10360,10 @@ routes.dashboard = function (u, params) {
     if (!m) continue;
     monthSet.add(m); branchSet.add(b);
     const k = b + "|" + m;
-    salesIndex.set(k, (salesIndex.get(k) || 0) + 1);
+    const cur = salesIndex.get(k) || { count: 0, net: 0 };
+    cur.count += 1;
+    cur.net += Number(s.net_sales) || 0;
+    salesIndex.set(k, cur);
   }
   const salesMonths = [...monthSet].sort();
   const latestSalesMonth = salesMonths[salesMonths.length - 1];
@@ -10538,18 +10564,28 @@ routes.dashboard = function (u, params) {
     }
     if (branch !== "events") {
       if (currentMonths.length) {
-        const combos = [...salesIndex.entries()].map(([k,count]) => { const [b,m]=k.split("|"); return { b, m, count }; })
-          .sort((a,bb) => bb.m.localeCompare(a.m) || a.b.localeCompare(bb.b));
-        const pills = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" } });
-        for (const c of combos.slice(0, 24)) {
-          const inSel = (c.b === branch && c.m >= monthFrom && c.m <= monthTo);
-          pills.appendChild(el("button", {
-            class: "chip",
-            style: inSel ? { background: "var(--accent)", color: "#2b1810", fontWeight: "700" } : {},
-            onClick: () => { branch = c.b; monthFrom = c.m; monthTo = c.m; mFromInput.value = c.m; mToInput.value = c.m; draw(); },
-          }, `${c.b} · ${c.m} (${c.count})`));
+        // Grouped by branch (not a flat month-sorted list) so it's easy to see, for each
+        // branch, exactly which months are loaded and what they made — e.g. to confirm a
+        // freshly-uploaded month actually landed under the right branch.
+        const branchesForDiag = [...branchSet].filter(b => b && b !== "events").sort();
+        for (const b of branchesForDiag) {
+          const monthsForBranch = [...salesIndex.entries()]
+            .filter(([k]) => k.startsWith(b + "|"))
+            .map(([k, v]) => ({ m: k.slice(b.length + 1), ...v }))
+            .sort((a, bb) => bb.m.localeCompare(a.m));
+          if (!monthsForBranch.length) continue;
+          diag.appendChild(el("div", { class: "muted small", style: { marginTop: "10px", textTransform: "capitalize", fontWeight: "700" } }, b));
+          const pills = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" } });
+          for (const c of monthsForBranch) {
+            const inSel = (b === branch && c.m >= monthFrom && c.m <= monthTo);
+            pills.appendChild(el("button", {
+              class: "chip",
+              style: inSel ? { background: "var(--accent)", color: "#2b1810", fontWeight: "700" } : {},
+              onClick: () => { branch = b; monthFrom = c.m; monthTo = c.m; mFromInput.value = c.m; mToInput.value = c.m; draw(); },
+            }, `${c.m} · ${money(c.net)} (${c.count} rows)`));
+          }
+          diag.appendChild(pills);
         }
-        diag.appendChild(pills);
       } else {
         diag.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, "No sales uploaded yet. Use Upload Sales (POS) to add a CSV."));
       }
