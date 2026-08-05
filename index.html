@@ -2101,6 +2101,32 @@ async function _kpiMergeDoc() {
     if (tomb.size) v = _stripTomb(v, tomb);
     doc[k] = v;
   }
+  // Collapse byte-for-byte duplicate rows before pruning by age. A union-by-id merge
+  // (_mergeArrays) can never catch these: alert_log dedupes on push by `key`, but that
+  // guard only works within a single durably-persisted state — during the crash/reopen
+  // loop neither localStorage nor Firestore was durably capturing pushes, so the same
+  // scan replayed on every reload and appended the identical row again (one item saw 45
+  // copies in a single day). leadership_notifications had no push-time guard at all
+  // (fixed in notifyLeadershipRole, but existing duplicates still need collapsing here).
+  if (Array.isArray(doc.alert_log)) {
+    const byKey = new Map();
+    for (const a of doc.alert_log) {
+      if (!a) continue;
+      const ex = byKey.get(a.key);
+      if (!ex || (a.follow_ups || []).length > (ex.follow_ups || []).length) byKey.set(a.key, a);
+    }
+    doc.alert_log = [...byKey.values()];
+  }
+  if (Array.isArray(doc.leadership_notifications)) {
+    const byContent = new Map();
+    for (const n of doc.leadership_notifications) {
+      if (!n) continue;
+      const k = `${n.role_key}|${n.title}|${n.body}|${(n.at || "").slice(0, 10)}`;
+      if (!byContent.has(k)) byContent.set(k, n);
+    }
+    doc.leadership_notifications = [...byContent.values()];
+  }
+
   const RETENTION_DAYS = 45;
   const cutoffDate = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString().slice(0, 10);
   const cutoffISO   = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
@@ -15263,6 +15289,22 @@ function getLeadershipAssignment(month) {
 }
 
 function notifyLeadershipRole(roleKey, title, body) {
+  state.leadership_notifications = state.leadership_notifications || [];
+  // Every caller (low-stock scan, reorder follow-up, engine alerts, cash deposit
+  // reminder) re-fires on every home-screen render with the same (roleKey, title, body)
+  // until the underlying condition clears. Each push here used a fresh random uuid with
+  // no identity check at all, so if the state carrying the earlier push never durably
+  // persisted (localStorage quota exceeded + Firestore sync stuck at the same time —
+  // exactly what happened during the repeated Chrome crash/reopen cycles) every reload
+  // replayed the same scan and appended another byte-for-byte duplicate. One device saw
+  // this grow to 1,778 rows, which is most of what blew the kpi chunk past Firestore's
+  // 1 MB limit. Guard against re-pushing the identical notification on the same day.
+  const today = new Date().toISOString().slice(0,10);
+  const alreadyToday = state.leadership_notifications.some(n =>
+    n.role_key === roleKey && n.title === title && n.body === body && (n.at || "").slice(0,10) === today
+  );
+  if (alreadyToday) return;
+
   notifyHaidi(title, body);
   const month = new Date().toISOString().slice(0,7);
   const assignment = getLeadershipAssignment(month);
@@ -15271,7 +15313,6 @@ function notifyLeadershipRole(roleKey, title, body) {
   if (roleUserId && cu && cu.id === roleUserId) {
     toast(`${title} — ${body}`, "warn");
   }
-  state.leadership_notifications = state.leadership_notifications || [];
   state.leadership_notifications.push({
     id: uuid(), at: new Date().toISOString(),
     role_key: roleKey, role_user_id: roleUserId,
