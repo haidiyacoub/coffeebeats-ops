@@ -3492,7 +3492,7 @@ const ROLE_ACCESS = {
                  "my_hr","staff_hr","leaderboard","notifications","suggestions",
                  "my_training","training_quiz_take","app_guide"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
-  barista: ["home","my_id","waste_new","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","my_hr","leaderboard","notifications","suggestions",
+  barista: ["home","my_id","waste_new","waste_list","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","my_hr","leaderboard","notifications","suggestions",
             "my_training","training_quiz_take","app_guide"],
   // Zawya-only support roles — minimal access: home screen + own profile
   manager: ["home","my_id","users","leave_new","leave_list","my_hr","handbook","notifications","suggestions","app_guide"],
@@ -3767,6 +3767,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("📖", T("Barista Handbook","دليل البريستا"), T("Recipes & drink guide","الوصفات ودليل المشروبات"), () => go("handbook")));
     tiles.appendChild(tile("📱", T("App Guide","دليل التطبيق"), T("How to use this app (EN + AR)","كيفية استخدام التطبيق (عربي وإنجليزي)"), () => go("app_guide")));
     tiles.appendChild(tile("🗑️", T("Record Waste","تسجيل الهدر"), T("Every shift","كل شيفت"), () => go("waste_new")));
+    tiles.appendChild(tile("📋", T("Waste Log","سجل الهدر"), T("View recent entries","عرض الإدخالات الأخيرة"), () => go("waste_list")));
     tiles.appendChild(tile("🔒", T("Shift Close","إغلاق الشيفت"), T("End-of-shift summary","ملخص نهاية الشيفت"), () => go("shift_close_new")));
     tiles.appendChild(tile("🕐", T("Sign-In Stamp","بصمة الحضور"), T("Clock-in photo","صورة تسجيل الدخول"), () => go("signin_stamp_new")));
     tiles.appendChild(tile("🧹", T("Cleaning Log","سجل النظافة"), T("Upload checklist photo","رفع صورة قائمة التحقق"), () => go("cleaning_log_new")));
@@ -3785,7 +3786,6 @@ routes.home = function (u) {
       tiles.appendChild(tile("🏪", T("Supplier List","قائمة الموردين"), T("Manage suppliers per item","إدارة الموردين لكل صنف"), () => go("supplier_list")));
       tiles.appendChild(tile("📉", T("Inventory Status","حالة المخزون"), T("Low-stock alerts & restock","تنبيهات نقص المخزون وإعادة الطلب"), () => go("reorder_action_list")));
       tiles.appendChild(tile("📦", T("Inventory Count","جرد المخزون"), T("Monthly snapshot","جرد شهري"), () => go("snapshot_new")));
-      tiles.appendChild(tile("🗑️", T("Waste Log","سجل الهدر"), T("View recent entries","عرض الإدخالات الأخيرة"), () => go("waste_list")));
       tiles.appendChild(tile("🧾", T("Record Purchase","تسجيل مشترى"), T("Upload receipt","رفع الفاتورة"), () => go("purchase_new")));
       tiles.appendChild(tile("📑", T("Purchases Log","سجل المشتريات"), T("View receipts","عرض الفواتير"), () => go("purchase_list")));
       tiles.appendChild(tile("💵", T("Petty Cash","العهدة النقدية"), T("Balance & log","الرصيد والسجل"), () => go("petty_cash")));
@@ -4201,7 +4201,10 @@ routes.waste_list = function (u) {
   wrap.appendChild(header(T("Recent waste","الهدر الأخير"), T("Signed entries. Tap + to add.","سجلات موقّعة. اضغط + للإضافة.")));
 
   const list = el("div", { class: "list" });
-  const mine = state.waste.filter(w => u.role === "owner" || u.branches.includes(w.branch))
+  // Always show entries the viewer personally submitted, regardless of branch —
+  // stale JWT claims (branches only refresh on token renewal) can otherwise hide
+  // a user's own just-submitted entry from their own log.
+  const mine = state.waste.filter(w => u.role === "owner" || u.role === "accountant" || w.by === u.id || (u.branches||[]).includes(w.branch))
     .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
   if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, T("No entries yet.","لا توجد سجلات بعد.")));
   for (const w of mine) {
