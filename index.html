@@ -4606,6 +4606,11 @@ routes.snapshot_new = function (u) {
         style: { maxWidth: "120px" }
       });
       inputs[it.id] = inp;
+      // The input is reused across redraws (search/branch switch) to preserve any
+      // in-progress typing, but its placeholder was only ever set at creation — so a
+      // freshly-submitted count kept showing the OLD theoretical value here. Keep it
+      // in sync with the just-recomputed stock on every draw.
+      inp.placeholder = String(pre);
       // Predictive usage + current threshold
       const usage = computeDailyUsage(it.id, branch);
       const cfg = (state.inventory_alerts || {})[it.id] || {};
