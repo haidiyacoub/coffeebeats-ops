@@ -2696,9 +2696,17 @@ function scanReorderFollowUps() {
     { label: "5d", days: 5, urgency: "🚨 URGENT — reorder overdue" },
     { label: "6d", days: 6, urgency: "🔴 CRITICAL — reorder still missing" },
   ];
+  // Nothing past the last level (6 days) can ever fire a new escalation, so alerts older
+  // than that are dead weight here. alert_log can carry months of history (up to the kpi
+  // chunk's 180-day retention window), and every entry in it used to run a full scan over
+  // state.purchases (isReorderResolved) on EVERY home-screen render regardless of age —
+  // that unbounded alerts × purchases scan is what was freezing/crashing the tab.
+  const maxLevelDays = LEVELS[LEVELS.length - 1].days;
+  const oldestRelevantDate = new Date(now); oldestRelevantDate.setDate(oldestRelevantDate.getDate() - maxLevelDays);
+  const oldestRelevant = oldestRelevantDate.toISOString().slice(0,10);
 
   for (const alert of state.alert_log) {
-    if (!alert.date) continue;
+    if (!alert.date || alert.date < oldestRelevant) continue;
     // Migrate old entries that lack follow_ups
     if (!Array.isArray(alert.follow_ups)) { alert.follow_ups = []; dirty = true; }
 
