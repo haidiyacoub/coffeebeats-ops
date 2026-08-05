@@ -1914,6 +1914,21 @@ async function doSync() {
             .then(() => _snapshotChunk(chunk, keys))
             .catch(err => { err._chunk = chunk; throw err; }));
       }
+      // inv_engine: engine_alerts used to live nested here before being split into its own
+      // chunk (see the migration in migrateState). Deleting it from local state alone never
+      // clears it remotely — _mergeObjects starts from {...remote}, so a Firestore doc that
+      // still carries the old field keeps getting copied straight back on every sync,
+      // permanently pushing this chunk toward the 1 MB limit even on fully-migrated devices.
+      // Strip it here so the field actually disappears for good.
+      if (chunk === "inv_engine") {
+        if (!_chunkChanged(chunk, keys)) return Promise.resolve();
+        return _mergeChunkDoc(chunk, keys).then(doc => {
+          if (doc.inv_engine && "engine_alerts" in doc.inv_engine) delete doc.inv_engine.engine_alerts;
+          return db.collection("state").doc(chunk).set(doc)
+            .then(() => _snapshotChunk(chunk, keys))
+            .catch(err => { err._chunk = chunk; throw err; });
+        });
+      }
       if (!_chunkChanged(chunk, keys)) return Promise.resolve();
       // Merge-on-write: union with remote so an empty/stale device can never wipe data.
       return _mergeChunkDoc(chunk, keys).then(doc => {
@@ -4037,6 +4052,12 @@ routes.waste_new = function (u) {
   let branch = u.branches[0];
   let itemId = null;
 
+  // ── Photo evidence (multi-image, auto-uploads to Firebase Storage) ──
+  // Shown at the very top so it's the first thing a barista sees/does.
+  wrap.appendChild(el("div", { class: "banner-arch" }, T("📷 Attach a photo of the waste before submitting — required for expired milk, recommended for everything else.","📷 أرفق صورة للهدر قبل الإرسال — مطلوبة للحليب منتهي الصلاحية، ويُفضّل إرفاقها لباقي الحالات.")));
+  const wastePhotoField = makePhotoField({ label: T("Evidence photo(s)","صورة/صور إثبات"), multiple: true, formLabel: "Record Waste" });
+  wrap.appendChild(wastePhotoField.el);
+
   // ── No-waste quick-log ──────────────────────────────────────────
   const noWasteCard = el("div", { class: "card", style: { marginBottom: "14px", background: "var(--surface-2)", border: "1.5px dashed var(--border)" } }, [
     el("div", { class: "muted small", style: { marginBottom: "8px" } }, T("No waste to report this shift? Tap below to log a clear shift — this still counts as your required daily entry.","لا يوجد هدر لهذا الشيفت؟ اضغط أدناه لتسجيل شيفت نظيف — يُحتسب كإدخالك اليومي المطلوب.")),
@@ -4143,10 +4164,6 @@ routes.waste_new = function (u) {
       el("div", { class: "small muted", style: { marginTop: "6px", textAlign: "center" } }, T(`Will reduce ${it.name} at ${branch} by ${qty || 0} ${it.unit}.`, `سيتم خصم ${qty || 0} ${it.unit} من ${it.name} في ${branch}.`)),
     ]));
   }
-  // ── Photo evidence (multi-image, auto-uploads to Firebase Storage) ──
-  const wastePhotoField = makePhotoField({ label: T("Evidence photo(s)","صورة/صور إثبات"), multiple: true, formLabel: "Record Waste" });
-  wrap.appendChild(wastePhotoField.el);
-
   search.addEventListener("input", update);
   update();
 
