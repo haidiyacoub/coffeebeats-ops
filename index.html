@@ -4531,12 +4531,19 @@ routes.shift_close_list = function (u) {
 // ==============================================================
 // INVENTORY SNAPSHOT (monthly count)
 // ==============================================================
+// Remembers the last branch picked on this screen across in-app navigation (e.g. tap
+// Home then back to Inventory Count) within the same page load. Without this, `branch`
+// silently resets to u.branches[0] on every fresh entry to the screen — a multi-branch
+// head barista who counts Zawya, navigates away, then comes back sees Maadi's numbers
+// (often 0/blank for an item never counted there) and it looks like their count vanished,
+// even though it saved correctly under the branch they actually picked.
+let _lastSnapshotBranch = null;
 routes.snapshot_new = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Monthly inventory count","الجرد الشهري للمخزون"), T("Count every item. We pre-fill the last counted value. Submit when done.","احصِ كل صنف. نملأ القيمة المحسوبة الأخيرة مسبقاً. أرسل عند الانتهاء.")));
-  let branch = u.branches[0];
+  let branch = (u.branches.includes(_lastSnapshotBranch) ? _lastSnapshotBranch : u.branches[0]);
   let asOf = new Date().toISOString().slice(0,10);
-  const branchPicker = makeBranchPicker(u.branches, () => branch, b => { branch = b; draw(); });
+  const branchPicker = makeBranchPicker(u.branches, () => branch, b => { branch = b; _lastSnapshotBranch = b; draw(); });
   wrap.appendChild(branchPicker);
 
   const dateLab = el("div", {}, [
