@@ -2079,9 +2079,15 @@ async function _invAlertsMergeDoc() {
 // Build the kpi chunk by merging local with remote, then retention-pruning the two
 // unbounded append-only logs it carries: alert_log (low-stock history) and
 // leadership_notifications. Neither has a dismiss/read lifecycle, and nothing in the app
-// reads more than a 30-day window from either (e.g. the low-stock alert history view) — so
-// entries older than that carry no product value but were never capped, which is what grew
-// this chunk past Firestore's 1 MB limit (alert_log alone reached 614 KB / 1915 records).
+// reads more than a 30-day window from either (every read site — the low-stock history
+// view, the reorder action banner, kpiTeamworkScore, the notifications list — caps at
+// 10–30 days; leadership_notifications only ever shows the latest 50). The previous
+// 180-day retention window was set far more generous than any of that, and at sustained
+// real-world volume (widespread understocking → ~32 new alert_log rows/day) that alone
+// grew this chunk to 1.9 MB (5,767 records), blowing past Firestore's 1 MB limit and
+// permanently failing every sync. 45 days keeps a comfortable buffer over the real 30-day
+// read window while cutting the doc back under the limit with room for the chunk's other
+// (currently small) fields to grow.
 // Pruning AFTER the union, right before every write, is required for the same reason as
 // _invAlertsMergeDoc: a plain union-by-id merge can only ever grow the doc.
 async function _kpiMergeDoc() {
@@ -2095,7 +2101,7 @@ async function _kpiMergeDoc() {
     if (tomb.size) v = _stripTomb(v, tomb);
     doc[k] = v;
   }
-  const RETENTION_DAYS = 180;
+  const RETENTION_DAYS = 45;
   const cutoffDate = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString().slice(0, 10);
   const cutoffISO   = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
   if (Array.isArray(doc.alert_log)) {
