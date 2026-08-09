@@ -1366,20 +1366,20 @@ const STATE_CHUNKS = {
   menu_data:     ["menu"],
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
-  waste:         ["waste"],
-  purchases:     ["purchases", "petty_cash", "bank_ledger"],
+  waste:         ["waste", "deleted_waste"],
+  purchases:     ["purchases", "petty_cash", "bank_ledger", "deleted_purchases"],
   shifts:        ["shifts"],
   // NOTE: snapshots, shift_closes, cleaning_logs and signin_stamps are NO LONGER
   // single docs here — they are append-only logs that grow without bound and would
   // eventually blow the 1 MB Firestore doc limit and fail every sync. They are now
   // month-sharded (see MONTH_SHARDED / _syncMonthShards / the pull migration below).
-  suggestions:   ["suggestions"],
+  suggestions:   ["suggestions", "deleted_suggestions"],
   roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
-  hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves"],
+  hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves", "deleted_salary_loans", "deleted_sick_leave_deductions", "deleted_leaves", "deleted_salaries"],
   hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "maintenance_config"],
   media:         ["photo_log", "assets"],
-  kpi:           ["kpi_manual", "kpi_logs", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications"],
+  kpi:           ["kpi_manual", "kpi_logs", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications", "deleted_customer_feedback"],
   tombstones:    ["deleted_ids"],   // ids deleted on any device — unioned, applied on every merge/pull
   meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times", "sales_meta"],
   inv_engine:        ["inv_engine"],
@@ -1753,6 +1753,101 @@ function recordDeletion(...ids) {
 function _untombstone(...ids) {
   const drop = new Set(ids);
   if (state.deleted_ids) state.deleted_ids = state.deleted_ids.filter(t => !(t && drop.has(t.id)));
+}
+
+// ==============================================================
+// GENERIC RECORD EDIT / SOFT-DELETE — reused across every owner-manageable
+// data-entry list (loans, waste, purchases, overtime, leaves, feedback, …).
+// Deletion moves the record into a paired `deleted_<key>` trash array (kept
+// short, restorable) rather than wiping it outright — the underlying
+// cross-device removal itself is handled for free by the generic
+// _collectDeletions()/tombstone system above as long as the array's chunk
+// is registered in STATE_CHUNKS.
+// ==============================================================
+function deleteRecordToTrash(arrKey, trashKey, record, keep = 20) {
+  state[arrKey] = (state[arrKey] || []).filter(x => x.id !== record.id);
+  state[trashKey] = state[trashKey] || [];
+  state[trashKey].unshift({ ...record, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
+  state[trashKey] = state[trashKey].slice(0, keep);
+  saveState();
+}
+function restoreRecordFromTrash(arrKey, trashKey, record) {
+  const { deleted_at, deleted_by, ...original } = record;
+  state[arrKey] = state[arrKey] || [];
+  state[arrKey].push(original);
+  _untombstone(original.id);
+  state[trashKey] = (state[trashKey] || []).filter(x => x.id !== record.id);
+  saveState();
+}
+// Appends ✎ edit and 🗑 delete buttons to `row` for `record`. `editFields(record)`
+// returns an openPrompt `fields` array prefilled from the record (omit to skip the
+// edit button); `onEdit(record, vals)` should mutate `record` in place with the
+// submitted values.
+function addRecordActions(row, { record, arrKey, trashKey, entityLabel, editFields, onEdit, deleteConfirm }) {
+  if (editFields) {
+    row.appendChild(el("button", {
+      class: "btn ghost", style: { marginLeft: "6px" },
+      title: T("Edit", "تعديل"),
+      onClick: () => {
+        openPrompt({
+          title: T(`Edit ${entityLabel}`, `تعديل ${entityLabel}`),
+          fields: editFields(record),
+          onSubmit: (vals) => {
+            onEdit(record, vals);
+            saveState();
+            toast(T(`${entityLabel} updated`, `تم تحديث ${entityLabel}`));
+            render();
+          }
+        });
+      }
+    }, "✎"));
+  }
+  row.appendChild(el("button", {
+    class: "btn ghost", style: { marginLeft: "6px", color: "var(--bad)", border: "1px solid var(--bad)" },
+    title: T("Delete", "حذف"),
+    onClick: () => {
+      if (!confirm(deleteConfirm || T(`Delete this ${entityLabel}? You can undo below.`, `حذف ${entityLabel}؟ يمكنك التراجع أدناه.`))) return;
+      deleteRecordToTrash(arrKey, trashKey, record);
+      toast(T(`${entityLabel} deleted — scroll down to undo`, `تم الحذف — مرّر لأسفل للتراجع`));
+      render();
+    }
+  }, "🗑"));
+}
+// Renders the "recently deleted, tap to restore" trash card for a record list.
+// `rowLabel(record)` formats the summary line for a trashed record. `restoreFn`
+// overrides the default restore (e.g. purchases also restore a paired ledger entry).
+function renderTrashSection(wrap, { arrKey, trashKey, entityLabel, rowLabel, canManage, restoreFn }) {
+  const trash = state[trashKey];
+  if (!trash || !trash.length) return;
+  const box = el("div", { class: "card", style: { marginTop: "12px", borderColor: "var(--warn)" } });
+  box.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", color: "var(--warn)" } }, T("Recently deleted (tap to restore)", "المحذوف مؤخراً (اضغط للاستعادة)")));
+  for (const r of trash.slice(0, 10)) {
+    box.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
+      el("div", { class: "k" }, [
+        el("div", { style: { color: "var(--ink-dim)" } }, rowLabel(r)),
+        el("div", { class: "muted small" }, T(`Deleted ${fmtDate(r.deleted_at)} · by ${r.deleted_by || "?"}`, `حُذف ${fmtDate(r.deleted_at)} · بواسطة ${r.deleted_by || "?"}`)),
+      ]),
+      el("button", {
+        class: "btn secondary", style: { width: "auto" },
+        onClick: () => {
+          (restoreFn || ((rec) => restoreRecordFromTrash(arrKey, trashKey, rec)))(r);
+          toast(T(`${entityLabel} restored ✓`, `تم الاستعادة ✓`));
+          render();
+        }
+      }, T("↩ Restore", "↩ استعادة")),
+    ]));
+  }
+  if (canManage) {
+    box.appendChild(el("button", {
+      class: "btn ghost", style: { marginTop: "8px", color: "var(--bad)" },
+      onClick: () => {
+        if (!confirm(T("Permanently clear all deleted?", "حذف كل المحذوف نهائياً؟"))) return;
+        state[trashKey] = [];
+        saveState(); toast(T("Trash cleared", "تم إفراغ المهملات")); render();
+      }
+    }, T("🗑 Clear trash", "🗑 إفراغ المهملات")));
+  }
+  wrap.appendChild(box);
 }
 // Detect records this device deleted since its last successful sync, by id, across every
 // regular chunk array (sharded high-volume logs are excluded — they're bulk-replaced, not
@@ -4227,12 +4322,40 @@ routes.waste_list = function (u) {
       });
       growParts.push(thumbRow);
     }
+    const rowActions = el("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" } }, [
+      el("span", { class: "pill" }, w.branch),
+    ]);
+    if (u.role === "owner") {
+      state.deleted_waste = state.deleted_waste || [];
+      const btnRow = el("div", { style: { display: "flex", gap: "4px" } });
+      addRecordActions(btnRow, {
+        record: w, arrKey: "waste", trashKey: "deleted_waste", entityLabel: T("waste entry","سجل هدر"),
+        editFields: (rec) => [
+          { key: "qty_canonical", label: `Qty (${rec.unit})`, type: "number", value: rec.qty_canonical },
+          { key: "branch",  label: "Branch", type: "text", value: rec.branch || "" },
+          { key: "reason",  label: "Reason", type: "text", value: rec.reason || "" },
+          { key: "note",    label: "Note", type: "text", value: rec.note || "" },
+        ],
+        onEdit: (rec, vals) => {
+          rec.qty_canonical = Number(vals.qty_canonical) || 0;
+          rec.branch = vals.branch || rec.branch;
+          rec.reason = vals.reason || rec.reason;
+          rec.note = vals.note || "";
+        },
+        deleteConfirm: T(`Delete this waste entry (${w.item_name})? You can undo below.`, `حذف سجل الهدر (${w.item_name})؟ يمكنك التراجع أدناه.`),
+      });
+      rowActions.appendChild(btnRow);
+    }
     list.appendChild(el("div", { class: "row" }, [
       el("div", { class: "grow" }, growParts),
-      el("span", { class: "pill" }, w.branch),
+      rowActions,
     ]));
   }
   wrap.appendChild(list);
+  renderTrashSection(wrap, {
+    arrKey: "waste", trashKey: "deleted_waste", entityLabel: T("Waste entry","سجل هدر"), canManage: u.role === "owner",
+    rowLabel: (r) => `${r.item_name || "—"} · ${fmtQty(r.qty_canonical, r.unit)} · ${r.branch || ""}`,
+  });
   wrap.appendChild(el("div", { class: "sticky-actions" }, [
     el("button", { class: "btn", onClick: () => go("waste_new") }, T("+ New waste entry","+ سجل هدر جديد")),
     el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, T("← Home","← الرئيسية")),
@@ -5815,24 +5938,89 @@ routes.purchase_new = function (u) {
   return wrap;
 };
 
+// Owner-only delete/restore for a purchase, including its paired petty_cash / bank_ledger
+// entry (found by ref === purchase id) so the cash/bank balance stays correct. The ledger
+// entry travels inside the trash record's `_ledger_entry` so restore can re-push it.
+function _deletePurchase(p) {
+  state.deleted_purchases = state.deleted_purchases || [];
+  const ledgerEntry = state.petty_cash.find(x => x.ref === p.id) || state.bank_ledger.find(x => x.ref === p.id) || null;
+  const ledgerArr = state.petty_cash.some(x => x.ref === p.id) ? "petty_cash" : "bank_ledger";
+  state.purchases = state.purchases.filter(x => x.id !== p.id);
+  if (ledgerEntry) state[ledgerArr] = state[ledgerArr].filter(x => x.ref !== p.id);
+  state.deleted_purchases.unshift({ ...p, _ledger_entry: ledgerEntry, _ledger_arr: ledgerEntry ? ledgerArr : null, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
+  state.deleted_purchases = state.deleted_purchases.slice(0, 20);
+  saveState();
+}
+function _restorePurchase(r) {
+  const { deleted_at, deleted_by, _ledger_entry, _ledger_arr, ...original } = r;
+  state.purchases.push(original);
+  if (_ledger_entry && _ledger_arr) state[_ledger_arr].push(_ledger_entry);
+  _untombstone(original.id);
+  state.deleted_purchases = (state.deleted_purchases || []).filter(x => x.id !== r.id);
+  saveState();
+}
+
 routes.purchase_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Purchases","المشتريات"), T("Tap a row for details.","اضغط على أي صف لعرض التفاصيل.")));
   const list = el("div", { class: "list" });
   const rows = state.purchases.filter(p => u.role === "owner" || u.branches.includes(p.branch))
     .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
+  state.deleted_purchases = state.deleted_purchases || [];
   for (const p of rows) {
-    list.appendChild(el("div", { class: "row", onClick: () => showPurchase(p) }, [
-      el("div", { class: "grow" }, [
+    const rowChildren = [
+      el("div", { class: "grow", onClick: () => showPurchase(p) }, [
         el("div", { class: "title" }, [`${p.supplier} — ${money(p.total)}`, p.is_test ? testBadge() : null]),
         el("div", { class: "sub" }, T(`${p.branch} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`, `${p.branch} · ${p.date} · ${p.lines.length} بند · ${p.paid_by}`)),
         el("div", { class: "sub" }, T(`by ${p.by_name} · ${fmtDate(p.at)}`, `بواسطة ${p.by_name} · ${fmtDate(p.at)}`)),
       ]),
       el("span", { class: "pill" }, p.paid_by.replace("_"," ")),
-    ]));
+    ];
+    if (u.role === "owner") {
+      const actions = el("div", { style: { display: "flex", gap: "4px", alignItems: "center" } });
+      actions.appendChild(el("button", {
+        class: "btn ghost", style: { marginLeft: "6px" }, title: T("Edit","تعديل"),
+        onClick: (e) => {
+          e.stopPropagation();
+          openPrompt({
+            title: T("Edit purchase","تعديل المشترى"),
+            fields: [
+              { key: "supplier", label: "Supplier", type: "text", value: p.supplier || "" },
+              { key: "branch",   label: "Branch", type: "text", value: p.branch || "" },
+              { key: "date",     label: "Date", type: "date", value: p.date || (p.at||"").slice(0,10) },
+              { key: "note",     label: "Note", type: "text", value: p.note || "" },
+            ],
+            onSubmit: (vals) => {
+              p.supplier = vals.supplier || p.supplier;
+              p.branch = vals.branch || p.branch;
+              p.date = vals.date || p.date;
+              p.note = vals.note || "";
+              saveState(); toast(T("Purchase updated","تم تحديث المشترى")); render();
+            }
+          });
+        }
+      }, "✎"));
+      actions.appendChild(el("button", {
+        class: "btn ghost", style: { marginLeft: "6px", color: "var(--bad)", border: "1px solid var(--bad)" }, title: T("Delete","حذف"),
+        onClick: (e) => {
+          e.stopPropagation();
+          if (!confirm(T(`Delete purchase from ${p.supplier} (${money(p.total)})? Any linked petty cash / bank ledger entry is removed too. You can undo below.`, `حذف مشترى من ${p.supplier} (${money(p.total)})؟ سيُحذف أيضاً قيد الخزينة/البنك المرتبط. يمكنك التراجع أدناه.`))) return;
+          _deletePurchase(p);
+          toast(T("Purchase deleted — scroll down to undo","تم حذف المشترى — مرّر لأسفل للتراجع"));
+          render();
+        }
+      }, "🗑"));
+      rowChildren.push(actions);
+    }
+    list.appendChild(el("div", { class: "row" }, rowChildren));
   }
   if (rows.length === 0) list.appendChild(el("div", { class: "muted" }, T("No purchases yet.","لا توجد مشتريات بعد.")));
   wrap.appendChild(list);
+  renderTrashSection(wrap, {
+    arrKey: "purchases", trashKey: "deleted_purchases", entityLabel: T("Purchase","مشترى"), canManage: u.role === "owner",
+    rowLabel: (r) => `${r.supplier || "—"} · ${money(r.total)} · ${r.branch || ""}`,
+    restoreFn: _restorePurchase,
+  });
   wrap.appendChild(btnBack());
   return wrap;
 };
@@ -6268,6 +6456,8 @@ routes.salaries = function (u) {
     body.appendChild(cfgCard);
 
     // ---- 2) Loans card ----
+    const isOwnerMgr = u.role === "owner";
+    state.deleted_salary_loans = state.deleted_salary_loans || [];
     const loansCard = el("div", { class: "card", style: { marginTop: "12px" } });
     loansCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, T("Loans (deducted end of month)","السلف (تُخصم آخر الشهر)")));
     loansCard.appendChild(el("button", { class: "btn secondary", style: { marginTop: "8px" }, onClick: addLoan }, T("➕ Record loan","➕ تسجيل سلفة")));
@@ -6276,19 +6466,43 @@ routes.salaries = function (u) {
       loansCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } }, T("No loans recorded for this month.","لا توجد سلف مسجّلة هذا الشهر.")));
     } else {
       for (const r of monthLoans.slice().sort((a,b) => (b.at||"").localeCompare(a.at||""))) {
-        loansCard.appendChild(el("div", { class: "kv" }, [
+        const row = el("div", { class: "kv", style: { alignItems: "center" } }, [
           el("div", { class: "k" }, [
             el("div", {}, `${r.barista || "—"}`),
             el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || r.by || "—"}${r.note ? " · " + r.note : ""}`),
           ]),
           el("div", { class: "v" }, money(r.amount)),
-        ]));
+        ]);
+        if (isOwnerMgr) {
+          addRecordActions(row, {
+            record: r, arrKey: "salary_loans", trashKey: "deleted_salary_loans", entityLabel: T("loan","سلفة"),
+            editFields: (rec) => [
+              { key: "amount", label: "Loan amount (EGP)", type: "number", value: rec.amount },
+              { key: "date",   label: "Date", type: "date", value: rec.date || (rec.at||"").slice(0,10) },
+              { key: "month",  label: "Deduct from month (YYYY-MM)", type: "text", value: rec.month || (rec.date||"").slice(0,7) },
+              { key: "note",   label: "Note", type: "text", value: rec.note || "" },
+            ],
+            onEdit: (rec, vals) => {
+              rec.amount = Number(vals.amount) || 0;
+              rec.date = vals.date;
+              rec.month = vals.month || (vals.date||"").slice(0,7);
+              rec.note = vals.note || "";
+            },
+            deleteConfirm: T(`Delete loan ${money(r.amount)} for ${r.barista}? You can undo below.`, `حذف سلفة ${money(r.amount)} لـ ${r.barista}؟ يمكنك التراجع أدناه.`),
+          });
+        }
+        loansCard.appendChild(row);
       }
     }
     body.appendChild(loansCard);
+    renderTrashSection(body, {
+      arrKey: "salary_loans", trashKey: "deleted_salary_loans", entityLabel: T("Loan","سلفة"), canManage: isOwnerMgr,
+      rowLabel: (r) => `${r.barista || "—"} · ${money(r.amount)}`,
+    });
 
     // ---- 2.25) Sick leave deductions card ----
     state.sick_leave_deductions = state.sick_leave_deductions || [];
+    state.deleted_sick_leave_deductions = state.deleted_sick_leave_deductions || [];
     const sickCard = el("div", { class: "card", style: { marginTop: "12px" } });
     sickCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, T("Sick leaves (¼ day deducted per leave)","الإجازات المرضية (خصم ربع يوم لكل إجازة)")));
     if (u.role === "owner" || u.role === "accountant" || u.role === "head_barista") {
@@ -6299,16 +6513,41 @@ routes.salaries = function (u) {
       sickCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } }, T("No sick leaves recorded for this month.","لا توجد إجازات مرضية مسجّلة هذا الشهر.")));
     } else {
       for (const r of monthSick.slice().sort((a,b) => (b.at||"").localeCompare(a.at||""))) {
-        sickCard.appendChild(el("div", { class: "kv" }, [
+        const row = el("div", { class: "kv", style: { alignItems: "center" } }, [
           el("div", { class: "k" }, [
             el("div", {}, `${r.barista || "—"} · ${r.days} sick day${r.days !== 1 ? "s" : ""}`),
             el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || r.by || "—"}${r.note ? " · " + r.note : ""}`),
           ]),
           el("div", { class: "v" }, `−${money(r.amount)}`),
-        ]));
+        ]);
+        if (isOwnerMgr) {
+          addRecordActions(row, {
+            record: r, arrKey: "sick_leave_deductions", trashKey: "deleted_sick_leave_deductions", entityLabel: T("sick leave","إجازة مرضية"),
+            editFields: (rec) => [
+              { key: "days",   label: "Sick days", type: "number", value: rec.days },
+              { key: "amount", label: "Amount deducted (EGP)", type: "number", value: rec.amount },
+              { key: "date",   label: "Date", type: "date", value: rec.date || (rec.at||"").slice(0,10) },
+              { key: "month",  label: "Deduct from month (YYYY-MM)", type: "text", value: rec.month || (rec.date||"").slice(0,7) },
+              { key: "note",   label: "Note", type: "text", value: rec.note || "" },
+            ],
+            onEdit: (rec, vals) => {
+              rec.days = Number(vals.days) || 0;
+              rec.amount = Number(vals.amount) || 0;
+              rec.date = vals.date;
+              rec.month = vals.month || (vals.date||"").slice(0,7);
+              rec.note = vals.note || "";
+            },
+            deleteConfirm: T(`Delete sick leave for ${r.barista}? You can undo below.`, `حذف إجازة مرضية لـ ${r.barista}؟ يمكنك التراجع أدناه.`),
+          });
+        }
+        sickCard.appendChild(row);
       }
     }
     body.appendChild(sickCard);
+    renderTrashSection(body, {
+      arrKey: "sick_leave_deductions", trashKey: "deleted_sick_leave_deductions", entityLabel: T("Sick leave","إجازة مرضية"), canManage: isOwnerMgr,
+      rowLabel: (r) => `${r.barista || "—"} · ${r.days} day(s) · ${money(r.amount)}`,
+    });
 
     // ---- 2.5) Overtime card ----
     state.overtime_logs = state.overtime_logs || [];
@@ -6358,6 +6597,28 @@ routes.salaries = function (u) {
           el("div", { class: "v", style: { display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"4px" } }, [
             statusPill,
             ...((!r.approved && (u.role === "owner")) ? [el("button", { class: "btn ghost", style: { fontSize:"11px", padding:"4px 10px", minHeight:"unset" }, onClick: () => { r.approved = true; r.approved_by = state._auth?.uid || null; saveState(); drawBody(); } }, "Approve")] : []),
+            ...((u.role === "owner") ? [el("button", { class: "btn ghost", style: { fontSize:"11px", padding:"4px 10px", minHeight:"unset" }, onClick: () => {
+              openPrompt({
+                title: T("Edit overtime entry","تعديل إدخال الأوفرتايم"),
+                fields: [
+                  { key: "hours",  label: "Hours", type: "number", value: r.hours },
+                  { key: "amount", label: "Amount (EGP)", type: "number", value: r.amount },
+                  { key: "date",   label: "Date", type: "date", value: r.date || (r.at||"").slice(0,10) },
+                  { key: "month",  label: "Month (YYYY-MM)", type: "text", value: r.month || (r.date||"").slice(0,7) },
+                  { key: "multiplier", label: "Multiplier (1.5 / 2)", type: "number", value: r.multiplier || 1.5 },
+                  { key: "note",   label: "Note", type: "text", value: r.note || "" },
+                ],
+                onSubmit: (vals) => {
+                  r.hours = Number(vals.hours) || 0;
+                  r.amount = Number(vals.amount) || 0;
+                  r.date = vals.date;
+                  r.month = vals.month || (vals.date||"").slice(0,7);
+                  r.multiplier = Number(vals.multiplier) || r.multiplier;
+                  r.note = vals.note || "";
+                  saveState(); toast(T("Overtime entry updated","تم تحديث الإدخال")); drawBody();
+                }
+              });
+            } }, "✎ Edit")] : []),
             ...((u.role === "owner") ? [el("button", { class: "btn bad", style: { fontSize:"11px", padding:"4px 10px", minHeight:"unset" }, onClick: () => {
               if (!confirm(`Remove this overtime entry for ${r.barista || "this barista"}${r.date ? " ("+r.date+")" : ""}, +${money(Math.round((r.amount||0)*100)/100)}? This can't be undone.`)) return;
               if (r.id != null) recordDeletion(r.id);
@@ -6490,21 +6751,47 @@ routes.salaries = function (u) {
       el("div", { style: { fontSize: "26px", fontWeight: "700" } }, money(paidTotal)),
     ]));
 
+    state.deleted_salaries = state.deleted_salaries || [];
     const list = el("div", { class: "card", style: { marginTop: "12px" } });
     if (paidThis.length === 0) {
       list.appendChild(el("div", { class: "muted small" }, T("No salary payouts logged this month.","لا توجد رواتب مصروفة مسجّلة هذا الشهر.")));
     } else {
       for (const r of paidThis) {
-        list.appendChild(el("div", { class: "kv" }, [
+        const row = el("div", { class: "kv", style: { alignItems: "center" } }, [
           el("div", { class: "k" }, [
             el("div", {}, `${r.recipient || "—"} · ${r.month || ""} · ${r.branch || ""}`),
             el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || r.by || "—"}${r.note ? " · " + r.note : ""}`),
           ]),
           el("div", { class: "v" }, money(r.amount)),
-        ]));
+        ]);
+        if (isOwnerMgr) {
+          addRecordActions(row, {
+            record: r, arrKey: "salaries", trashKey: "deleted_salaries", entityLabel: T("payout","صرف راتب"),
+            editFields: (rec) => [
+              { key: "amount",   label: "Amount (EGP)", type: "number", value: rec.amount },
+              { key: "branch",   label: "Branch", type: "text", value: rec.branch || "" },
+              { key: "date",     label: "Date", type: "date", value: rec.date || (rec.at||"").slice(0,10) },
+              { key: "month",    label: "Month (YYYY-MM)", type: "text", value: rec.month || (rec.date||"").slice(0,7) },
+              { key: "note",     label: "Note", type: "text", value: rec.note || "" },
+            ],
+            onEdit: (rec, vals) => {
+              rec.amount = Number(vals.amount) || 0;
+              rec.branch = vals.branch || "";
+              rec.date = vals.date;
+              rec.month = vals.month || (vals.date||"").slice(0,7);
+              rec.note = vals.note || "";
+            },
+            deleteConfirm: T(`Delete payout ${money(r.amount)} for ${r.recipient}? You can undo below.`, `حذف صرف ${money(r.amount)} لـ ${r.recipient}؟ يمكنك التراجع أدناه.`),
+          });
+        }
+        list.appendChild(row);
       }
     }
     body.appendChild(list);
+    renderTrashSection(body, {
+      arrKey: "salaries", trashKey: "deleted_salaries", entityLabel: T("Payout","صرف راتب"), canManage: isOwnerMgr,
+      rowLabel: (r) => `${r.recipient || "—"} · ${money(r.amount)}`,
+    });
   }
 
   function editSalaryConfig(person) {
@@ -6813,6 +7100,25 @@ routes.penalties = function (u) {
         el("div", { class: "v" }, money(r.amount)),
       ]);
       if (canEnter) {
+        row.appendChild(el("button", {
+          class: "btn ghost",
+          style: { marginLeft: "8px" },
+          title: T("Edit this penalty","تعديل هذا الخصم"),
+          onClick: () => {
+            openPrompt({
+              title: T("Edit penalty","تعديل الخصم"),
+              fields: [
+                { key: "amount", label: "Amount (EGP)", type: "number", value: r.amount },
+                { key: "note",   label: "Note", type: "text", value: r.note || "" },
+              ],
+              onSubmit: (vals) => {
+                r.amount = Number(vals.amount) || 0;
+                r.note = vals.note || "";
+                saveState(); toast(T("Penalty updated","تم تحديث الخصم")); render();
+              }
+            });
+          }
+        }, "✎"));
         row.appendChild(el("button", {
           class: "btn ghost",
           style: { marginLeft: "8px", color: "var(--bad)", border: "1px solid var(--bad)" },
@@ -8909,6 +9215,46 @@ async function fetchCalEventsRange(isoFrom, isoTo) {
     startHour: item.start.dateTime ? calApiHour(item.start.dateTime) : 10,
   })).filter(e => e.date);
 }
+
+/** Fetch upcoming entries for an arbitrary Google Calendar (by id) between isoFrom/isoTo.
+ *  Used by the "Live Calendars" agenda list on the Weekly Schedule page — reads events
+ *  via the Calendar API instead of an <iframe> embed, because Google's public embed
+ *  widget silently renders blank on browsers that block third-party cookies (notably
+ *  mobile Safari/Chrome-on-iOS under Intelligent Tracking Prevention, which have no
+ *  per-site override the way desktop browsers do). The API call has no such dependency.
+ *  Returns [{date, summary, allDay, startHour, location}] or throws. */
+async function fetchGCalAgenda(calId, isoFrom, isoTo) {
+  const apiKey = (state.gcal_api_key || "").trim();
+  if (!apiKey) throw new Error("No API key");
+  const tMax = new Date(isoTo + "T00:00:00");
+  tMax.setDate(tMax.getDate() + 1);
+  const tMaxStr = tMax.toISOString().slice(0,10) + "T00:00:00+02:00";
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`
+    + `?key=${encodeURIComponent(apiKey)}&singleEvents=true&orderBy=startTime&maxResults=50`
+    + `&timeMin=${encodeURIComponent(isoFrom + "T00:00:00+02:00")}`
+    + `&timeMax=${encodeURIComponent(tMaxStr)}`;
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), 10000);
+  const res = await fetch(url, { signal: ctrl.signal });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return (data.items || []).map(item => ({
+    date: calItemDate(item),
+    summary: item.summary || "(untitled)",
+    allDay: !!item.start.date,
+    startHour: item.start.dateTime ? calApiHour(item.start.dateTime) : null,
+    location: item.location || "",
+  })).filter(e => e.date);
+}
+function fmtHourLabel(h) {
+  if (h == null) return "";
+  const hh = Math.floor(h), mm = Math.round((h - hh) * 60);
+  const h12 = ((hh + 11) % 12) + 1;
+  return `${h12}:${String(mm).padStart(2, "0")} ${hh >= 12 ? "PM" : "AM"}`;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 routes.roster = function (u) {
@@ -8988,12 +9334,16 @@ routes.roster = function (u) {
   // ── Google Calendars ────────────────────────────────────────
   const GCAL_TABS = [
     { key: "big_studio",    label: "🎭 Big Studio",    icon: "🎭", color: "#6c47ff",
+      calId: "theactorsinstrument@gmail.com",
       src: "https://calendar.google.com/calendar/embed?src=theactorsinstrument%40gmail.com&ctz=Africa%2FCairo" },
     { key: "small_studio",  label: "🎬 Small Studio",  icon: "🎬", color: "#0ea5e9",
+      calId: "36tgil07g61tskionpia7d0tuc@group.calendar.google.com",
       src: "https://calendar.google.com/calendar/embed?src=36tgil07g61tskionpia7d0tuc%40group.calendar.google.com&ctz=Africa%2FCairo" },
     { key: "zawya",         label: "🎞 Zawya Cinema",  icon: "🎞", color: "#f59e0b",
+      calId: "37f8d281d892c7428e34906c5d4e42e716af83092630654898f9cf5035836fde@group.calendar.google.com",
       src: "https://calendar.google.com/calendar/embed?src=37f8d281d892c7428e34906c5d4e42e716af83092630654898f9cf5035836fde%40group.calendar.google.com&ctz=Africa%2FCairo" },
     { key: "events",        label: "🎪 CB Events",     icon: "🎪", color: "#e11d48",
+      calId: "c_2f564847884c6daa36066faf75962669f717c476550c0e8acc94c19120aa8c6b@group.calendar.google.com",
       src: "https://calendar.google.com/calendar/embed?src=c_2f564847884c6daa36066faf75962669f717c476550c0e8acc94c19120aa8c6b%40group.calendar.google.com&ctz=Africa%2FCairo" },
   ];
 
@@ -9033,8 +9383,15 @@ routes.roster = function (u) {
   }});
 
   const gcIframeSlot = el("div", { style: { padding: "0" } });
+  const gcOpenLink = (tab) => el("a", {
+    href: tab.src, target: "_blank", rel: "noopener",
+    style: { fontSize: "12px", color: "var(--text-muted, #888)" },
+  }, "Open full calendar ↗");
 
-  function switchGcTab(idx) {
+  // Sequence guard: if the user switches tabs again before a slower fetch resolves,
+  // the stale response must not overwrite the newer tab's content.
+  let gcLoadSeq = 0;
+  async function switchGcTab(idx) {
     activeGcTab = idx;
     gcTabBar.querySelectorAll(".gc-tab").forEach((t, i) => {
       const active = i === idx;
@@ -9043,14 +9400,54 @@ routes.roster = function (u) {
       t.style.fontWeight = active ? "700" : "400";
       t.style.background = active ? "var(--bg, #fff)" : "transparent";
     });
-    gcIframeSlot.innerHTML = "";
     const tab = GCAL_TABS[idx];
-    const frame = document.createElement("iframe");
-    frame.src = tab.src;
-    frame.style.cssText = "width:100%;height:480px;border:none;display:block;";
-    frame.setAttribute("frameborder", "0");
-    frame.setAttribute("scrolling", "no");
-    gcIframeSlot.appendChild(frame);
+    const reqId = ++gcLoadSeq;
+    gcIframeSlot.innerHTML = "";
+    gcIframeSlot.appendChild(el("div", { class: "muted small", style: { padding: "16px" } }, "⏳ Loading events…"));
+
+    if (!(state.gcal_api_key || "").trim()) {
+      if (reqId !== gcLoadSeq) return;
+      gcIframeSlot.innerHTML = "";
+      gcIframeSlot.appendChild(el("div", { class: "muted small", style: { padding: "16px" } }, [
+        "⚠ Add a Google Calendar API key above to show events here — or ", gcOpenLink(tab), ".",
+      ]));
+      return;
+    }
+
+    const fromIso = localISODate(new Date());
+    const toDate = new Date(); toDate.setDate(toDate.getDate() + 60);
+    try {
+      const events = await fetchGCalAgenda(tab.calId, fromIso, localISODate(toDate));
+      if (reqId !== gcLoadSeq) return; // superseded by a later tab switch
+      gcIframeSlot.innerHTML = "";
+      if (!events.length) {
+        gcIframeSlot.appendChild(el("div", { class: "muted small", style: { padding: "16px" } }, [
+          "No events in the next 60 days. ", gcOpenLink(tab),
+        ]));
+        return;
+      }
+      const list = el("div", { style: { maxHeight: "420px", overflowY: "auto" } });
+      for (const ev of events) {
+        list.appendChild(el("div", { class: "kv", style: { alignItems: "center", padding: "10px 16px" } }, [
+          el("div", { class: "k" }, [
+            el("div", { style: { fontWeight: "600" } }, ev.summary),
+            ev.location ? el("div", { class: "muted small" }, ev.location) : null,
+          ]),
+          el("div", { class: "v muted small", style: { textAlign: "right" } }, [
+            el("div", {}, ev.date),
+            el("div", {}, ev.allDay ? "All day" : fmtHourLabel(ev.startHour)),
+          ]),
+        ]));
+      }
+      gcIframeSlot.appendChild(list);
+      gcIframeSlot.appendChild(el("div", { style: { padding: "10px 16px", borderTop: "1px solid var(--border)" } }, [gcOpenLink(tab)]));
+    } catch (e) {
+      if (reqId !== gcLoadSeq) return;
+      gcIframeSlot.innerHTML = "";
+      gcIframeSlot.appendChild(el("div", { class: "muted small", style: { padding: "16px", color: "var(--bad)" } }, [
+        `❌ Could not load events (${e.message}). `, gcOpenLink(tab),
+      ]));
+    }
   }
 
   GCAL_TABS.forEach((tab, idx) => {
@@ -10439,6 +10836,85 @@ routes.dashboard = function (u, params) {
   }
   const salesMonths = [...monthSet].sort();
   const latestSalesMonth = salesMonths[salesMonths.length - 1];
+
+  // ---------- Net profit % — Maadi / Zawya / Combined, by month ----------
+  // Self-contained P&L calc for one branch + one exact month, independent of the
+  // branch tabs / date-range picker below. Recomputed fresh on every render, so a
+  // freshly-uploaded sales report shows up here automatically. Mirrors the
+  // revenue/COGS/overheads/salary-½-share formula used in the main dashboard cards.
+  function computeMonthPnL(branchArg, month) {
+    const bKey = branchKey(branchArg);
+    const monthSales = state.sales.filter(s => branchKey(s.branch) === bKey
+      && normalizeDate(s.date).slice(0,7) === month
+      && !(bKey === "zawya" && isZawyaExcluded(s.category, s.item)));
+    const revenue = monthSales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
+
+    const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
+    const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
+    const orderItemsInMonth = (state.order_items || []).filter(i => branchKey(i.branch) === bKey && i.month === month);
+    const qtyByItem = new Map();
+    for (const i of orderItemsInMonth) {
+      const k = normName(i.name);
+      qtyByItem.set(k, (qtyByItem.get(k)||0) + (Number(i.qty)||1));
+    }
+    const hasOrderItems = qtyByItem.size > 0;
+    let cogs = 0;
+    for (const r of monthSales) {
+      const key = normName(r.item);
+      const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
+      const m = menuByName.get(key);
+      if (m && m.cost_egp) cogs += qty * (Number(m.cost_egp)||0);
+    }
+
+    const ohRows = state.overheads.filter(o => (o.branch ? branchKey(o.branch) === bKey : true) && (o.month || "") === month && (o.paid !== false));
+    const overheadsTotal = ohRows.reduce((s,o) => s + (Number(o.amount)||0), 0);
+    const activeStaff = (state.users || []).filter(x =>
+      ["barista","head_barista"].includes(x.role) && (x.active || !!(state.salary_config || {})[x.id]));
+    const totalStaffSalary = activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
+    const salariesTotal = Math.round(totalStaffSalary / 2);
+    const totalOpex = overheadsTotal + salariesTotal;
+
+    const grossProfit = revenue - cogs;
+    const netProfit = grossProfit - totalOpex;
+    const npPct = revenue ? (netProfit / revenue) * 100 : null;
+    return { revenue, cogs, overheadsTotal, salariesTotal, totalOpex, grossProfit, netProfit, npPct };
+  }
+
+  const trendCard = el("div", { class: "card", style: { marginTop: "10px" } });
+  trendCard.appendChild(el("h2", {}, "Net profit % by month — Maadi, Zawya & combined"));
+  const trendMonths = [...new Set([...salesIndex.keys()].map(k => k.slice(k.indexOf("|")+1)))]
+    .filter(m => salesIndex.has("maadi|"+m) || salesIndex.has("zawya|"+m))
+    .sort().reverse();
+  if (!trendMonths.length) {
+    trendCard.appendChild(el("div", { class: "muted small" }, "No sales uploaded yet."));
+  } else {
+    const pctCell = (pct) => {
+      if (pct == null) return el("td", { class: "num muted" }, "—");
+      const color = pct >= 20 ? "var(--ok)" : pct >= 10 ? "var(--warn)" : "var(--bad)";
+      return el("td", { class: "num", style: { color, fontWeight: "700" } }, pct.toFixed(1) + "%");
+    };
+    const rows = trendMonths.map(m => {
+      const maadiPnl = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
+      const zawyaPnl = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
+      const combinedRevenue = (maadiPnl ? maadiPnl.revenue : 0) + (zawyaPnl ? zawyaPnl.revenue : 0);
+      const combinedNet     = (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0);
+      const combinedPct = combinedRevenue ? (combinedNet / combinedRevenue) * 100 : null;
+      return el("tr", {}, [
+        el("td", {}, m),
+        pctCell(maadiPnl ? maadiPnl.npPct : null),
+        pctCell(zawyaPnl ? zawyaPnl.npPct : null),
+        pctCell(combinedPct),
+        el("td", { class: "num" }, money(combinedNet)),
+      ]);
+    });
+    trendCard.appendChild(el("table", {}, [
+      el("thead", {}, el("tr", {}, ["Month","Maadi","Zawya","Combined","Combined net profit"].map(h => el("th", {}, h)))),
+      el("tbody", {}, rows),
+    ]));
+    trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
+      "Net profit % = (Revenue − COGS − paid overheads − salary ½-share) ÷ Revenue, per branch per month. \"Combined\" sums both branches' revenue and net profit for that month. A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added."));
+  }
+  wrap.appendChild(trendCard);
 
   let branch = branchKey((params && params.branch) || (u.branches && u.branches[0]) || "maadi");
   // Multi-month range — default to latest available month (or current)
@@ -12486,11 +12962,53 @@ routes.leave_list = function (u) {
         card.appendChild(revokeBtn);
       }
 
+      // Owner-only: edit or permanently delete any leave request, regardless of status.
+      if (u.role === "owner") {
+        state.deleted_leaves = state.deleted_leaves || [];
+        const ownerRow = el("div", { class: "btn-row", style: { marginTop: "8px" } });
+        ownerRow.appendChild(el("button", {
+          class: "btn ghost",
+          onClick: () => {
+            openPrompt({
+              title: T("Edit leave request","تعديل طلب الإجازة"),
+              fields: [
+                { key: "from_date", label: "From date", type: "date", value: leave.from_date },
+                { key: "to_date",   label: "To date", type: "date", value: leave.to_date },
+                { key: "type",      label: "Type (annual/sick)", type: "text", value: leave.type },
+                { key: "reason",    label: "Reason", type: "text", value: leave.reason || "" },
+              ],
+              onSubmit: (vals) => {
+                leave.from_date = vals.from_date || leave.from_date;
+                leave.to_date = vals.to_date || leave.to_date;
+                leave.type = vals.type || leave.type;
+                leave.reason = vals.reason || "";
+                saveState(); toast(T("Leave request updated","تم تحديث طلب الإجازة")); draw();
+              }
+            });
+          }
+        }, "✎ " + T("Edit","تعديل")));
+        ownerRow.appendChild(el("button", {
+          class: "btn ghost", style: { color: "var(--bad)", border: "1px solid var(--bad)" },
+          onClick: () => {
+            if (!confirm(T(`Permanently delete this leave request for ${leave.user_name}? You can undo below.`, `حذف طلب إجازة ${leave.user_name} نهائياً؟ يمكنك التراجع أدناه.`))) return;
+            removeSickDeduction();
+            deleteRecordToTrash("leaves", "deleted_leaves", leave);
+            toast(T("Leave request deleted — scroll down to undo","تم حذف طلب الإجازة — مرّر لأسفل للتراجع"));
+            render();
+          }
+        }, "🗑 " + T("Delete","حذف")));
+        card.appendChild(ownerRow);
+      }
+
       list.appendChild(card);
     }
   }
 
   draw();
+  renderTrashSection(wrap, {
+    arrKey: "leaves", trashKey: "deleted_leaves", entityLabel: T("Leave request","طلب إجازة"), canManage: u.role === "owner",
+    rowLabel: (r) => `${r.user_name || "—"} · ${r.from_date} → ${r.to_date}`,
+  });
   wrap.appendChild(btnBack());
   return wrap;
 };
@@ -16056,28 +16574,53 @@ routes.scorecard = function(u) {
       const cftb=el("tbody",{});
       recentCF.forEach(f=>{
         const bName=(activeU.find(x=>x.id===f.user_id)||allU.find(x=>x.id===f.user_id)||{}).name||f.barista_name||f.user_id||"—";
+        const editBtn = el("button",{class:"btn ghost",style:{padding:"2px 8px",fontSize:"11px"}}, "✎");
+        editBtn.addEventListener("click",()=>{
+          openPrompt({
+            title: "Edit customer feedback",
+            fields: [
+              { key: "rating", label: "Star Rating (1-5)", type: "number", value: f.rating },
+              { key: "source", label: "Source", type: "text", value: f.source || "" },
+              { key: "note",   label: "Note", type: "text", value: f.note || "" },
+            ],
+            onSubmit: (vals) => {
+              const rat = parseFloat(vals.rating);
+              if (isNaN(rat) || rat < 1 || rat > 5) return toast("Enter a 1–5 rating", "error");
+              f.rating = rat; f.source = vals.source || f.source; f.note = vals.note || "";
+              save(); toast("Feedback updated"); render();
+            }
+          });
+        });
         const delBtn = el("button",{class:"btn ghost",style:{padding:"2px 8px",fontSize:"11px",color:"var(--bad)"}}, "✕");
         delBtn.addEventListener("click",()=>{
-          if (!confirm("Delete this feedback entry? This cannot be undone.")) return;
+          if (!confirm("Delete this feedback entry? You can undo below.")) return;
           if (f.by === "website" && f.id) {
             state.blocked_feedback_ids = state.blocked_feedback_ids || [];
             if (!state.blocked_feedback_ids.includes(f.id)) state.blocked_feedback_ids.push(f.id);
           }
-          state.customer_feedback = (state.customer_feedback||[]).filter(x=>x.id!==f.id);
-          save(); render();
+          state.deleted_customer_feedback = state.deleted_customer_feedback || [];
+          deleteRecordToTrash("customer_feedback", "deleted_customer_feedback", f);
+          toast("Feedback deleted — scroll down to undo");
+          render();
         });
         cftb.appendChild(el("tr",{},[
           el("td",{},bName),
           el("td",{class:"num",style:{color:kpiScoreColor(f.rating*20)}},"★"+f.rating.toFixed(1)),
           el("td",{class:"muted"},f.source||""),
           el("td",{class:"muted"},fmtDay(f.at||0)),
-          el("td",{},delBtn),
+          el("td",{},[editBtn,delBtn]),
         ]));
       });
       cft.appendChild(cftb);
       cfCard.appendChild(cft);
     }
     wrap.appendChild(cfCard);
+    if (u.role === "owner") {
+      renderTrashSection(wrap, {
+        arrKey: "customer_feedback", trashKey: "deleted_customer_feedback", entityLabel: "Feedback entry", canManage: true,
+        rowLabel: (r) => `${(activeU.find(x=>x.id===r.user_id)||{}).name || r.user_id || "—"} · ★${(r.rating||0).toFixed(1)}`,
+      });
+    }
   }
 
   // ── KPI Reset (owner only) ─────────────────────────────────────────────────
@@ -17180,15 +17723,28 @@ routes.suggestions = function(u) {
           saveState();
           renderOwnerList();
         });
+        const editBtn = el("button", { class: "btn ghost", style: { fontSize: "12px", padding: "5px 12px", width: "auto" } }, "✎ Edit");
+        editBtn.addEventListener("click", () => {
+          openPrompt({
+            title: "Edit entry",
+            fields: [{ key: "text", label: "Text", type: "text", value: e.text }],
+            onSubmit: (vals) => {
+              e.text = vals.text || e.text;
+              saveState(); toast("Entry updated"); renderOwnerList();
+            }
+          });
+        });
         const delBtn = el("button", { class: "btn ghost", style: { fontSize: "12px", padding: "5px 12px", width: "auto", color: "var(--bad)" } }, "Delete");
         delBtn.addEventListener("click", () => {
-          if (!confirm("Delete this entry permanently?")) return;
-          const idx = state.suggestions.indexOf(e);
-          if (idx !== -1) state.suggestions.splice(idx, 1);
-          saveState();
+          if (!confirm("Delete this entry? You can undo below.")) return;
+          state.deleted_suggestions = state.deleted_suggestions || [];
+          deleteRecordToTrash("suggestions", "deleted_suggestions", e);
+          toast("Entry deleted — scroll down to undo");
           renderOwnerList();
+          renderTrash();
         });
         btnRow.appendChild(pubBtn);
+        btnRow.appendChild(editBtn);
         btnRow.appendChild(delBtn);
         row.appendChild(btnRow);
         body.appendChild(row);
@@ -17196,6 +17752,17 @@ routes.suggestions = function(u) {
     }
     renderOwnerList();
     wrap.appendChild(card);
+
+    const trashCard = el("div", {});
+    wrap.appendChild(trashCard);
+    function renderTrash() {
+      trashCard.innerHTML = "";
+      renderTrashSection(trashCard, {
+        arrKey: "suggestions", trashKey: "deleted_suggestions", entityLabel: "Entry", canManage: isOwner,
+        rowLabel: (r) => `${r.type === "complaint" ? "⚠️" : "💡"} ${(r.text || "").slice(0, 60)}`,
+      });
+    }
+    renderTrash();
 
   } else {
     // ── Barista / team view: submit form + public board ──
