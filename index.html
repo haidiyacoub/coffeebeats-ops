@@ -2594,7 +2594,11 @@ async function _resolveAuth(fbUser) {
     id:           fbUser.uid,  // alias so legacy code using u.id still works
     name:         staffData.name  || fbUser.displayName || "Staff",
     role:         claims.role     || staffData.role,
-    branches:     claims.branches || staffData.branches || [],
+    // `claims.branches` is a JWT custom claim that only refreshes on token renewal (next
+    // login or ~hourly auto-refresh), so it can lag behind Firestore after an owner edit.
+    // An empty array is still truthy, so `claims.branches || staffData.branches` would keep
+    // a stale `[]` forever instead of falling back — only prefer claims when non-empty.
+    branches:     (Array.isArray(claims.branches) && claims.branches.length ? claims.branches : staffData.branches) || [],
     active:       staffData.active !== false,
     deny_access:  staffData.deny_access  || [],
     extra_access: staffData.extra_access || [],
@@ -3936,6 +3940,7 @@ routes.home = function (u) {
     if (u.branches.includes("maadi")) {
       tiles.appendChild(tile("🏧", T("Maadi Deposits","إيداعات المعادي"), T("Weekly cash → bank","الإيداع الأسبوعي → البنك"), () => go("maadi_deposits")));
     }
+    tiles.appendChild(tile("🏦", T("Bank Ledger","دفتر البنك"), T("Transfers & card payments","التحويلات ومدفوعات البطاقة"), () => go("bank")));
     tiles.appendChild(tile("📉", T("Inventory Status","حالة المخزون"), T("Low-stock alerts & restock","تنبيهات نقص المخزون وإعادة الطلب"), () => go("reorder_action_list")));
     tiles.appendChild(tile("🧠", T("Inventory Engine","محرك المخزون"), T("POS-driven intelligence · predictive reorder","ذكاء مدفوع بنقاط البيع · إعادة طلب تنبؤية"), () => go("inventory_engine")));
     tiles.appendChild(tile("🏪", T("Supplier List","قائمة الموردين"), T("Manage suppliers per item","إدارة الموردين لكل صنف"), () => go("supplier_list")));
@@ -5971,7 +5976,7 @@ routes.purchase_list = function (u) {
     const rowChildren = [
       el("div", { class: "grow", onClick: () => showPurchase(p) }, [
         el("div", { class: "title" }, [`${p.supplier} — ${money(p.total)}`, p.is_test ? testBadge() : null]),
-        el("div", { class: "sub" }, T(`${p.branch} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`, `${p.branch} · ${p.date} · ${p.lines.length} بند · ${p.paid_by}`)),
+        el("div", { class: "sub" }, T(`${p.branch || "—"} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`, `${p.branch || "—"} · ${p.date} · ${p.lines.length} بند · ${p.paid_by}`)),
         el("div", { class: "sub" }, T(`by ${p.by_name} · ${fmtDate(p.at)}`, `بواسطة ${p.by_name} · ${fmtDate(p.at)}`)),
       ]),
       el("span", { class: "pill" }, p.paid_by.replace("_"," ")),
