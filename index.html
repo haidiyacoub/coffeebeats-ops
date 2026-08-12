@@ -3577,7 +3577,7 @@ const ROLE_ACCESS = {
   accountant: "*",    // full access (per Haïdi: "Accountant and owner have all access rights")
   // Per Haïdi: head barista = all barista + salaries + penalties + Maadi deposits + petty cash + roster (edit)
   head_barista: ["home","shifts","snapshot_new","waste_new","waste_list","purchase_new","purchase_list",
-                 "petty_cash","salaries","penalties","maadi_deposits","roster",
+                 "petty_cash","bank","salaries","penalties","maadi_deposits","roster",
                  "shift_close_new","shift_close_list","cleaning_log_new","cleaning_log_list",
                  "signin_stamp_new","signin_stamp_list",
                  "leave_new","leave_list",
@@ -4612,7 +4612,7 @@ routes.shift_close_list = function (u) {
   wrap.appendChild(header(T("Shift Closes","إغلاقات الشيفت"), T("End-of-shift reports. Tap + to add today's.","تقارير نهاية الشيفت. اضغط + لإضافة تقرير اليوم.")));
 
   const mine = state.shift_closes
-    .filter(c => u.role === "owner" || u.role === "accountant" || u.branches.includes(c.branch))
+    .filter(c => u.role === "owner" || u.role === "accountant" || c.by === u.id || (u.branches||[]).includes(c.branch))
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 100);
 
@@ -5964,7 +5964,7 @@ routes.purchase_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Purchases","المشتريات"), T("Tap a row for details.","اضغط على أي صف لعرض التفاصيل.")));
   const list = el("div", { class: "list" });
-  const rows = state.purchases.filter(p => u.role === "owner" || u.branches.includes(p.branch))
+  const rows = state.purchases.filter(p => u.role === "owner" || u.role === "accountant" || p.by === u.id || (u.branches||[]).includes(p.branch))
     .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
   state.deleted_purchases = state.deleted_purchases || [];
   for (const p of rows) {
@@ -8239,7 +8239,7 @@ routes.overheads = function (u) {
 // ==============================================================
 routes.bank = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header("Bank ledger (owner)", "Bank & card payments only. Petty cash is tracked separately below."));
+  wrap.appendChild(header("Bank ledger", "Bank & card payments only. Petty cash is tracked separately below."));
 
   // ── Petty Cash Summary (completely separate from bank) ──────
   const pcMaadi   = pettyCashBalance("maadi");
@@ -12147,7 +12147,7 @@ routes.cleaning_log_list = function (u) {
   wrap.appendChild(header(T("Cleaning Logs","سجلات النظافة"), T("Daily checklist photos. Tap + to add.","صور قوائم التحقق اليومية. اضغط + للإضافة.")));
 
   const mine = state.cleaning_logs
-    .filter(c => u.role === "owner" || u.role === "accountant" || u.branches.includes(c.branch))
+    .filter(c => u.role === "owner" || u.role === "accountant" || c.by === u.id || (u.branches||[]).includes(c.branch))
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 100);
 
@@ -12375,7 +12375,7 @@ routes.signin_stamp_list = function (u) {
   wrap.appendChild(header(T("Sign-In Stamps","بصمات الحضور"), T("Clock-in records per barista.","سجلات تسجيل الحضور لكل بريستا.")));
 
   const mine = state.signin_stamps
-    .filter(s => u.role === "owner" || u.role === "accountant" || u.branches.includes(s.branch))
+    .filter(s => u.role === "owner" || u.role === "accountant" || s.by === u.id || (u.branches||[]).includes(s.branch))
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 100);
 
