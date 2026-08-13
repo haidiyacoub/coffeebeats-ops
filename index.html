@@ -1188,6 +1188,21 @@ function migrateState(s) {
   s.inv_engine_recipes    = s.inv_engine_recipes    || [];
   s.events_config         = s.events_config         || [];
   s.training_quizzes      = s.training_quizzes      || [];
+
+  // Trash arrays for the owner-only Data Management panel — record types that had no
+  // paired deleted_* key before that panel existed. See STATE_CHUNKS.admin_trash.
+  s.deleted_petty_cash      = s.deleted_petty_cash      || [];
+  s.deleted_bank_ledger     = s.deleted_bank_ledger     || [];
+  s.deleted_overtime_logs   = s.deleted_overtime_logs   || [];
+  s.deleted_maadi_deposits  = s.deleted_maadi_deposits  || [];
+  s.deleted_special_dates   = s.deleted_special_dates   || [];
+  s.deleted_overheads       = s.deleted_overheads       || [];
+  s.deleted_photo_log       = s.deleted_photo_log       || [];
+  s.deleted_training_quizzes = s.deleted_training_quizzes || [];
+  s.deleted_cleaning_logs   = s.deleted_cleaning_logs   || [];
+  s.deleted_shift_closes    = s.deleted_shift_closes    || [];
+  s.deleted_signin_stamps   = s.deleted_signin_stamps   || [];
+  s.deleted_snapshots       = s.deleted_snapshots       || [];
   if (Object.keys(s.inv_engine.thresholds).length === 0 && Array.isArray(s.items) && s.items.length > 0) {
     _seedInvEngineThresholds(s);
   }
@@ -1387,6 +1402,16 @@ const STATE_CHUNKS = {
   inv_engine_sales:  ["inv_engine_sales_data"],
   inv_engine_bom:    ["inv_engine_recipes"],
   training:         ["training_quizzes"],
+  // Unified trash for the owner-only Data Management admin panel — holds deleted_*
+  // arrays for record types that didn't already have a paired trash key in another
+  // chunk. Deliberately its own chunk (not folded into e.g. "overhead") so every array
+  // here goes through the plain generic merge + tombstone path in doSync, rather than
+  // a chunk-specific custom merge function that would need its own edits to carry a
+  // new field through (see _overheadMergeDoc for why that matters).
+  admin_trash: ["deleted_petty_cash", "deleted_bank_ledger", "deleted_overtime_logs",
+                "deleted_maadi_deposits", "deleted_special_dates", "deleted_overheads",
+                "deleted_photo_log", "deleted_training_quizzes", "deleted_cleaning_logs",
+                "deleted_shift_closes", "deleted_signin_stamps", "deleted_snapshots"],
 };
 
 function markDirty() {
@@ -1779,6 +1804,134 @@ function restoreRecordFromTrash(arrKey, trashKey, record) {
   state[trashKey] = (state[trashKey] || []).filter(x => x.id !== record.id);
   saveState();
 }
+// Bulk version of deleteRecordToTrash — moves many records into trash in one pass
+// (single trim at the end, instead of trimming after every single unshift) so a big
+// admin-panel cleanup doesn't silently evict most of what it just deleted. Used by the
+// Data Management panel's "delete before date" / "delete most recent N" bulk actions.
+function bulkTrashRecords(arrKey, trashKey, records, keep = 300) {
+  if (!records.length) return;
+  const ids = new Set(records.map(r => r.id));
+  state[arrKey] = (state[arrKey] || []).filter(x => !ids.has(x.id));
+  state[trashKey] = state[trashKey] || [];
+  const by = currentUser()?.name || "?";
+  const at = now();
+  state[trashKey] = [...records.map(r => ({ ...r, deleted_at: at, deleted_by: by })), ...state[trashKey]].slice(0, keep);
+  saveState();
+}
+
+// ==============================================================
+// DATA MANAGEMENT REGISTRY — every manually-authored, dated record type in the app,
+// for the owner-only "Data Management" panel (routes.data_management). Excludes
+// catalogs/config (menu, items, settings, users…), system-generated logs with no
+// author (alert_log, inv_engine_alerts), dead/legacy arrays (kpi_logs, reorder_actions,
+// roaster_schedules), and raw per-line POS import rows (sales/order_items/orders —
+// tens of thousands of rows, already have their own branch+month bulk-delete in
+// routes.sales_import; too granular to list one row at a time here).
+// `sharded: true` marks the 4 month-sharded logs (cleaning_logs, shift_closes,
+// signin_stamps, snapshots): deleting still works (removes locally, propagates on the
+// next sync), but — like `overheads`, which uses its own merge-doc — they don't carry
+// tombstone protection, so a device that hasn't synced since the deletion could
+// resurrect the row when it next pushes. Same accepted tradeoff already documented
+// elsewhere in this file for those arrays.
+// ==============================================================
+const DATA_LOG_TYPES = [
+  { key: "waste", trashKey: "deleted_waste", labelEn: "Waste", labelAr: "هدر",
+    dateOf: r => r.at, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.item_name || "—"} · ${fmtQty(r.qty_canonical, r.unit)} · ${r.branch || ""}` },
+  { key: "purchases", trashKey: "deleted_purchases", labelEn: "Purchase", labelAr: "مشترى",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.supplier || "—"} · ${money(r.total)} · ${r.branch || ""}`,
+    deleteFn: (r, keep) => _deletePurchase(r, keep), restoreFn: _restorePurchase },
+  { key: "petty_cash", trashKey: "deleted_petty_cash", labelEn: "Petty cash", labelAr: "العهدة النقدية",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.type || "—"} · ${money(r.amount)} · ${r.branch || ""}` },
+  { key: "bank_ledger", trashKey: "deleted_bank_ledger", labelEn: "Bank ledger", labelAr: "دفتر البنك",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.type || r.supplier || "—"} · ${money(r.amount)}` },
+  { key: "salary_loans", trashKey: "deleted_salary_loans", labelEn: "Loan", labelAr: "سلفة",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.barista || "—"} · ${money(r.amount)}` },
+  { key: "sick_leave_deductions", trashKey: "deleted_sick_leave_deductions", labelEn: "Sick leave", labelAr: "إجازة مرضية",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.barista || "—"} · ${r.days} day(s) · ${money(r.amount)}` },
+  { key: "salaries", trashKey: "deleted_salaries", labelEn: "Salary payout", labelAr: "صرف راتب",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.recipient || "—"} · ${money(r.amount)}` },
+  { key: "overtime_logs", trashKey: "deleted_overtime_logs", labelEn: "Overtime", labelAr: "أوفرتايم",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.barista || "—"} · ${r.hours}h · ${money(r.amount)}` },
+  { key: "penalties", trashKey: "deleted_penalties", labelEn: "Penalty", labelAr: "خصم",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.barista || "—"} · ${money(r.amount)}${r.note ? " · " + r.note : ""}` },
+  { key: "leaves", trashKey: "deleted_leaves", labelEn: "Leave request", labelAr: "طلب إجازة",
+    dateOf: r => r.requested_at, byOf: r => r.requested_by_name || "—",
+    summaryOf: r => `${r.user_name || "—"} · ${r.from_date} → ${r.to_date}` },
+  { key: "suggestions", trashKey: "deleted_suggestions", labelEn: "Suggestion", labelAr: "اقتراح",
+    dateOf: r => r.date, byOf: r => r.anonymous ? T("Anonymous","مجهول") : (r.author_name || "—"),
+    summaryOf: r => `${r.type === "complaint" ? "⚠️" : "💡"} ${(r.text || "").slice(0, 60)}` },
+  { key: "customer_feedback", trashKey: "deleted_customer_feedback", labelEn: "Customer feedback", labelAr: "تقييم عميل",
+    dateOf: r => r.at, byOf: r => r.by_name || "—",
+    summaryOf: r => `★${(r.rating || 0).toFixed(1)} ${(r.comment || r.text || "").slice(0, 50)}` },
+  { key: "maadi_deposits", trashKey: "deleted_maadi_deposits", labelEn: "ATM deposit", labelAr: "إيداع ماكينة",
+    dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${money(r.amount)} · ${r.week_of || ""} · ${r.bank || ""}` },
+  { key: "special_dates", trashKey: "deleted_special_dates", labelEn: "Special date", labelAr: "موعد خاص",
+    dateOf: r => r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.title || "—"} · ${r.branch || ""}` },
+  { key: "overheads", trashKey: "deleted_overheads", labelEn: "Overhead", labelAr: "مصروف ثابت",
+    dateOf: r => r.date, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.label || r.category || "—"} · ${money(r.amount)}`,
+    mergeCaveat: true },
+  { key: "photo_log", trashKey: "deleted_photo_log", labelEn: "Photo upload", labelAr: "رفع صورة",
+    dateOf: r => r.at, byOf: () => "—",
+    summaryOf: r => `${r.form || "Upload"} · ${r.name || ""}` },
+  { key: "cleaning_logs", trashKey: "deleted_cleaning_logs", labelEn: "Cleaning log", labelAr: "سجل تنظيف",
+    dateOf: r => r.date || r.at, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.branch || ""} · ${r.checklist_score != null ? r.checklist_score + "%" : "—"}`,
+    sharded: true },
+  { key: "shift_closes", trashKey: "deleted_shift_closes", labelEn: "Shift close", labelAr: "إغلاق شيفت",
+    dateOf: r => r.date || r.at, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.branch || ""} · ${r.closing_barista || ""}`,
+    sharded: true },
+  { key: "signin_stamps", trashKey: "deleted_signin_stamps", labelEn: "Sign-in stamp", labelAr: "بصمة حضور",
+    dateOf: r => r.at, byOf: r => r.by_name || "—",
+    summaryOf: r => `${r.branch || ""} · ${r.early_bonus ? T("early","مبكر") : `${r.mins_late ?? 0}m late`}`,
+    sharded: true },
+  { key: "snapshots", trashKey: "deleted_snapshots", labelEn: "Inventory count", labelAr: "جرد المخزون",
+    dateOf: r => r.as_of || r.created_at, byOf: r => r.created_by_name || "—",
+    summaryOf: r => `${r.branch || ""} · ${(r.entries || []).length} items`,
+    sharded: true },
+  { key: "training_quizzes", trashKey: "deleted_training_quizzes", labelEn: "Training quiz", labelAr: "اختبار تدريب",
+    dateOf: r => r.triggered_at, byOf: () => "—",
+    summaryOf: r => `${r.staff_name || "—"} · ${r.month || ""} · ${r.status || ""}` },
+];
+// Labels are resolved lazily (not stored pre-baked on the registry objects above) because
+// DATA_LOG_TYPES is built at top-level script-eval time, before `uiLang` (read by T()) has
+// been initialized — calling T() eagerly here throws a temporal-dead-zone ReferenceError.
+function dmLabel(t) { return T(t.labelEn, t.labelAr); }
+// Normalizes a record's date field to an ISO string. Most types store an ISO string,
+// but e.g. customer_feedback.at can be a raw epoch-ms number (website-sourced reviews) —
+// String.slice would throw on that, so route numbers/Dates through Date first.
+function _dmISO(v) {
+  if (v == null || v === "") return "";
+  if (typeof v === "string") return v;
+  const d = new Date(v);
+  return isNaN(d) ? "" : d.toISOString();
+}
+function _dmDay(v) { return _dmISO(v).slice(0, 10); }
+function _dmDelete(type, record, keep) {
+  if (type.deleteFn) type.deleteFn(record, keep);
+  else deleteRecordToTrash(type.key, type.trashKey, record, keep ?? 20);
+}
+function _dmBulkDelete(type, records, keep = 300) {
+  if (type.deleteFn) { for (const r of records) type.deleteFn(r, keep); }
+  else bulkTrashRecords(type.key, type.trashKey, records, keep);
+}
+function _dmRestore(type, record) {
+  if (type.restoreFn) type.restoreFn(record);
+  else restoreRecordFromTrash(type.key, type.trashKey, record);
+}
+
 // Appends ✎ edit and 🗑 delete buttons to `row` for `record`. `editFields(record)`
 // returns an openPrompt `fields` array prefilled from the record (omit to skip the
 // edit button); `onEdit(record, vals)` should mutate `record` in place with the
@@ -3809,6 +3962,212 @@ function loginView() {
 // ==============================================================
 const routes = {};
 
+// ==============================================================
+// DATA MANAGEMENT (owner-only) — view/delete/undo any entry across the whole app.
+// Filter by type/date/text, bulk-delete everything on/before a chosen date or the
+// most recent N matching entries, and restore anything from a unified trash view.
+// Every delete here is a soft-delete (moves to the type's deleted_* array) — see
+// DATA_LOG_TYPES / _dmDelete / _dmBulkDelete / _dmRestore above.
+// ==============================================================
+routes.data_management = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header(
+    T("Data Management", "إدارة البيانات"),
+    T("View, delete, or undo any entry across the app — filter by date, delete in bulk, restore from trash.",
+      "عرض أو حذف أو التراجع عن أي إدخال في التطبيق — فلترة حسب التاريخ، حذف جماعي، استعادة من المهملات.")
+  ));
+  if (u.role !== "owner") {
+    wrap.appendChild(el("div", { class: "card" }, T("Access restricted to the owner.", "الوصول مقصور على المالك.")));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  for (const t of DATA_LOG_TYPES) { state[t.key] = state[t.key] || []; state[t.trashKey] = state[t.trashKey] || []; }
+
+  const inputStyle = { padding: "6px 10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--card)", color: "var(--fg)", fontSize: "14px" };
+
+  const selectedTypes = new Set(DATA_LOG_TYPES.map(t => t.key));
+  let hideTest = true, fromDate = "", toDate = "", search = "";
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+
+  function computeList() {
+    const rows = [];
+    for (const t of DATA_LOG_TYPES) {
+      if (!selectedTypes.has(t.key)) continue;
+      for (const r of (state[t.key] || [])) {
+        if (hideTest && r.is_test) continue;
+        const date = _dmISO(t.dateOf(r));
+        const day = _dmDay(date);
+        if (fromDate && day && day < fromDate) continue;
+        if (toDate && day && day > toDate) continue;
+        const by = t.byOf(r) || "—";
+        const summary = t.summaryOf(r) || "";
+        if (search) {
+          const hay = `${dmLabel(t)} ${by} ${summary}`.toLowerCase();
+          if (!hay.includes(search.toLowerCase())) continue;
+        }
+        rows.push({ type: t, record: r, date, by, summary });
+      }
+    }
+    rows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return rows;
+  }
+
+  function groupByType(items) {
+    const byType = {};
+    for (const x of items) (byType[x.type.key] = byType[x.type.key] || { type: x.type, records: [] }).records.push(x.record);
+    return Object.values(byType);
+  }
+
+  function draw() {
+    body.innerHTML = "";
+
+    // ---- Type filter ----
+    const typeCard = el("div", { class: "card" });
+    typeCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" } }, T("Record types","أنواع السجلات")));
+    const typeBtnRow = el("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" } });
+    typeBtnRow.appendChild(el("button", { class: "btn ghost", style: { width: "auto", fontSize: "12px" }, onClick: () => { DATA_LOG_TYPES.forEach(t => selectedTypes.add(t.key)); draw(); } }, T("Select all","تحديد الكل")));
+    typeBtnRow.appendChild(el("button", { class: "btn ghost", style: { width: "auto", fontSize: "12px" }, onClick: () => { selectedTypes.clear(); draw(); } }, T("Select none","إلغاء الكل")));
+    typeCard.appendChild(typeBtnRow);
+    const chipsWrap = el("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" } });
+    for (const t of DATA_LOG_TYPES) {
+      const on = selectedTypes.has(t.key);
+      chipsWrap.appendChild(el("span", {
+        class: "chip",
+        style: { cursor: "pointer", opacity: on ? "1" : "0.45", border: on ? "1.5px solid var(--accent)" : "1px solid var(--border)" },
+        title: t.sharded ? T("Deletions here may reappear on a device that hasn't synced yet","قد يعود هذا الإدخال إذا لم يتم مزامنة جهاز آخر بعد")
+             : t.mergeCaveat ? T("May reappear from a device that hasn't also deleted it yet","قد يعود من جهاز لم يحذفه بعد") : "",
+        onClick: () => { on ? selectedTypes.delete(t.key) : selectedTypes.add(t.key); draw(); }
+      }, dmLabel(t) + (t.sharded || t.mergeCaveat ? " ⚠" : "")));
+    }
+    typeCard.appendChild(chipsWrap);
+    body.appendChild(typeCard);
+
+    // ---- Date range + search + test toggle ----
+    const filterCard = el("div", { class: "card", style: { marginTop: "12px" } });
+    const fromInp = el("input", { type: "date", value: fromDate, style: inputStyle });
+    const toInp   = el("input", { type: "date", value: toDate, style: inputStyle });
+    fromInp.addEventListener("change", () => { fromDate = fromInp.value; draw(); });
+    toInp.addEventListener("change", () => { toDate = toInp.value; draw(); });
+    filterCard.appendChild(el("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap" } }, [
+      el("div", {}, [el("div", { class: "muted small" }, T("From","من")), fromInp]),
+      el("div", {}, [el("div", { class: "muted small" }, T("To","إلى")), toInp]),
+    ]));
+    const searchInp = el("input", { type: "text", placeholder: T("Search by name, item, note…","بحث بالاسم أو الصنف أو الملاحظة…"), value: search, style: { ...inputStyle, width: "100%", marginTop: "10px", boxSizing: "border-box" } });
+    searchInp.addEventListener("input", () => { search = searchInp.value; draw(); });
+    filterCard.appendChild(searchInp);
+    const testCb = el("input", { type: "checkbox" });
+    testCb.checked = hideTest;
+    testCb.addEventListener("change", () => { hideTest = testCb.checked; draw(); });
+    filterCard.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "6px", marginTop: "10px", fontSize: "13px" } }, [testCb, T("Hide test entries","إخفاء الإدخالات التجريبية")]));
+    body.appendChild(filterCard);
+
+    const rows = computeList();
+
+    // ---- Bulk delete ----
+    const bulkCard = el("div", { class: "card", style: { marginTop: "12px", borderColor: "var(--warn)" } });
+    bulkCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", color: "var(--warn)", marginBottom: "8px" } }, T("Bulk delete (moves to trash — undoable)","حذف جماعي (ينتقل للمهملات — قابل للتراجع)")));
+
+    function runBulkDelete(toDelete, confirmMsgEn, confirmMsgAr) {
+      if (!toDelete.length) return toast(T("No matching entries","لا توجد إدخالات مطابقة"), "error");
+      const groups = groupByType(toDelete);
+      const breakdown = groups.map(g => `${g.records.length} × ${dmLabel(g.type)}`).join(", ");
+      if (!confirm(T(`${confirmMsgEn}\n\n${breakdown}\n\nThey'll move to trash and can be restored below.`,
+                     `${confirmMsgAr}\n\n${breakdown}\n\nستنتقل للمهملات ويمكن استعادتها أدناه.`))) return;
+      for (const g of groups) _dmBulkDelete(g.type, g.records);
+      toast(T(`${toDelete.length} entries deleted — scroll down to undo`, `تم حذف ${toDelete.length} إدخال — مرّر لأسفل للتراجع`));
+      draw();
+    }
+
+    const cutoffInp = el("input", { type: "date", style: inputStyle });
+    const cutoffBtn = el("button", { class: "btn ghost", style: { width: "auto", color: "var(--bad)", border: "1px solid var(--bad)" }, onClick: () => {
+      if (!cutoffInp.value) return toast(T("Pick a date first","اختر تاريخاً أولاً"), "error");
+      const toDelete = rows.filter(x => x.date && _dmDay(x.date) <= cutoffInp.value);
+      runBulkDelete(toDelete, `Delete ${toDelete.length} entries dated on or before ${cutoffInp.value}?`, `حذف ${toDelete.length} إدخال بتاريخ ${cutoffInp.value} أو قبله؟`);
+    }}, T("🗑 Delete all on/before this date","🗑 حذف كل ما في هذا التاريخ أو قبله"));
+    bulkCard.appendChild(el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "14px" } }, [cutoffInp, cutoffBtn]));
+
+    const recentInp = el("input", { type: "number", min: "1", value: "10", style: { ...inputStyle, width: "70px" } });
+    const recentBtn = el("button", { class: "btn ghost", style: { width: "auto", color: "var(--bad)", border: "1px solid var(--bad)" }, onClick: () => {
+      const n = Math.max(1, parseInt(recentInp.value, 10) || 0);
+      const toDelete = rows.slice(0, n); // rows is already sorted newest-first
+      runBulkDelete(toDelete, `Delete the ${toDelete.length} most recent matching entries?`, `حذف أحدث ${toDelete.length} إدخال مطابق؟`);
+    }}, T("🗑 Delete most recent entries","🗑 حذف أحدث الإدخالات"));
+    bulkCard.appendChild(el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" } }, [
+      el("span", { class: "muted small" }, T("Last","آخر")), recentInp, recentBtn,
+    ]));
+    body.appendChild(bulkCard);
+
+    // ---- Results list ----
+    const listCard = el("div", { style: { marginTop: "14px" } });
+    listCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } },
+      rows.length > 300
+        ? T(`${rows.length} matching entries (showing most recent 300)`, `${rows.length} إدخال مطابق (عرض أحدث 300)`)
+        : T(`${rows.length} matching ${rows.length === 1 ? "entry" : "entries"}`, `${rows.length} إدخال مطابق`)));
+    const shown = rows.slice(0, 300);
+    if (!shown.length) listCard.appendChild(el("div", { class: "muted" }, T("No entries match these filters.","لا توجد إدخالات مطابقة لهذه الفلاتر.")));
+    for (const x of shown) {
+      listCard.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
+        el("div", { class: "k" }, [
+          el("div", {}, [el("span", { class: "chip", style: { fontSize: "11px", marginRight: "6px" } }, dmLabel(x.type)), x.summary]),
+          el("div", { class: "muted small" }, `${fmtDate(x.date)} · ${x.by}`),
+        ]),
+        el("button", {
+          class: "btn ghost", style: { width: "auto", color: "var(--bad)", border: "1px solid var(--bad)" },
+          title: T("Delete","حذف"),
+          onClick: () => {
+            if (!confirm(T(`Delete this ${dmLabel(x.type)} entry? You can undo below.`, `حذف هذا الإدخال (${dmLabel(x.type)})؟ يمكنك التراجع أدناه.`))) return;
+            _dmDelete(x.type, x.record);
+            toast(T("Deleted — scroll down to undo","تم الحذف — مرّر لأسفل للتراجع"));
+            draw();
+          }
+        }, "🗑"),
+      ]));
+    }
+    body.appendChild(listCard);
+
+    // ---- Unified trash / undo ----
+    const trashRows = [];
+    for (const t of DATA_LOG_TYPES) for (const r of (state[t.trashKey] || [])) trashRows.push({ type: t, record: r });
+    trashRows.sort((a, b) => (b.record.deleted_at || "").localeCompare(a.record.deleted_at || ""));
+    if (trashRows.length) {
+      const trashCard = el("div", { class: "card", style: { marginTop: "16px", borderColor: "var(--warn)" } });
+      trashCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", color: "var(--warn)" } }, T("Recently deleted (tap to restore)","المحذوف مؤخراً (اضغط للاستعادة)")));
+      for (const x of trashRows.slice(0, 100)) {
+        const r = x.record;
+        trashCard.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
+          el("div", { class: "k" }, [
+            el("div", {}, [el("span", { class: "chip", style: { fontSize: "11px", marginRight: "6px" } }, dmLabel(x.type)), x.type.summaryOf(r)]),
+            el("div", { class: "muted small" }, T(`Deleted ${fmtDate(r.deleted_at)} · by ${r.deleted_by || "?"}`, `حُذف ${fmtDate(r.deleted_at)} · بواسطة ${r.deleted_by || "?"}`)),
+          ]),
+          el("button", { class: "btn secondary", style: { width: "auto" }, onClick: () => {
+            _dmRestore(x.type, r);
+            toast(T("Restored ✓","تمت الاستعادة ✓"));
+            draw();
+          }}, T("↩ Restore","↩ استعادة")),
+        ]));
+      }
+      trashCard.appendChild(el("button", {
+        class: "btn ghost", style: { marginTop: "10px", color: "var(--bad)" },
+        onClick: () => {
+          if (!confirm(T(`Permanently clear all ${trashRows.length} trashed entries? This cannot be undone.`, `حذف كل ${trashRows.length} إدخال محذوف نهائياً؟ لا يمكن التراجع.`))) return;
+          for (const t of DATA_LOG_TYPES) state[t.trashKey] = [];
+          saveState();
+          toast(T("Trash cleared","تم إفراغ المهملات"));
+          draw();
+        }
+      }, T("🗑 Permanently clear ALL trash","🗑 إفراغ كل المهملات نهائياً")));
+      body.appendChild(trashCard);
+    }
+  }
+
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
 routes.home = function (u) {
   const wrap = el("div", {});
   const branchInfo = u.role === "barista" ? "rotates (Maadi + Zawya)"
@@ -4039,6 +4398,9 @@ routes.home = function (u) {
     tiles.appendChild(tile("⚖️", "Penalties", "Half/full day deductions", () => go("penalties")));
     tiles.appendChild(tile("📋", "Leave Requests", "Approve · reject · view all", () => go("leave_list")));
     tiles.appendChild(tile("👥", "Coffee Beats Team", "PINs & roles", () => go("users")));
+    if (u.role === "owner") {
+      tiles.appendChild(tile("🗂️", "Data Management", "Delete or undo any entry, any date", () => go("data_management")));
+    }
     tiles.appendChild(_suggTile(u));
   }
   wrap.appendChild(tiles);
@@ -5946,14 +6308,14 @@ routes.purchase_new = function (u) {
 // Owner-only delete/restore for a purchase, including its paired petty_cash / bank_ledger
 // entry (found by ref === purchase id) so the cash/bank balance stays correct. The ledger
 // entry travels inside the trash record's `_ledger_entry` so restore can re-push it.
-function _deletePurchase(p) {
+function _deletePurchase(p, keep = 20) {
   state.deleted_purchases = state.deleted_purchases || [];
   const ledgerEntry = state.petty_cash.find(x => x.ref === p.id) || state.bank_ledger.find(x => x.ref === p.id) || null;
   const ledgerArr = state.petty_cash.some(x => x.ref === p.id) ? "petty_cash" : "bank_ledger";
   state.purchases = state.purchases.filter(x => x.id !== p.id);
   if (ledgerEntry) state[ledgerArr] = state[ledgerArr].filter(x => x.ref !== p.id);
   state.deleted_purchases.unshift({ ...p, _ledger_entry: ledgerEntry, _ledger_arr: ledgerEntry ? ledgerArr : null, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
-  state.deleted_purchases = state.deleted_purchases.slice(0, 20);
+  state.deleted_purchases = state.deleted_purchases.slice(0, keep);
   saveState();
 }
 function _restorePurchase(r) {
