@@ -2003,9 +2003,8 @@ function renderTrashSection(wrap, { arrKey, trashKey, entityLabel, rowLabel, can
   wrap.appendChild(box);
 }
 // Detect records this device deleted since its last successful sync, by id, across every
-// regular chunk array (sharded high-volume logs are excluded — they're bulk-replaced, not
-// individually deleted, and would bloat the tombstone list). Runs synchronously at the top
-// of doSync so the tombstones chunk is correctly seen as dirty in the same pass.
+// regular chunk array. Runs synchronously at the top of doSync so the tombstones chunk is
+// correctly seen as dirty in the same pass.
 function _collectDeletions() {
   for (const [chunk, keys] of Object.entries(STATE_CHUNKS)) {
     if (chunk === "tombstones") continue;            // never tombstone the tombstone list
@@ -2018,6 +2017,22 @@ function _collectDeletions() {
       const cur = new Set(state[k].map(r => r && r.id).filter(x => x != null));
       for (const r of prev[k]) if (r && r.id != null && !cur.has(r.id)) recordDeletion(r.id);
     }
+  }
+  // Also cover the month-sharded logs (shift_closes, cleaning_logs, signin_stamps,
+  // snapshots). These were originally left out — they're pure append-only logs with no
+  // delete UI, so tombstoning every row would have bloated the tombstone list for nothing.
+  // The Data Management panel now lets an owner delete individual rows here too, so a
+  // deletion needs the same protection: without a tombstone, a device that still has the
+  // just-deleted row in stale local state resurrects it the moment it next pushes (see
+  // autoPullOnStart's pre-flush tombstone refresh, which depends on this running first).
+  // _lastShardSig already holds the right "last confirmed" baseline for these arrays.
+  for (const arr of Object.keys(MONTH_SHARDED)) {
+    const prevRaw = _lastShardSig[arr];
+    if (!prevRaw) continue;
+    let prev; try { prev = JSON.parse(prevRaw); } catch (_) { continue; }
+    if (!Array.isArray(prev) || !Array.isArray(state[arr])) continue;
+    const cur = new Set(state[arr].map(r => r && r.id).filter(x => x != null));
+    for (const r of prev) if (r && r.id != null && !cur.has(r.id)) recordDeletion(r.id);
   }
 }
 // Remove any tombstoned record from every array in `state` (used after a pull, where remote
@@ -2693,6 +2708,23 @@ async function autoPullOnStart() {
   // In that case we pull first and let the real remote data replace the seed defaults.
   const localIsReal = !!(state.settings && state.settings.last_pull);
   if (hasPending() && localIsReal) {
+    // Refresh just the (small, single-doc) tombstone list and strip anything it covers
+    // from local state BEFORE flushing. Without this, a device reopening with unsynced
+    // pending writes still has the just-deleted record sitting in its stale local arrays —
+    // the flush below merges local ∪ remote by id, so that stale copy resurrects the
+    // record in Firestore a split second before the pull runs, making a deletion made on
+    // another device look like it "didn't stick" even after a full reopen.
+    try {
+      const tSnap = await db.collection("state").doc("tombstones").get();
+      if (tSnap.exists) {
+        const remoteTomb = Array.isArray(tSnap.data().deleted_ids) ? tSnap.data().deleted_ids : [];
+        if (remoteTomb.length) {
+          const haveIds = new Set((state.deleted_ids || []).map(t => t && t.id));
+          state.deleted_ids = [...(state.deleted_ids || []), ...remoteTomb.filter(t => t && !haveIds.has(t.id))];
+          _applyTombstones();
+        }
+      }
+    } catch (e) { console.warn("Pre-flush tombstone refresh failed — proceeding without it", e); }
     console.log("Flushing pending local writes to Firestore before pull…");
     await doSync();
     // If flush failed, DO NOT overwrite local (unsaved) state with older Firestore data.
