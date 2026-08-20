@@ -1600,6 +1600,16 @@ async function _syncMonthShards() {
     mergedIdx[arr] = [...new Set([...(remoteIdx[arr] || []), ...months])];
   }
   await Promise.all(shardOps);
+  // Stamp a revision marker so the doc's content always changes on a real write, even
+  // when the set of months present doesn't (e.g. deleting or editing a row within a
+  // month that already has other rows). Without this, an in-place edit/delete inside an
+  // existing month shard leaves log_shard_index byte-identical, so startLogShardSyncListener
+  // (which diffs THIS doc's JSON to decide whether to auto-pull) never fires on an
+  // already-open device — the change is saved correctly in Firestore but silently doesn't
+  // show up on other devices until they fully reopen the app. This was the cause of
+  // "removed the waste/inventory counts but it didn't reflect on the head barista's
+  // device" for snapshot/shift-close/cleaning-log/sign-in-stamp deletions.
+  mergedIdx._rev = now();
   writes.push(db.collection("state").doc("log_shard_index").set(mergedIdx)
     .catch(err => { err._chunk = "log_shard_index"; throw err; }));
 
