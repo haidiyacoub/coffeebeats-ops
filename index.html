@@ -6017,6 +6017,8 @@ routes.purchase_new = function (u) {
   let supplier = "";
   let paid_by = "petty_cash";
   let date = new Date().toISOString().slice(0,10);
+  let no_receipt = false;
+  let no_receipt_reason = "";
   let lines = [{
     kind: "inventory",
     inv_item_id: null,
@@ -6215,8 +6217,28 @@ routes.purchase_new = function (u) {
       }, T("+ Other (transport, fees…)","+ أخرى (نقل، رسوم…)")),
     ]));
 
-    // photo(s)
-    form.appendChild(receiptPhotoField.el);
+    // photo(s) / no-receipt toggle
+    const receiptCard = el("div", { class: "card", style: { marginTop: "12px" } });
+    const noReceiptLabel = el("label", { style: { display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" } });
+    const noReceiptCb = el("input", { type: "checkbox" });
+    noReceiptCb.checked = no_receipt;
+    noReceiptCb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--warn)";
+    noReceiptCb.addEventListener("change", () => { no_receipt = noReceiptCb.checked; draw(); });
+    noReceiptLabel.appendChild(noReceiptCb);
+    noReceiptLabel.appendChild(document.createTextNode(T("Submit without a receipt","إرسال بدون فاتورة")));
+    receiptCard.appendChild(noReceiptLabel);
+
+    if (no_receipt) {
+      receiptCard.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } },
+        T("This purchase will be flagged and appear in the no-receipt report.","سيتم تمييز هذا المشترى وسيظهر في تقرير المشتريات بدون فاتورة.")));
+      receiptCard.appendChild(el("label", {}, T("Reason (required)","السبب (مطلوب)")));
+      const reasonInp = el("input", { type: "text", value: no_receipt_reason, placeholder: T("e.g. street vendor, receipt lost","مثال: بائع متجول، فُقدت الفاتورة") });
+      reasonInp.addEventListener("input", () => no_receipt_reason = reasonInp.value);
+      receiptCard.appendChild(reasonInp);
+    } else {
+      receiptCard.appendChild(receiptPhotoField.el);
+    }
+    form.appendChild(receiptCard);
 
     // total
     const totalEl = el("div", { class: "card", style: { marginTop: "14px", textAlign: "right" } }, [
@@ -6235,6 +6257,7 @@ routes.purchase_new = function (u) {
 
   async function submit() {
     if (!supplier) return toast(T("Enter supplier name","أدخل اسم المورد"), "error");
+    if (no_receipt && !no_receipt_reason.trim()) return toast(T("Enter a reason for submitting without a receipt","أدخل سبب الإرسال بدون فاتورة"), "error");
     for (const ln of lines) {
       if (ln.kind === "inventory") {
         if (!ln.inv_item_id) return toast(T("Pick an inventory item for every inventory line","اختر صنف مخزون لكل بند مخزون"), "error");
@@ -6304,6 +6327,8 @@ routes.purchase_new = function (u) {
       receipt_photo_names: photoNames,
       receipt_drive_ids: receiptPhotoField.getDriveIds(),
       image_url: (receiptPhotoField.getCloudUrls().filter(Boolean)[0]) || "",
+      no_receipt,
+      no_receipt_reason: no_receipt ? no_receipt_reason.trim() : "",
       ...(isTestMode() ? { is_test: true } : {}),
     };
     state.purchases.push(purch);
@@ -6372,6 +6397,10 @@ function _restorePurchase(r) {
 routes.purchase_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Purchases","المشتريات"), T("Tap a row for details.","اضغط على أي صف لعرض التفاصيل.")));
+  if (u.role === "owner" || u.role === "accountant") {
+    wrap.appendChild(el("button", { class: "btn secondary", style: { marginBottom: "10px" }, onClick: () => go("purchase_no_receipt_report") },
+      T("📋 No-receipt purchases report","📋 تقرير المشتريات بدون فاتورة")));
+  }
   const list = el("div", { class: "list" });
   const rows = state.purchases.filter(p => u.role === "owner" || u.role === "accountant" || p.by === u.id || (u.branches||[]).includes(p.branch))
     .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
@@ -6379,7 +6408,8 @@ routes.purchase_list = function (u) {
   for (const p of rows) {
     const rowChildren = [
       el("div", { class: "grow", onClick: () => showPurchase(p) }, [
-        el("div", { class: "title" }, [`${p.supplier} — ${money(p.total)}`, p.is_test ? testBadge() : null]),
+        el("div", { class: "title" }, [`${p.supplier} — ${money(p.total)}`, p.is_test ? testBadge() : null,
+          p.no_receipt ? el("span", { class: "pill", style: { background: "var(--warn)", color: "#fff", marginLeft: "6px" } }, T("No receipt","بدون فاتورة")) : null]),
         el("div", { class: "sub" }, T(`${p.branch || "—"} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`, `${p.branch || "—"} · ${p.date} · ${p.lines.length} بند · ${p.paid_by}`)),
         el("div", { class: "sub" }, T(`by ${p.by_name} · ${fmtDate(p.at)}`, `بواسطة ${p.by_name} · ${fmtDate(p.at)}`)),
       ]),
@@ -6434,6 +6464,118 @@ routes.purchase_list = function (u) {
   return wrap;
 };
 
+// ==============================================================
+// NO-RECEIPT PURCHASES REPORT (owner/accountant)
+// ---
+// Every purchase logged with the "Submit without a receipt" toggle is
+// flagged (no_receipt: true) at entry time. This report rolls those up:
+// totals per branch, an item-level breakdown of what was bought without
+// a receipt, and the individual entries with their stated reason.
+// ==============================================================
+routes.purchase_no_receipt_report = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header(T("No-receipt purchases report","تقرير المشتريات بدون فاتورة"),
+    T("Items and totals for purchases submitted without a receipt.","الأصناف والإجماليات للمشتريات المُرسلة بدون فاتورة.")));
+
+  if (!["owner","accountant"].includes(u.role)) {
+    wrap.appendChild(el("div", { class: "card" }, "Access restricted."));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  let month = ""; // "" = all time
+  const monthInput = el("input", { type: "month", value: month, style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" } });
+  monthInput.addEventListener("change", () => { month = monthInput.value; draw(); });
+  const clearBtn = el("button", { class: "btn ghost", onClick: () => { month = ""; monthInput.value = ""; draw(); } }, T("All time","كل الوقت"));
+
+  wrap.appendChild(el("div", { class: "card", style: { display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" } }, [
+    el("span", { class: "muted small", style: { fontWeight: "600" } }, T("Filter by month","تصفية حسب الشهر")),
+    monthInput, clearBtn,
+  ]));
+
+  const body = el("div", {});
+  wrap.appendChild(body);
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+
+  function draw() {
+    body.innerHTML = "";
+    const flagged = state.purchases.filter(p => p.no_receipt && notTest(p) &&
+      (!month || p.date.slice(0,7) === month))
+      .sort((a,b) => b.at.localeCompare(a.at));
+
+    // ── Totals per branch ──
+    const totalsCard = el("div", { class: "card" });
+    totalsCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", fontWeight: "700", marginBottom: "8px" } }, T("Totals","الإجماليات")));
+    const byBranch = { maadi: 0, zawya: 0 };
+    let grandTotal = 0;
+    for (const p of flagged) {
+      byBranch[p.branch] = (byBranch[p.branch] || 0) + (Number(p.total) || 0);
+      grandTotal += Number(p.total) || 0;
+    }
+    totalsCard.appendChild(el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px" } }, [
+      el("div", {}, [ el("div", { class: "muted small" }, "🏠 Maadi"), el("div", { style: { fontSize: "18px", fontWeight: "700" } }, money(byBranch.maadi || 0)) ]),
+      el("div", {}, [ el("div", { class: "muted small" }, "🏢 Zawya"), el("div", { style: { fontSize: "18px", fontWeight: "700" } }, money(byBranch.zawya || 0)) ]),
+      el("div", {}, [ el("div", { class: "muted small" }, T("Total","الإجمالي")), el("div", { style: { fontSize: "18px", fontWeight: "700", color: "var(--warn)" } }, money(grandTotal)) ]),
+    ]));
+    totalsCard.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, T(`${flagged.length} purchase(s)`, `${flagged.length} مشترى`)));
+    body.appendChild(totalsCard);
+
+    // ── Item-level breakdown ──
+    const itemMap = new Map(); // item_name → { qty, unit, total }
+    let otherTotal = 0;
+    for (const p of flagged) {
+      for (const ln of p.lines) {
+        const k = ln.kind || "inventory";
+        if (k === "other") { otherTotal += Number(ln.line_total || ln.amount || 0); continue; }
+        const key = ln.item_name || "—";
+        const cur = itemMap.get(key) || { qty: 0, unit: ln.unit || "", total: 0 };
+        cur.qty += Number(ln.qty_canonical) || 0;
+        cur.total += Number(ln.line_total) || 0;
+        itemMap.set(key, cur);
+      }
+    }
+    const itemsCard = el("div", { class: "card", style: { marginTop: "12px" } });
+    itemsCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", fontWeight: "700", marginBottom: "8px" } }, T("Items purchased without a receipt","الأصناف المشتراة بدون فاتورة")));
+    const sortedItems = [...itemMap.entries()].sort((a,b) => b[1].total - a[1].total);
+    if (sortedItems.length === 0 && otherTotal === 0) {
+      itemsCard.appendChild(el("div", { class: "muted" }, T("Nothing to show.","لا يوجد ما يُعرض.")));
+    } else {
+      for (const [name, agg] of sortedItems) {
+        itemsCard.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "13px", paddingBottom: "6px", marginBottom: "6px", borderBottom: "1px solid var(--border)" } }, [
+          el("div", {}, `${name} — ${fmtQty(agg.qty, agg.unit)}`),
+          el("div", { style: { fontWeight: "700" } }, money(agg.total)),
+        ]));
+      }
+      if (otherTotal > 0) {
+        itemsCard.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "13px" } }, [
+          el("div", { class: "muted" }, T("Other (transport, fees…)","أخرى (نقل، رسوم…)")),
+          el("div", { style: { fontWeight: "700" } }, money(otherTotal)),
+        ]));
+      }
+    }
+    body.appendChild(itemsCard);
+
+    // ── Individual entries ──
+    const listCard = el("div", { class: "card", style: { marginTop: "12px" } });
+    listCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", fontWeight: "700", marginBottom: "8px" } }, T("Entries","السجلات")));
+    if (flagged.length === 0) {
+      listCard.appendChild(el("div", { class: "muted" }, T("No no-receipt purchases in this period.","لا توجد مشتريات بدون فاتورة في هذه الفترة.")));
+    }
+    for (const p of flagged) {
+      listCard.appendChild(el("div", { class: "row", onClick: () => showPurchase(p) }, [
+        el("div", { class: "grow" }, [
+          el("div", { class: "title" }, `${p.supplier} — ${money(p.total)}`),
+          el("div", { class: "sub" }, `${p.branch || "—"} · ${p.date} · by ${p.by_name}`),
+          el("div", { class: "sub" }, T(`Reason: ${p.no_receipt_reason || "—"}`, `السبب: ${p.no_receipt_reason || "—"}`)),
+        ]),
+      ]));
+    }
+    body.appendChild(listCard);
+  }
+};
+
 async function showPurchase(p) {
   const photo = p.receipt_photo_id ? await IDB.get(p.receipt_photo_id) : null;
   const url = photo ? URL.createObjectURL(photo) : null;
@@ -6456,7 +6598,13 @@ async function showPurchase(p) {
       ]);
     }),
     el("div", { class: "hr" }),
-    url ? el("img", { src: url, class: "thumb", style: { width: "100%", height: "auto", maxHeight: "420px", objectFit: "contain" } }) : el("div", { class: "muted" }, T("No receipt photo attached.","لا توجد صورة فاتورة مرفقة.")),
+    url ? el("img", { src: url, class: "thumb", style: { width: "100%", height: "auto", maxHeight: "420px", objectFit: "contain" } })
+      : p.no_receipt
+        ? el("div", { class: "card", style: { borderColor: "var(--warn)" } }, [
+            el("div", { style: { fontWeight: "700", color: "var(--warn)" } }, T("⚠️ Submitted without a receipt","⚠️ تم الإرسال بدون فاتورة")),
+            el("div", { class: "muted small" }, T(`Reason: ${p.no_receipt_reason || "—"}`, `السبب: ${p.no_receipt_reason || "—"}`)),
+          ])
+        : el("div", { class: "muted" }, T("No receipt photo attached.","لا توجد صورة فاتورة مرفقة.")),
     el("div", { class: "sub muted" }, T(`Entered by ${p.by_name} at ${fmtDate(p.at)} (device ${p.device?.slice(0,8)||"—"})`, `أدخله ${p.by_name} في ${fmtDate(p.at)} (جهاز ${p.device?.slice(0,8)||"—"})`)),
   ]));
 }
@@ -7768,6 +7916,7 @@ const OVERHEAD_CATEGORIES = [
   { value: "maintenance_1",  label: "Maintenance — Cooling (fridges & ice maker)",        recurring: false, maintenance: true },
   { value: "maintenance_2",  label: "Maintenance — Machines (coffee, water, grinders, blender)", recurring: false, maintenance: true },
   { value: "insect_control", label: "Insect / pest control",                              recurring: false, maintenance: true },
+  { value: "maintenance_emergency", label: "Maintenance — Emergency (unscheduled)",        recurring: false, maintenance: true },
 ];
 
 // ── Maintenance plans ──────────────────────────────────────────────
@@ -8421,7 +8570,121 @@ routes.overheads = function (u) {
       row.appendChild(branchRow);
       card.appendChild(row);
     }
+
+    // ── Emergency maintenance — unscheduled repairs, logged any time ──
+    const emRow = el("div", { style:{ paddingBottom:"4px" } });
+    emRow.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:"8px", flexWrap:"wrap" } }, [
+      el("div", { style:{ flex:"1 1 200px" } }, [
+        el("div", { style:{ fontWeight:"600", fontSize:"14px" } }, "🚨 Emergency maintenance"),
+        el("div", { class:"muted small", style:{ fontSize:"12px" } }, "Unscheduled breakdowns & repairs — log any time, not tied to the cadence above."),
+      ]),
+    ]));
+    const emBranchRow = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px", marginTop:"8px" } });
+    for (const br of ["maadi","zawya"]) {
+      const logged = state.overheads.filter(o =>
+        o.branch === br && o.category === "maintenance_emergency" &&
+        ((o.month || (o.date||"").slice(0,7)) === month));
+      const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
+      const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
+      cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
+      if (logged.length) {
+        cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--warn)", fontSize:"14px" } }, `✓ ${money(total)}`));
+        for (const o of logged) {
+          cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
+            el("div", { class:"muted small", style:{ flex:"1" } }, `${o.paid_on || (o.date||"").slice(0,10)}${o.label ? " · " + o.label : ""}`),
+            el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
+              if (!confirm("Delete this maintenance entry?")) return;
+              state.overheads = state.overheads.filter(x => x.id !== o.id);
+              saveState(); toast("Deleted"); draw();
+            }}, "🗑"),
+          ]));
+        }
+      } else {
+        cell.appendChild(el("div", { class:"muted small", style:{ fontSize:"12px", marginBottom:"4px" } }, "—"));
+      }
+      cell.appendChild(el("button", { class:"btn secondary", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", width:"100%", marginTop:"6px" }, onClick:() => logEmergencyMaintenance(br) },
+        logged.length ? "➕ Add" : "🚨 Log emergency repair"));
+      emBranchRow.appendChild(cell);
+    }
+    emRow.appendChild(emBranchRow);
+    card.appendChild(emRow);
+
     return card;
+  }
+
+  function logEmergencyMaintenance(br) {
+    const today = new Date().toISOString().slice(0,10);
+
+    const body = el("div", {}, [ el("h2", {}, `🚨 Emergency maintenance — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
+    body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `Unscheduled breakdown or repair · ${month}`));
+
+    body.appendChild(el("label", {}, "What broke / what was fixed (required)"));
+    const issueInp = el("input", { type:"text", value:"", placeholder:"e.g. coffee machine leak, fridge stopped cooling" });
+    body.appendChild(issueInp);
+
+    // Equipment checkboxes (optional — flag which equipment was involved)
+    const checks = [];
+    body.appendChild(el("label", {}, "Equipment involved (optional)"));
+    const eqWrap = el("div", { style:{ display:"grid", gap:"6px", marginBottom:"6px" } });
+    for (const ev of MAINTENANCE_EQUIPMENT) {
+      const lbl = el("label", { style:{ display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", fontSize:"14px" } });
+      const cb = el("input", { type:"checkbox" });
+      cb.checked = false;
+      cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--warn)";
+      cb.dataset.equip = ev.value;
+      checks.push(cb);
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(ev.label));
+      eqWrap.appendChild(lbl);
+    }
+    body.appendChild(eqWrap);
+
+    body.appendChild(el("label", {}, "Engineer name"));
+    const engName = el("input", { type:"text", value:"" });
+    body.appendChild(engName);
+    body.appendChild(el("label", {}, "Engineer phone"));
+    const engPhone = el("input", { type:"tel", value:"" });
+    body.appendChild(engPhone);
+
+    body.appendChild(el("label", {}, "Amount (EGP)"));
+    const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
+    body.appendChild(amountInp);
+    body.appendChild(el("label", {}, "Date"));
+    const dateInp = el("input", { type:"date", value: today });
+    body.appendChild(dateInp);
+    body.appendChild(el("label", {}, "Note"));
+    const noteInp = el("input", { type:"text", value:"" });
+    body.appendChild(noteInp);
+
+    const actions = el("div", { class:"sticky-actions" });
+    actions.appendChild(el("button", { class:"btn", onClick:() => {
+      const issue = (issueInp.value || "").trim();
+      if (!issue) return toast("Describe what broke / was fixed", "error");
+      const amt = Number(amountInp.value) || 0;
+      if (amt <= 0) return toast("Enter a positive amount", "error");
+      const equipment = checks.filter(c => c.checked).map(c => c.dataset.equip);
+      const s = stamp();
+      const engN = (engName.value || "").trim();
+      state.overheads.push({
+        id: uuid(),
+        branch: br, category: "maintenance_emergency",
+        label: issue,
+        equipment,
+        engineer: engN,
+        engineer_phone: (engPhone.value || "").trim(),
+        amount: amt,
+        month,
+        date: dateInp.value || today,
+        paid: true,
+        paid_on: dateInp.value || today,
+        note: (noteInp.value || "").trim(),
+        by: s.by, by_name: s.by_name, at: s.at,
+      });
+      $("#modal-root").innerHTML = "";
+      saveState(); toast("Emergency maintenance logged"); draw();
+    } }, "Save"));
+    body.appendChild(actions);
+    openSheet(body);
   }
 
   function logMaintenance(br, planValue) {
