@@ -1203,6 +1203,9 @@ function migrateState(s) {
   s.deleted_shift_closes    = s.deleted_shift_closes    || [];
   s.deleted_signin_stamps   = s.deleted_signin_stamps   || [];
   s.deleted_snapshots       = s.deleted_snapshots       || [];
+  // Audit trail of edits made through the Data Management panel (owner + head barista).
+  // See _dmApplyEdit / STATE_CHUNKS.audit.
+  s.edit_log                = s.edit_log                || [];
   if (Object.keys(s.inv_engine.thresholds).length === 0 && Array.isArray(s.items) && s.items.length > 0) {
     _seedInvEngineThresholds(s);
   }
@@ -1412,6 +1415,8 @@ const STATE_CHUNKS = {
                 "deleted_maadi_deposits", "deleted_special_dates", "deleted_overheads",
                 "deleted_photo_log", "deleted_training_quizzes", "deleted_cleaning_logs",
                 "deleted_shift_closes", "deleted_signin_stamps", "deleted_snapshots"],
+  // Append-only audit trail of Data Management edits — see _dmApplyEdit.
+  audit: ["edit_log"],
 };
 
 function markDirty() {
@@ -1940,6 +1945,67 @@ function _dmBulkDelete(type, records, keep = 300) {
 function _dmRestore(type, record) {
   if (type.restoreFn) type.restoreFn(record);
   else restoreRecordFromTrash(type.key, type.trashKey, record);
+}
+
+// Fields the generic Data Management edit dialog will never expose — creation
+// attribution, sync/device internals, and anything shaped as an array/object
+// (photo id lists, purchase lines, equipment lists…), which openPrompt's plain
+// text/number/date/select inputs can't represent safely.
+const DM_EDIT_SKIP_FIELDS = new Set([
+  "id", "by", "by_name", "device", "at",
+  "deleted_at", "deleted_by", "is_test",
+  "last_edited_at", "last_edited_by", "last_edited_by_name",
+  "receipt_photo_id", "receipt_photo_ids", "receipt_photo_names", "receipt_drive_ids", "image_url",
+]);
+// Builds an openPrompt `fields` array from whatever scalar (string/number/boolean)
+// top-level properties a record happens to have — lets the Data Management panel
+// edit ANY record type without a hand-written field list per type. Arrays/objects
+// (line items, equipment, photo ids…) are left alone; edit those from the record's
+// own dedicated screen instead.
+function _dmGenericEditFields(record) {
+  const fields = [];
+  for (const [k, v] of Object.entries(record)) {
+    if (DM_EDIT_SKIP_FIELDS.has(k)) continue;
+    if (v !== null && typeof v === "object") continue;
+    let type = "text";
+    if (typeof v === "number") type = "number";
+    else if (typeof v === "boolean") type = "select";
+    else if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) type = "date";
+    const label = k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const field = { key: k, label, type, value: v };
+    if (type === "select") field.options = [{ label: "Yes", value: "true" }, { label: "No", value: "false" }];
+    fields.push(field);
+  }
+  return fields;
+}
+function _dmGenericOnEdit(record, vals) {
+  for (const [k, v] of Object.entries(vals)) {
+    const orig = record[k];
+    if (typeof orig === "number") record[k] = Number(v) || 0;
+    else if (typeof orig === "boolean") record[k] = (v === "true" || v === true);
+    else record[k] = v;
+  }
+}
+// Applies an edit made through the Data Management panel, then stamps the record
+// AND appends a permanent audit-log entry — who edited what, and when. This is what
+// lets the owner see exactly which entries a head barista (or anyone else) changed.
+function _dmApplyEdit(type, record, vals) {
+  const editFn = type.onEdit || _dmGenericOnEdit;
+  editFn(record, vals);
+  const s = stamp();
+  record.last_edited_at = s.at;
+  record.last_edited_by = s.by;
+  record.last_edited_by_name = s.by_name;
+  state.edit_log = state.edit_log || [];
+  state.edit_log.unshift({
+    id: uuid(),
+    type_key: type.key,
+    record_id: record.id,
+    summary: type.summaryOf(record) || "",
+    at: s.at, by: s.by, by_name: s.by_name,
+  });
+  state.edit_log = state.edit_log.slice(0, 500);
+  saveState();
 }
 
 // Appends ✎ edit and 🗑 delete buttons to `row` for `record`. `editFields(record)`
@@ -3784,7 +3850,10 @@ const ROLE_ACCESS = {
                  "reorder_action_list","supplier_list","items_list",
                  "inventory_engine",
                  "my_hr","staff_hr","leaderboard","notifications","suggestions",
-                 "my_training","training_quiz_take","app_guide"],
+                 "my_training","training_quiz_take","app_guide",
+                 // Edit-only access to Data Management — no delete/bulk-delete/trash;
+                 // see routes.data_management for the role-gated UI split.
+                 "data_management"],
   // Per Haïdi: barista = only waste log, weekly schedule (read), barista handbook, shift close, sign-in stamp, cleaning log, leave requests
   barista: ["home","my_id","waste_new","waste_list","roster","handbook","shift_close_new","signin_stamp_new","cleaning_log_new","leave_new","leave_list","my_scorecard","my_jd","my_hr","leaderboard","notifications","suggestions",
             "my_training","training_quiz_take","app_guide"],
@@ -4013,13 +4082,21 @@ const routes = {};
 // ==============================================================
 routes.data_management = function (u) {
   const wrap = el("div", {});
+  // Owner: full access (view, edit, delete, bulk-delete, trash/restore).
+  // Head barista: edit-only — can fix a mistyped entry, but not delete, bulk-delete,
+  // or touch the trash. Every edit either role makes is stamped with who/when and
+  // recorded in the Edit history log below (see _dmApplyEdit).
+  const canManage = u.role === "owner";
   wrap.appendChild(header(
     T("Data Management", "إدارة البيانات"),
-    T("View, delete, or undo any entry across the app — filter by date, delete in bulk, restore from trash.",
-      "عرض أو حذف أو التراجع عن أي إدخال في التطبيق — فلترة حسب التاريخ، حذف جماعي، استعادة من المهملات.")
+    canManage
+      ? T("View, edit, delete, or undo any entry across the app — filter by date, delete in bulk, restore from trash.",
+          "عرض أو تعديل أو حذف أو التراجع عن أي إدخال في التطبيق — فلترة حسب التاريخ، حذف جماعي، استعادة من المهملات.")
+      : T("View and edit any entry across the app. Every edit is time-stamped and logged for the owner.",
+          "عرض وتعديل أي إدخال في التطبيق. كل تعديل يُسجَّل بالتاريخ والوقت ليراجعه المالك.")
   ));
-  if (u.role !== "owner") {
-    wrap.appendChild(el("div", { class: "card" }, T("Access restricted to the owner.", "الوصول مقصور على المالك.")));
+  if (!canManage && u.role !== "head_barista") {
+    wrap.appendChild(el("div", { class: "card" }, T("Access restricted.", "الوصول مقيّد.")));
     wrap.appendChild(btnBack());
     return wrap;
   }
@@ -4108,7 +4185,8 @@ routes.data_management = function (u) {
 
     const rows = computeList();
 
-    // ---- Bulk delete ----
+    // ---- Bulk delete (owner only) ----
+    if (canManage) {
     const bulkCard = el("div", { class: "card", style: { marginTop: "12px", borderColor: "var(--warn)" } });
     bulkCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", color: "var(--warn)", marginBottom: "8px" } }, T("Bulk delete (moves to trash — undoable)","حذف جماعي (ينتقل للمهملات — قابل للتراجع)")));
 
@@ -4141,6 +4219,7 @@ routes.data_management = function (u) {
       el("span", { class: "muted small" }, T("Last","آخر")), recentInp, recentBtn,
     ]));
     body.appendChild(bulkCard);
+    }
 
     // ---- Results list ----
     const listCard = el("div", { style: { marginTop: "14px" } });
@@ -4151,26 +4230,71 @@ routes.data_management = function (u) {
     const shown = rows.slice(0, 300);
     if (!shown.length) listCard.appendChild(el("div", { class: "muted" }, T("No entries match these filters.","لا توجد إدخالات مطابقة لهذه الفلاتر.")));
     for (const x of shown) {
-      listCard.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
-        el("div", { class: "k" }, [
-          el("div", {}, [el("span", { class: "chip", style: { fontSize: "11px", marginRight: "6px" } }, dmLabel(x.type)), x.summary]),
-          el("div", { class: "muted small" }, `${fmtDate(x.date)} · ${x.by}`),
-        ]),
-        el("button", {
+      const r = x.record;
+      const rowActions = el("div", { style: { display: "flex", gap: "4px" } });
+      rowActions.appendChild(el("button", {
+        class: "btn ghost", style: { width: "auto" },
+        title: T("Edit","تعديل"),
+        onClick: () => {
+          openPrompt({
+            title: T(`Edit ${dmLabel(x.type)}`, `تعديل ${dmLabel(x.type)}`),
+            fields: (x.type.editFields || _dmGenericEditFields)(r),
+            onSubmit: (vals) => {
+              _dmApplyEdit(x.type, r, vals);
+              toast(T(`${dmLabel(x.type)} updated`, `تم تحديث ${dmLabel(x.type)}`));
+              draw();
+            }
+          });
+        }
+      }, "✎"));
+      if (canManage) {
+        rowActions.appendChild(el("button", {
           class: "btn ghost", style: { width: "auto", color: "var(--bad)", border: "1px solid var(--bad)" },
           title: T("Delete","حذف"),
           onClick: () => {
             if (!confirm(T(`Delete this ${dmLabel(x.type)} entry? You can undo below.`, `حذف هذا الإدخال (${dmLabel(x.type)})؟ يمكنك التراجع أدناه.`))) return;
-            _dmDelete(x.type, x.record);
+            _dmDelete(x.type, r);
             toast(T("Deleted — scroll down to undo","تم الحذف — مرّر لأسفل للتراجع"));
             draw();
           }
-        }, "🗑"),
+        }, "🗑"));
+      }
+      listCard.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
+        el("div", { class: "k" }, [
+          el("div", {}, [el("span", { class: "chip", style: { fontSize: "11px", marginRight: "6px" } }, dmLabel(x.type)), x.summary]),
+          el("div", { class: "muted small" }, `${fmtDate(x.date)} · ${x.by}`),
+          r.last_edited_at ? el("div", { class: "muted small", style: { color: "var(--warn)" } },
+            T(`✎ Edited by ${r.last_edited_by_name || "?"} · ${fmtDate(r.last_edited_at)}`, `✎ عدّله ${r.last_edited_by_name || "?"} · ${fmtDate(r.last_edited_at)}`)) : null,
+        ]),
+        rowActions,
       ]));
     }
     body.appendChild(listCard);
 
-    // ---- Unified trash / undo ----
+    // ---- Edit history — audit trail for every edit made through this panel.
+    // Owner sees all edits (this is how they review what a head barista changed);
+    // a non-owner editor sees only their own history.
+    const editHistory = (state.edit_log || [])
+      .filter(e => canManage || e.by === u.id)
+      .slice(0, 100);
+    if (editHistory.length) {
+      const historyCard = el("div", { class: "card", style: { marginTop: "16px" } });
+      historyCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" } },
+        canManage ? T("Edit history (all users)","سجل التعديلات (كل المستخدمين)") : T("Your edit history","سجل تعديلاتك")));
+      for (const e of editHistory) {
+        const t = DATA_LOG_TYPES.find(dt => dt.key === e.type_key);
+        historyCard.appendChild(el("div", { class: "kv" }, [
+          el("div", { class: "k" }, [
+            el("div", {}, [el("span", { class: "chip", style: { fontSize: "11px", marginRight: "6px" } }, t ? dmLabel(t) : e.type_key), e.summary]),
+            el("div", { class: "muted small" }, T(`Edited by ${e.by_name} · ${fmtDate(e.at)}`, `عدّله ${e.by_name} · ${fmtDate(e.at)}`)),
+          ]),
+        ]));
+      }
+      body.appendChild(historyCard);
+    }
+
+    // ---- Unified trash / undo (owner only) ----
+    if (canManage) {
     const trashRows = [];
     for (const t of DATA_LOG_TYPES) for (const r of (state[t.trashKey] || [])) trashRows.push({ type: t, record: r });
     trashRows.sort((a, b) => (b.record.deleted_at || "").localeCompare(a.record.deleted_at || ""));
@@ -4202,6 +4326,7 @@ routes.data_management = function (u) {
         }
       }, T("🗑 Permanently clear ALL trash","🗑 إفراغ كل المهملات نهائياً")));
       body.appendChild(trashCard);
+    }
     }
   }
 
@@ -4374,6 +4499,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("💰", T("My Salary & Leaves","راتبي وإجازاتي"), T("Salary · deductions · leaves","الراتب · الخصومات · الإجازات"), () => go("my_hr")));
     tiles.appendChild(tile("👥", T("Staff HR","الموارد البشرية للفريق"), T("Payroll · penalties · leaves overview","نظرة عامة على الرواتب والخصومات والإجازات"), () => go("staff_hr")));
     tiles.appendChild(tile("📋", T("My Job Description","مهامي ومسؤولياتي"), T("Duties & responsibilities","الوصف الوظيفي"), () => go("my_jd")));
+    tiles.appendChild(tile("🗂️", T("Data Management","إدارة البيانات"), T("Fix a mistaken entry — edits are logged","تصحيح إدخال خاطئ — يتم تسجيل التعديلات"), () => go("data_management")));
     tiles.appendChild(_suggTile(u));
   }
 
