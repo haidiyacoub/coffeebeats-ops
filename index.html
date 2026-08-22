@@ -1694,7 +1694,11 @@ async function _overheadMergeDoc() {
 // and two devices editing at once combine cleanly. Tradeoff (same as sales/overhead):
 // record *deletions* do not propagate — a deleted record reappears until deleted on every
 // device. We accept that to guarantee zero data loss.
-function _recTime(r) { return (r && (r.updated_at || r.at || r.updated || r.ts || r.date)) || ""; }
+// `last_edited_at` takes priority: a Data Management edit never changes a record's
+// original `at`/`updated_at` (creation time), so without this an edited record's merge
+// timestamp looks unchanged — a tie that always favors whichever device pushes next,
+// silently reverting the edit if that device's local copy predates it. See _dmApplyEdit.
+function _recTime(r) { return (r && (r.last_edited_at || r.updated_at || r.at || r.updated || r.ts || r.date)) || ""; }
 function _isPlainObj(v) { return v && typeof v === "object" && !Array.isArray(v); }
 
 function _mergeArrays(local, rem) {
