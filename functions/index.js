@@ -17,35 +17,92 @@ admin.initializeApp();
 function getDb()   { return admin.firestore(); }
 function getAuth() { return admin.auth(); }
 
+const VALID_ROLES = ["owner", "head_barista", "barista", "accountant", "manager", "helper"];
+
+// PIN brute-force protection: after this many wrong guesses (against either a
+// staff member's own PIN or, on that same call, the master PIN), lock out
+// further attempts for the cooldown period below.
+const PIN_MAX_ATTEMPTS = 6;
+const PIN_LOCKOUT_MS   = 15 * 60 * 1000; // 15 minutes
+
+function _millis(ts) {
+  if (!ts) return 0;
+  return typeof ts.toMillis === "function" ? ts.toMillis() : ts;
+}
 
 // ─── verifyPin ────────────────────────────────────────────────────────────────
 exports.verifyPin = onCall(async (request) => {
   const { staffId, pin } = request.data;
   if (!staffId || !pin) throw new HttpsError("invalid-argument", "staffId and pin are required.");
 
-  const db   = getDb();
-  const snap = await db.collection("staff").doc(staffId).get();
+  const db       = getDb();
+  const staffRef = db.collection("staff").doc(staffId);
+  const snap     = await staffRef.get();
   if (!snap.exists) throw new HttpsError("not-found", "Staff member not found.");
 
   const staff = snap.data();
   if (!staff.active) throw new HttpsError("permission-denied", "Account is inactive.");
 
+  const now = Date.now();
+  const lockedUntil = _millis(staff.pin_locked_until);
+  if (lockedUntil > now) {
+    const mins = Math.ceil((lockedUntil - now) / 60000);
+    throw new HttpsError("resource-exhausted", `Too many incorrect attempts. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`);
+  }
+
+  const secRef  = db.collection("config").doc("security");
+  const secSnap = await secRef.get();
+  const secData = secSnap.exists ? secSnap.data() : {};
+  const masterLockedUntil = _millis(secData.master_pin_locked_until);
+
   let match     = await bcrypt.compare(String(pin), staff.pin_hash);
   let viaMaster = false;
 
-  // Fall back to the owner's master PIN, which unlocks any active profile.
+  // Fall back to the owner's master PIN, which unlocks any active profile —
+  // unless the master PIN itself is currently locked out.
   if (!match) {
-    const secSnap    = await db.collection("config").doc("security").get();
-    const masterHash = secSnap.exists ? secSnap.data().master_pin_hash : null;
-    if (masterHash && await bcrypt.compare(String(pin), masterHash)) {
+    const masterHash = secData.master_pin_hash || null;
+    if (masterHash && masterLockedUntil <= now && await bcrypt.compare(String(pin), masterHash)) {
       match     = true;
       viaMaster = true;
     }
   }
 
-  if (!match) throw new HttpsError("unauthenticated", "Incorrect PIN.");
+  if (!match) {
+    const attempts = (staff.pin_failed_attempts || 0) + 1;
+    const update = { pin_failed_attempts: attempts };
+    if (attempts >= PIN_MAX_ATTEMPTS) {
+      update.pin_failed_attempts = 0;
+      update.pin_locked_until    = admin.firestore.Timestamp.fromMillis(now + PIN_LOCKOUT_MS);
+    }
+    await staffRef.update(update).catch(() => {});
+
+    // Track master-PIN failures globally (not per-staffId) so an attacker can't
+    // reset their attempt budget by simply trying a different staff profile.
+    if (secData.master_pin_hash) {
+      const mAttempts = (secData.master_pin_failed_attempts || 0) + 1;
+      const secUpdate = { master_pin_failed_attempts: mAttempts };
+      if (mAttempts >= PIN_MAX_ATTEMPTS) {
+        secUpdate.master_pin_failed_attempts = 0;
+        secUpdate.master_pin_locked_until    = admin.firestore.Timestamp.fromMillis(now + PIN_LOCKOUT_MS);
+      }
+      await secRef.set(secUpdate, { merge: true }).catch(() => {});
+    }
+
+    throw new HttpsError("unauthenticated", "Incorrect PIN.");
+  }
+
+  // Success — clear any accumulated failure state for this path.
+  await staffRef.update({
+    pin_failed_attempts: 0,
+    pin_locked_until:    admin.firestore.FieldValue.delete(),
+  }).catch(() => {});
 
   if (viaMaster) {
+    await secRef.set({
+      master_pin_failed_attempts: 0,
+      master_pin_locked_until:    admin.firestore.FieldValue.delete(),
+    }, { merge: true }).catch(() => {});
     console.log(`Master PIN sign-in as "${staff.name}" (${staffId})`);
   }
 
@@ -73,8 +130,8 @@ exports.setMasterPin = onCall(async (request) => {
     return { ok: true, enabled: false };
   }
 
-  if (!/^\d{4,8}$/.test(String(newPin))) {
-    throw new HttpsError("invalid-argument", "Master PIN must be 4-8 digits.");
+  if (!/^\d{6,8}$/.test(String(newPin))) {
+    throw new HttpsError("invalid-argument", "Master PIN must be 6-8 digits.");
   }
 
   const pin_hash = await bcrypt.hash(String(newPin), 12);
@@ -136,6 +193,7 @@ exports.setStaffRole = onCall(async (request) => {
   _requireOwner(request);
   const { targetUid, role, branches } = request.data;
   if (!targetUid || !role) throw new HttpsError("invalid-argument", "targetUid and role are required.");
+  if (!VALID_ROLES.includes(role)) throw new HttpsError("invalid-argument", "Invalid role.");
 
   await getAuth().setCustomUserClaims(targetUid, { role, branches: branches || [] });
   await getDb().collection("staff").doc(targetUid).update({ role, branches: branches || [] });
@@ -179,6 +237,8 @@ exports.updateStaffProfile = onCall(async (request) => {
   const db = getDb();
 
   if (isOwner) {
+    if (role != null && !VALID_ROLES.includes(role)) throw new HttpsError("invalid-argument", "Invalid role.");
+
     // Owner can update everything
     const staffUpdate   = {};
     const publicUpdate  = {};
@@ -348,9 +408,7 @@ function _requireOwner(request) {
 
 async function _createUser({ name, role, branches, pin, legacyId, emergency_number }) {
   if (!name || !role || !pin) throw new HttpsError("invalid-argument", "name, role, and pin are required.");
-
-  const validRoles = ["owner", "head_barista", "barista", "accountant", "manager", "helper"];
-  if (!validRoles.includes(role)) throw new HttpsError("invalid-argument", "Invalid role.");
+  if (!VALID_ROLES.includes(role)) throw new HttpsError("invalid-argument", "Invalid role.");
 
   const userRecord = await getAuth().createUser({ displayName: name });
   const uid = userRecord.uid;

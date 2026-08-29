@@ -602,8 +602,13 @@ function _remapLegacyIds() {
   }
 }
 
+let _reviewsUnsub = null;
 function startReviewsListener() {
-  db.collection("reviews").orderBy("at", "asc").onSnapshot(snap => {
+  // Guard against duplicate registration: pullFromFirestore() (which calls this)
+  // runs on every remote-change auto-pull, not just once at startup, so without
+  // this check every pull stacked another listener on top of the last one.
+  if (_reviewsUnsub) return;
+  _reviewsUnsub = db.collection("reviews").orderBy("at", "asc").onSnapshot(snap => {
     if (!state.customer_feedback) state.customer_feedback = [];
     const existingIds = new Set(state.customer_feedback.map(f => f.id));
     let added = 0;
@@ -959,18 +964,6 @@ function defaultState() {
     entries: snapshotEntries,
     notes: "Opening snapshot loaded from Inventory Status.xlsx (March 31, 2026).",
   };
-
-  // default users — owner + accountant + 2 head baristas + 2 baristas
-  const users = [
-    { id: uuid(), name: "Haïdi (Owner)",   role: "owner",        pin: "1111", branches: ["maadi","zawya"], active: true },
-    { id: uuid(), name: "Hesham (Accountant)", role: "accountant", pin: "9999", branches: ["maadi","zawya"], active: true },
-    { id: uuid(), name: "Head Barista M",  role: "head_barista", pin: "2222", branches: ["maadi"], active: true },
-    { id: uuid(), name: "Head Barista Z",  role: "head_barista", pin: "3333", branches: ["zawya"], active: true },
-    { id: uuid(), name: "Barista 1",       role: "barista",      pin: "4444", branches: ["maadi","zawya"], active: true },
-    { id: uuid(), name: "Barista 2",       role: "barista",      pin: "5555", branches: ["maadi","zawya"], active: true },
-    { id: uuid(), name: "Barista 3",       role: "barista",      pin: "6666", branches: ["maadi","zawya"], active: true },
-    { id: uuid(), name: "Khaled",          role: "barista",      pin: "7777", branches: ["maadi","zawya"], active: true },
-  ];
 
   return {
     version: 1,
@@ -1860,7 +1853,26 @@ const DATA_LOG_TYPES = [
   { key: "purchases", trashKey: "deleted_purchases", labelEn: "Purchase", labelAr: "مشترى",
     dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
     summaryOf: r => `${r.supplier || "—"} · ${money(r.total)} · ${r.branch || ""}`,
-    deleteFn: (r, keep) => _deletePurchase(r, keep), restoreFn: _restorePurchase },
+    deleteFn: (r, keep) => _deletePurchase(r, keep), restoreFn: _restorePurchase,
+    // A purchase's `total`/`paid_by` created a paired petty_cash or bank_ledger
+    // entry at submit time (see _deletePurchase, which removes that pair
+    // together). The generic Data Management editor doesn't know about that
+    // pairing, so — same as the dedicated "Edit purchase" editor on the
+    // Purchases screen — restrict editing here to fields that were never part
+    // of the ledger entry, instead of letting `total`/`paid_by` drift out of
+    // sync with the linked ledger record.
+    editFields: r => [
+      { key: "supplier", label: "Supplier", type: "text", value: r.supplier || "" },
+      { key: "branch",   label: "Branch",   type: "text", value: r.branch || "" },
+      { key: "date",     label: "Date",     type: "date", value: r.date || (r.at || "").slice(0, 10) },
+      { key: "note",     label: "Note",     type: "text", value: r.note || "" },
+    ],
+    onEdit: (r, vals) => {
+      r.supplier = vals.supplier || r.supplier;
+      r.branch   = vals.branch || r.branch;
+      r.date     = vals.date || r.date;
+      r.note     = vals.note || "";
+    } },
   { key: "petty_cash", trashKey: "deleted_petty_cash", labelEn: "Petty cash", labelAr: "العهدة النقدية",
     dateOf: r => r.at || r.date, byOf: r => r.by_name || "—",
     summaryOf: r => `${r.type || "—"} · ${money(r.amount)} · ${r.branch || ""}` },
@@ -1938,13 +1950,32 @@ function _dmISO(v) {
   return isNaN(d) ? "" : d.toISOString();
 }
 function _dmDay(v) { return _dmISO(v).slice(0, 10); }
+// Deletions get their own edit_log entries (separate from the deleted_at/deleted_by
+// stamp already kept on the trashed record itself), so the owner's unified audit
+// feed shows every delete a head barista makes here, not just edits.
+function _dmLogDeletes(type, records) {
+  const s = stamp();
+  state.edit_log = state.edit_log || [];
+  for (const r of records) {
+    state.edit_log.unshift({
+      id: uuid(),
+      type_key: type.key,
+      record_id: r.id,
+      summary: T("Deleted: ", "حذف: ") + (type.summaryOf(r) || ""),
+      at: s.at, by: s.by, by_name: s.by_name,
+    });
+  }
+  state.edit_log = state.edit_log.slice(0, 500);
+}
 function _dmDelete(type, record, keep) {
   if (type.deleteFn) type.deleteFn(record, keep);
   else deleteRecordToTrash(type.key, type.trashKey, record, keep ?? 20);
+  _dmLogDeletes(type, [record]);
 }
 function _dmBulkDelete(type, records, keep = 300) {
   if (type.deleteFn) { for (const r of records) type.deleteFn(r, keep); }
   else bulkTrashRecords(type.key, type.trashKey, records, keep);
+  _dmLogDeletes(type, records);
 }
 function _dmRestore(type, record) {
   if (type.restoreFn) type.restoreFn(record);
@@ -2027,6 +2058,25 @@ function addRecordActions(row, { record, arrKey, trashKey, entityLabel, editFiel
           fields: editFields(record),
           onSubmit: (vals) => {
             onEdit(record, vals);
+            // Stamp last_edited_at (same as _dmApplyEdit) so this edit's merge
+            // timestamp actually advances — otherwise a stale device that still
+            // holds the pre-edit copy wins the next cross-device sync and
+            // silently reverts the change. Also logs to the same audit trail
+            // the Data Management panel uses, so inline edits made here (owner
+            // waste-log/HR corrections) aren't invisible to it.
+            const s = stamp();
+            record.last_edited_at = s.at;
+            record.last_edited_by = s.by;
+            record.last_edited_by_name = s.by_name;
+            state.edit_log = state.edit_log || [];
+            state.edit_log.unshift({
+              id: uuid(),
+              type_key: arrKey,
+              record_id: record.id,
+              summary: entityLabel,
+              at: s.at, by: s.by, by_name: s.by_name,
+            });
+            state.edit_log = state.edit_log.slice(0, 500);
             saveState();
             toast(T(`${entityLabel} updated`, `تم تحديث ${entityLabel}`));
             render();
@@ -2041,6 +2091,16 @@ function addRecordActions(row, { record, arrKey, trashKey, entityLabel, editFiel
     onClick: () => {
       if (!confirm(deleteConfirm || T(`Delete this ${entityLabel}? You can undo below.`, `حذف ${entityLabel}؟ يمكنك التراجع أدناه.`))) return;
       deleteRecordToTrash(arrKey, trashKey, record);
+      const s = stamp();
+      state.edit_log = state.edit_log || [];
+      state.edit_log.unshift({
+        id: uuid(),
+        type_key: arrKey,
+        record_id: record.id,
+        summary: T(`${entityLabel} deleted`, `تم حذف ${entityLabel}`),
+        at: s.at, by: s.by, by_name: s.by_name,
+      });
+      state.edit_log = state.edit_log.slice(0, 500);
       toast(T(`${entityLabel} deleted — scroll down to undo`, `تم الحذف — مرّر لأسفل للتراجع`));
       render();
     }
@@ -2739,7 +2799,7 @@ function startHrSyncListener() {
 function _makeLiveListener(docId, label, sigFn) {
   const _sig = sigFn || (d => JSON.stringify(d || {}));
   let unsub = null, lastSig = null;
-  return function start() {
+  const start = function start() {
     if (unsub) return;
     try {
       unsub = db.collection("state").doc(docId).onSnapshot(snap => {
@@ -2756,6 +2816,14 @@ function _makeLiveListener(docId, label, sigFn) {
       }, err => console.warn(`[sync] ${label} listener error`, err));
     } catch (e) { console.warn(`[sync] could not start ${label} listener`, e); }
   };
+  // Exposed so stopSyncListeners() can tear this down on sign-out — otherwise
+  // it keeps running against Firestore (and re-registering on the next login
+  // without ever releasing the previous one) for as long as the tab stays open.
+  start.stop = function stop() {
+    if (unsub) { unsub(); unsub = null; }
+    lastSig = null;
+  };
+  return start;
 }
 
 const startWasteSyncListener       = _makeLiveListener("waste",      "waste");
@@ -2778,6 +2846,26 @@ const startHrMetaSyncListener      = _makeLiveListener("hr_meta", "hr_meta (date
 // log_shard_index is updated whenever a shift-close, cleaning log, sign-in stamp,
 // or inventory snapshot is added — one listener covers all four month-sharded arrays.
 const startLogShardSyncListener    = _makeLiveListener("log_shard_index", "logs (shift-close/cleaning/signin/snapshot)");
+
+// Tears down every real-time listener started above. Without this, signing out
+// on a shared/kiosk device (without closing the tab) left all ~15 listeners
+// running against Firestore for the rest of the browser session — reconnecting
+// on every subsequent login (each start() call stacked a fresh one, since the
+// `if (unsub) return` guard only blocks re-registering the SAME instance) and
+// otherwise just idling against a signed-out session. Called from
+// onAuthStateChanged whenever the user becomes signed out.
+function stopSyncListeners() {
+  if (_reviewsUnsub)     { _reviewsUnsub(); _reviewsUnsub = null; }
+  if (_salesIndexUnsub)  { _salesIndexUnsub(); _salesIndexUnsub = null; _lastSalesIndexSig = null; }
+  if (_overheadUnsub)    { _overheadUnsub(); _overheadUnsub = null; _lastOverheadSig = null; }
+  if (_hrUnsub)          { _hrUnsub(); _hrUnsub = null; _lastHrSig = null; }
+  for (const start of [
+    startWasteSyncListener, startShiftsSyncListener, startPurchasesSyncListener,
+    startInventorySyncListener, startRosterSyncListener, startKpiSyncListener,
+    startSuggestionsSyncListener, startConfigSyncListener, startHrMetaSyncListener,
+    startLogShardSyncListener,
+  ]) start.stop();
+}
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
@@ -4685,6 +4773,9 @@ routes.waste_new = function (u) {
 
   let branch = u.branches[0];
   let itemId = null;
+  // Guards both submit paths below (No-waste quick-log and Submit waste entry)
+  // against a double-tap on a shared/slow device creating a duplicate entry.
+  let submitting = false;
 
   // ── Photo evidence (multi-image, auto-uploads to Firebase Storage) ──
   // Shown at the very top so it's the first thing a barista sees/does.
@@ -4698,6 +4789,8 @@ routes.waste_new = function (u) {
     el("button", {
       class: "btn secondary",
       onClick: () => {
+        if (submitting) return;
+        submitting = true;
         const s = stamp();
         state.waste.push({
           id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
@@ -4802,12 +4895,14 @@ routes.waste_new = function (u) {
   update();
 
   function submit() {
+    if (submitting) return;
     const it = state.items.find(x => x.id === itemId);
     if (!it || !qty || qty <= 0) { toast(T("Pick an item and qty > 0","اختر صنفاً وكمية أكبر من صفر"), "error"); return; }
     const isMilkItem = (it.name||"").toLowerCase().match(/milk|oat|almond|soy|cream/);
     if (reason === "منتهي الصلاحية" && isMilkItem && !wastePhotoField.getCloudUrls().filter(Boolean).length) {
       toast(T("📷 Attach a photo of the expired milk before submitting","📷 أرفق صورة للحليب منتهي الصلاحية قبل الإرسال"), "error"); return;
     }
+    submitting = true;
     const s = stamp();
     const photoUrls = wastePhotoField.getCloudUrls().filter(Boolean);
     state.waste.push({
@@ -4910,7 +5005,7 @@ routes.shift_close_new = function (u) {
   wrap.appendChild(header(T("Shift Close","إغلاق الشيفت"), T("Fill in every field before you leave. This is your end-of-shift report.","املأ كل الحقول قبل المغادرة. هذا تقرير نهاية شيفتك.")));
 
   let branch   = u.branches[0];
-  let date     = new Date().toISOString().slice(0,10);
+  let date     = localISODate(new Date());
   let cash     = "";
   let instapay = "";
   let cc       = "";
@@ -5204,7 +5299,7 @@ routes.snapshot_new = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Monthly inventory count","الجرد الشهري للمخزون"), T("Count every item. We pre-fill the last counted value. Submit when done.","احصِ كل صنف. نملأ القيمة المحسوبة الأخيرة مسبقاً. أرسل عند الانتهاء.")));
   let branch = (u.branches.includes(_lastSnapshotBranch) ? _lastSnapshotBranch : u.branches[0]);
-  let asOf = new Date().toISOString().slice(0,10);
+  let asOf = localISODate(new Date());
   const branchPicker = makeBranchPicker(u.branches, () => branch, b => { branch = b; _lastSnapshotBranch = b; draw(); });
   wrap.appendChild(branchPicker);
 
@@ -5271,7 +5366,7 @@ routes.snapshot_new = function (u) {
       const pre = stock[it.id] || 0;
       // Blank placeholder so barista can clearly see what they type (not the prefill).
       const inp = inputs[it.id] || el("input", {
-        type: "number", step: "any", placeholder: String(pre),
+        type: "number", step: "any", min: "0", placeholder: String(pre),
         style: { maxWidth: "120px" }
       });
       inputs[it.id] = inp;
@@ -5403,7 +5498,9 @@ routes.snapshot_new = function (u) {
     draw();
   }
 
+  let submitting = false;
   function submit() {
+    if (submitting) return;
     // Build snapshot entries: carry over the OTHER branches' latest counts unchanged,
     // replace THIS branch's values with inputs. Only rows where the user actually typed
     // something are applied — blank inputs mean "no count taken for this item".
@@ -5415,11 +5512,12 @@ routes.snapshot_new = function (u) {
     for (const it of state.items) {
       const inp = inputs[it.id];
       if (inp && String(inp.value).trim() !== "") {
-        byKey[branch + "|" + it.id] = Number(inp.value) || 0;
+        byKey[branch + "|" + it.id] = Math.max(0, Number(inp.value) || 0);
         counted++;
       }
     }
     if (counted === 0) { toast(T("Type at least one count first","أدخل عدداً واحداً على الأقل"), "error"); return; }
+    submitting = true;
     const entries = [];
     for (const [k, v] of Object.entries(byKey)) {
       const [br, id] = k.split("|"); entries.push({ branch: br, item_id: id, qty: v });
@@ -5444,6 +5542,7 @@ routes.snapshot_new = function (u) {
     try { scanAndNotifyLowStock(); } catch (e) { console.warn(e); }
     renderUndo();
     draw();
+    submitting = false;
   }
 
   // ── Manage Items panel (owner + head_barista only) ──────────────
@@ -6146,7 +6245,7 @@ routes.purchase_new = function (u) {
   let branch = u.branches[0];
   let supplier = "";
   let paid_by = "petty_cash";
-  let date = new Date().toISOString().slice(0,10);
+  let date = localISODate(new Date());
   let no_receipt = false;
   let no_receipt_reason = "";
   let lines = [{
@@ -6385,19 +6484,25 @@ routes.purchase_new = function (u) {
   }
   draw();
 
+  let submitting = false;
   async function submit() {
+    if (submitting) return;
     if (!supplier) return toast(T("Enter supplier name","أدخل اسم المورد"), "error");
     if (no_receipt && !no_receipt_reason.trim()) return toast(T("Enter a reason for submitting without a receipt","أدخل سبب الإرسال بدون فاتورة"), "error");
     for (const ln of lines) {
       if (ln.kind === "inventory") {
         if (!ln.inv_item_id) return toast(T("Pick an inventory item for every inventory line","اختر صنف مخزون لكل بند مخزون"), "error");
-        if (!ln.purchase_qty) return toast(T("Enter a quantity for every inventory line","أدخل الكمية لكل بند مخزون"), "error");
-        if (!ln.pack_size)    return toast(T("Enter the pack size (e.g. ml per bottle) for every inventory line","أدخل حجم العبوة (مثال: مل لكل زجاجة) لكل بند مخزون"), "error");
+        if (!(Number(ln.purchase_qty) > 0)) return toast(T("Enter a quantity greater than zero for every inventory line","أدخل كمية أكبر من صفر لكل بند مخزون"), "error");
+        if (!(Number(ln.pack_size) > 0))    return toast(T("Enter a pack size greater than zero (e.g. ml per bottle) for every inventory line","أدخل حجم عبوة أكبر من صفر (مثال: مل لكل زجاجة) لكل بند مخزون"), "error");
+        if (Number(ln.unit_price) < 0)      return toast(T("Unit price can't be negative","سعر الوحدة لا يمكن أن يكون سالباً"), "error");
       } else {
         if (!ln.description || !ln.description.trim()) return toast(T("Describe every Other line","صف كل بند من نوع أخرى"), "error");
         if (!(Number(ln.amount) > 0)) return toast(T("Enter an amount for every Other line","أدخل مبلغاً لكل بند من نوع أخرى"), "error");
       }
     }
+
+    submitting = true;
+    try {
 
     const s = stamp();
     const total = lines.reduce((s2, l) => s2 + lineTotal(l), 0);
@@ -6497,6 +6602,10 @@ routes.purchase_new = function (u) {
     } else {
       toast(T("Purchase saved","تم حفظ المشترى"));
       go("home");
+    }
+
+    } finally {
+      submitting = false;
     }
   }
   return wrap;
@@ -8743,7 +8852,7 @@ routes.overheads = function (u) {
   }
 
   function logEmergencyMaintenance(br) {
-    const today = new Date().toISOString().slice(0,10);
+    const today = localISODate(new Date());
 
     const body = el("div", {}, [ el("h2", {}, `🚨 Emergency maintenance — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
     body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `Unscheduled breakdown or repair · ${month}`));
@@ -9131,7 +9240,7 @@ routes.bank = function (u) {
     openPrompt({
       title: "Manual bank entry",
       fields: [
-        { key: "date", label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "date", label: "Date", type: "date", value: localISODate(new Date()) },
         { key: "supplier", label: "Payee", type: "text", value: "" },
         { key: "amount", label: "Amount (positive inflow, negative outflow)", type: "number", value: 0 },
         { key: "note", label: "Note", type: "text", value: "" },
@@ -20463,6 +20572,7 @@ auth.onAuthStateChanged(async fbUser => {
     autoPullOnStart();
   } else {
     stopIdleTimer();
+    stopSyncListeners();
   }
 });
 </script>

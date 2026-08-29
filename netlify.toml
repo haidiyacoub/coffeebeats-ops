@@ -11,5 +11,12 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "no-referrer"
     Permissions-Policy = "geolocation=(), microphone=(), camera=(self)"
+    # Blunts a future stored-XSS bug: scripts can only load from this origin plus the
+    # two known CDNs the app actually uses (Firebase SDK, SheetJS). connect-src/img-src
+    # are left at https:/data:/blob: (rather than an exact Firebase/Google API host
+    # list) because this couldn't be verified against a live deploy — narrow those
+    # once confirmed safe in staging, since an overly strict connect-src would silently
+    # break sync/auth instead of failing loudly.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com https://cdn.sheetjs.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
     # Cache: don't cache the app HTML (always serve fresh)
     Cache-Control = "no-store, no-cache, must-revalidate"

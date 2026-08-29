@@ -1,8 +1,32 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+
+    function signedIn() { return request.auth != null; }
+    function isStaff()  {
+      return signedIn() && request.auth.token.role in
+        ['owner', 'accountant', 'head_barista', 'barista', 'manager', 'helper'];
+    }
+    function isImage()  { return request.resource.contentType.matches('image/.*'); }
+    function under(maxBytes) { return request.resource.size < maxBytes; }
+
+    // Waste/purchase/deposit/staff-ID photos uploaded from the ops app
+    // (uploadPhoto() in index.html — always <input accept="image/*">).
+    match /photos/{fileName} {
+      allow read:            if isStaff();
+      allow create, update:  if isStaff() && isImage() && under(15 * 1024 * 1024);
+      allow delete:          if isStaff();
+    }
+
+    // One-off Firebase Storage connectivity check button in Settings.
+    match /_test/{fileName} {
+      allow read:            if isStaff();
+      allow create, update:  if isStaff() && isImage() && under(1024 * 1024);
+      allow delete:          if isStaff();
+    }
+
     match /{allPaths=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
     }
   }
 }

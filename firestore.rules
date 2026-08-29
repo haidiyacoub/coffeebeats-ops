@@ -9,11 +9,64 @@ service cloud.firestore {
       return signedIn() && userRole() in
         ['owner', 'accountant', 'head_barista', 'barista', 'manager', 'helper'];
     }
+    // Owner/accountant/head_barista — the three roles with any UI access to
+    // financial and HR-admin screens (bank ledger, petty cash, overheads,
+    // salary config, staff ID uploads). Matches ROLE_ACCESS in index.html.
+    function isFinanceRole() { return signedIn() && userRole() in ['owner', 'accountant', 'head_barista']; }
+    // Owner + head_barista — the only two roles with any UI access to the
+    // Data Management screen (owner: full delete/undo; head_barista: edit-only).
+    function isDataMgmtRole() { return signedIn() && userRole() in ['owner', 'head_barista']; }
 
-    // Operational state — all signed-in staff can read/write
+    // Chunk docs that hold financial/HR-admin/audit data with no legitimate
+    // barista/manager/helper UI path — see STATE_CHUNKS in index.html.
+    // Locked down here so those UI-only restrictions can't be bypassed by
+    // writing directly to Firestore. Every other doc under /state is
+    // operational data (waste, shifts, roster, suggestions, menu, etc.)
+    // that all staff roles legitimately read/write through the app.
+    function isRestrictedStateDoc(doc) {
+      return doc in ['admin_trash', 'audit', 'hr_meta', 'overhead', 'purchases', 'config'];
+    }
+
+    // Operational state — all signed-in staff can read/write, except the
+    // restricted docs above which get their own tighter rules below.
     match /state/{doc} {
+      allow read:  if isStaff() && !isRestrictedStateDoc(doc);
+      allow write: if isStaff() && !isRestrictedStateDoc(doc);
+    }
+
+    // Owner-only Data Management trash (delete/undo any entry, any date).
+    match /state/admin_trash {
+      allow read, write: if isOwner();
+    }
+
+    // Data Management edit audit trail — only owner and head_barista ever
+    // reach the screen that writes here (edit_log).
+    match /state/audit {
+      allow read, write: if isDataMgmtRole();
+    }
+
+    // Staff ID uploads + salary snapshot history — sensitive HR-admin data,
+    // not part of any barista/manager/helper screen.
+    match /state/hr_meta {
+      allow read, write: if isFinanceRole();
+    }
+
+    // Overhead costs + emergency maintenance config — owner/accountant/head_barista only.
+    match /state/overhead {
+      allow read, write: if isFinanceRole();
+    }
+
+    // Purchases, petty cash, and the bank ledger — owner/accountant/head_barista only.
+    match /state/purchases {
+      allow read, write: if isFinanceRole();
+    }
+
+    // App-wide settings incl. salary/incentive config, the Google Calendar key,
+    // and operations-manual overrides. Read stays available to all staff (the
+    // handbook and home screen reference it); only finance-role staff can write.
+    match /state/config {
       allow read:  if isStaff();
-      allow write: if isStaff();
+      allow write: if isFinanceRole();
     }
 
     // Staff profiles — private, contains pin_hash and access overrides
