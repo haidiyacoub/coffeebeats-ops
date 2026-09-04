@@ -9187,6 +9187,22 @@ routes.sales_import = function (u) {
     ]),
   ]));
 
+  // ---- Current-month safeguard ----
+  // The current calendar month isn't closed yet, so its numbers are always
+  // partial — importing them makes the dashboard look like the month
+  // underperformed. Rows/files dated in this month are skipped on import
+  // unless explicitly allowed here.
+  const currentMonth = new Date().toISOString().slice(0,7);
+  wrap.appendChild(el("div", { class: "card", style: { borderColor: "var(--warn)", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, [
+    (() => {
+      const cb = el("input", { type: "checkbox" });
+      cb.id = "_salesAllowCurrentMonth";
+      return cb;
+    })(),
+    el("span", { class: "muted small" },
+      `⚠️ ${currentMonth} isn't closed yet — rows/files dated in it are skipped on import unless you check this box`),
+  ]));
+
   const fInput = el("input", { type: "file", accept: ".csv,text/csv" });
   wrap.appendChild(fInput);
 
@@ -9279,6 +9295,10 @@ routes.sales_import = function (u) {
     preview2.innerHTML = "";
     preview2.appendChild(el("div", { class: "banner-arch" },
       `✓ ${detected.branch} · ${detected.isoMonth} — ${parsedOrderItems.rows.length} product lines (modifiers excluded)`));
+    if (detected.isoMonth === currentMonth && !$("#_salesAllowCurrentMonth")?.checked) {
+      preview2.appendChild(el("div", { class: "banner-arch", style: { borderColor: "var(--warn)" } },
+        `⚠️ ${currentMonth} isn't closed yet — this file will be skipped on import unless you check "Allow current month" above.`));
+    }
     // Qty per item summary
     const qtyMap = new Map();
     for (const r of parsedOrderItems.rows) qtyMap.set(r.name, (qtyMap.get(r.name)||0) + (r.qty||1));
@@ -9325,6 +9345,10 @@ routes.sales_import = function (u) {
     preview3.innerHTML = "";
     preview3.appendChild(el("div", { class: "banner-arch" },
       `✓ ${detected.branch} · ${detected.isoMonth} — ${parsedOrders.rows.length} orders attributed`));
+    if (detected.isoMonth === currentMonth && !$("#_salesAllowCurrentMonth")?.checked) {
+      preview3.appendChild(el("div", { class: "banner-arch", style: { borderColor: "var(--warn)" } },
+        `⚠️ ${currentMonth} isn't closed yet — this file will be skipped on import unless you check "Allow current month" above.`));
+    }
     // Ticket size preview per barista (if File 2 also loaded for same branch/month)
     const matchingItems = (state.order_items||[]).concat(parsedOrderItems?.branch===detected.branch && parsedOrderItems?.month===detected.isoMonth ? parsedOrderItems.rows : []);
     const orderQty = new Map();
@@ -9448,6 +9472,12 @@ routes.sales_import = function (u) {
     if (parsed.warnings.length) info.push(parsed.warnings.join(" · "));
     preview.appendChild(el("div", { class: "muted small" }, info.join(" · ")));
 
+    const currentMonthRows = parsed.rows.filter(r => (r.date || "").slice(0,7) === currentMonth).length;
+    if (currentMonthRows > 0 && !$("#_salesAllowCurrentMonth")?.checked) {
+      preview.appendChild(el("div", { class: "banner-arch", style: { borderColor: "var(--warn)" } },
+        `⚠️ ${currentMonthRows} row(s) are dated in ${currentMonth} (current, still-open month) and will be skipped on import — check "Allow current month" above to include them.`));
+    }
+
     // Per-month bucket
     const byMonth = new Map();
     for (const r of parsed.rows) {
@@ -9474,11 +9504,17 @@ routes.sales_import = function (u) {
 
   function commit() {
     if (!parsed || parsed.rows.length === 0) return toast("Nothing to import", "error");
+    const allowCurrent = $("#_salesAllowCurrentMonth")?.checked || false;
+    const rows = allowCurrent ? parsed.rows : parsed.rows.filter(r => (r.date || "").slice(0,7) !== currentMonth);
+    const skipped = parsed.rows.length - rows.length;
+    if (rows.length === 0) {
+      return toast(`All ${parsed.rows.length} rows are dated in ${currentMonth} — that month isn't closed yet. Check "Allow current month" above to import anyway.`, "error");
+    }
     const s = stamp();
     const batch = uuid();
     const importedBranches = new Set();
     const importedMonths = new Set();
-    for (const r of parsed.rows) {
+    for (const r of rows) {
       const br = (String(r.branch || branchDefault).toLowerCase().includes("zawya")) ? "zawya"
                : (String(r.branch || branchDefault).toLowerCase().includes("maadi")) ? "maadi"
                : String(r.branch || branchDefault).toLowerCase();
@@ -9505,7 +9541,7 @@ routes.sales_import = function (u) {
     saveState();
     const branchList = [...importedBranches].join(", ") || branchDefault;
     const monthList = [...importedMonths].sort().join(", ") || "—";
-    toast(`✓ Imported ${parsed.rows.length} rows · branches: ${branchList} · months: ${monthList}`);
+    toast(`✓ Imported ${rows.length} rows${skipped > 0 ? ` (skipped ${skipped} dated in ${currentMonth})` : ""} · branches: ${branchList} · months: ${monthList}`);
     const targetMonth = [...importedMonths].sort().pop() || monthFallback.value;
     const targetBranch = importedBranches.has(branchDefault) ? branchDefault : ([...importedBranches][0] || branchDefault);
     go("dashboard", { month: targetMonth, branch: targetBranch });
@@ -9514,63 +9550,78 @@ routes.sales_import = function (u) {
   function commitAll() {
     const s = stamp();
     const parts = [];
+    const allowCurrent = $("#_salesAllowCurrentMonth")?.checked || false;
 
     // File 1 — sales rows
     if (parsed && parsed.rows.length > 0) {
-      const batch = uuid();
-      const importedBranches = new Set();
-      const importedMonths = new Set();
-      for (const r of parsed.rows) {
-        const br = (String(r.branch || branchDefault).toLowerCase().includes("zawya")) ? "zawya"
-                 : (String(r.branch || branchDefault).toLowerCase().includes("maadi")) ? "maadi"
-                 : String(r.branch || branchDefault).toLowerCase();
-        state.sales.push({
-          id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, device: s.device,
-          branch: br, date: r.date, item: r.item, sku: r.sku, qty: r.qty,
-          gross_sales: r.gross, net_sales: r.net, discount: r.discount, discount_name: r.discount_name || "",
-          category: r.category,
-        });
-        importedBranches.add(br);
-        if (r.date && r.date.length >= 7) importedMonths.add(r.date.slice(0,7));
-      }
-      parts.push(`File 1: ${parsed.rows.length} sales rows`);
-      // Save excluded revenue so dashboard can compute CB% of total venue sales
-      if ((parsed.zawyaExcludedNet || 0) > 0 || (parsed.zawyaExcludedGross || 0) > 0) {
-        state.sales_meta = state.sales_meta || [];
-        const metaMonths = importedMonths.size > 0 ? [...importedMonths] : [monthFallback.value || new Date().toISOString().slice(0,7)];
-        // Remove stale entries for these months before inserting to prevent accumulation on re-upload
-        state.sales_meta = state.sales_meta.filter(m => !(m.branch === "zawya" && metaMonths.includes(m.month)));
-        for (const m of metaMonths) {
-          state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
+      const rows = allowCurrent ? parsed.rows : parsed.rows.filter(r => (r.date || "").slice(0,7) !== currentMonth);
+      const skipped1 = parsed.rows.length - rows.length;
+      if (rows.length > 0) {
+        const batch = uuid();
+        const importedBranches = new Set();
+        const importedMonths = new Set();
+        for (const r of rows) {
+          const br = (String(r.branch || branchDefault).toLowerCase().includes("zawya")) ? "zawya"
+                   : (String(r.branch || branchDefault).toLowerCase().includes("maadi")) ? "maadi"
+                   : String(r.branch || branchDefault).toLowerCase();
+          state.sales.push({
+            id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, device: s.device,
+            branch: br, date: r.date, item: r.item, sku: r.sku, qty: r.qty,
+            gross_sales: r.gross, net_sales: r.net, discount: r.discount, discount_name: r.discount_name || "",
+            category: r.category,
+          });
+          importedBranches.add(br);
+          if (r.date && r.date.length >= 7) importedMonths.add(r.date.slice(0,7));
         }
+        parts.push(`File 1: ${rows.length} sales rows${skipped1 > 0 ? ` (skipped ${skipped1} from ${currentMonth})` : ""}`);
+        // Save excluded revenue so dashboard can compute CB% of total venue sales
+        if ((parsed.zawyaExcludedNet || 0) > 0 || (parsed.zawyaExcludedGross || 0) > 0) {
+          state.sales_meta = state.sales_meta || [];
+          const metaMonths = importedMonths.size > 0 ? [...importedMonths] : [monthFallback.value || new Date().toISOString().slice(0,7)];
+          // Remove stale entries for these months before inserting to prevent accumulation on re-upload
+          state.sales_meta = state.sales_meta.filter(m => !(m.branch === "zawya" && metaMonths.includes(m.month)));
+          for (const m of metaMonths) {
+            state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month: m, excluded_net: parsed.zawyaExcludedNet || 0, excluded_gross: parsed.zawyaExcludedGross || 0 });
+          }
+        }
+      } else if (skipped1 > 0) {
+        parts.push(`File 1: skipped — all ${skipped1} rows are dated in ${currentMonth} (not closed yet)`);
       }
     }
 
     // File 2 — order items
     if (parsedOrderItems && parsedOrderItems.rows.length > 0) {
-      // Remove existing order_items for this branch+month before re-importing
-      state.order_items = (state.order_items || []).filter(
-        i => !(i.branch === parsedOrderItems.branch && i.month === parsedOrderItems.month));
-      const batch = uuid();
-      for (const r of parsedOrderItems.rows) {
-        state.order_items.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
-          branch: r.branch, month: r.month, date: r.date, order_ref: r.order_ref,
-          name: r.name, unit_price: r.unit_price, qty: r.qty,
-          discount: r.discount, disc_name: r.disc_name });
+      if (parsedOrderItems.month === currentMonth && !allowCurrent) {
+        parts.push(`File 2: skipped — ${currentMonth} isn't closed yet`);
+      } else {
+        // Remove existing order_items for this branch+month before re-importing
+        state.order_items = (state.order_items || []).filter(
+          i => !(i.branch === parsedOrderItems.branch && i.month === parsedOrderItems.month));
+        const batch = uuid();
+        for (const r of parsedOrderItems.rows) {
+          state.order_items.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
+            branch: r.branch, month: r.month, date: r.date, order_ref: r.order_ref,
+            name: r.name, unit_price: r.unit_price, qty: r.qty,
+            discount: r.discount, disc_name: r.disc_name });
+        }
+        parts.push(`File 2: ${parsedOrderItems.rows.length} order lines`);
       }
-      parts.push(`File 2: ${parsedOrderItems.rows.length} order lines`);
     }
 
     // File 3 — orders / barista attribution
     if (parsedOrders && parsedOrders.rows.length > 0) {
-      state.orders = (state.orders || []).filter(
-        o => !(o.branch === parsedOrders.branch && o.month === parsedOrders.month));
-      const batch = uuid();
-      for (const r of parsedOrders.rows) {
-        state.orders.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
-          branch: r.branch, month: r.month, date: r.date, order_ref: r.order_ref, barista_name: r.barista_name });
+      if (parsedOrders.month === currentMonth && !allowCurrent) {
+        parts.push(`File 3: skipped — ${currentMonth} isn't closed yet`);
+      } else {
+        state.orders = (state.orders || []).filter(
+          o => !(o.branch === parsedOrders.branch && o.month === parsedOrders.month));
+        const batch = uuid();
+        for (const r of parsedOrders.rows) {
+          state.orders.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name,
+            branch: r.branch, month: r.month, date: r.date, order_ref: r.order_ref, barista_name: r.barista_name });
+        }
+        parts.push(`File 3: ${parsedOrders.rows.length} orders`);
       }
-      parts.push(`File 3: ${parsedOrders.rows.length} orders`);
     }
 
     if (parts.length === 0) return toast("No files loaded yet", "error");
