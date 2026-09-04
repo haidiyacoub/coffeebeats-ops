@@ -9163,9 +9163,15 @@ routes.sales_import = function (u) {
   wrap.appendChild(branchPicker);
 
   // ---- Month override (used when dates are missing or unparseable) ----
+  // Defaults to LAST month, not the current one — sales files are uploaded
+  // after a month closes, so the current (still in-progress) month is never
+  // the right default here.
+  const _lastMonth = new Date();
+  _lastMonth.setUTCDate(1);
+  _lastMonth.setUTCMonth(_lastMonth.getUTCMonth() - 1);
   const monthFallback = el("input", {
     type: "month",
-    value: new Date().toISOString().slice(0,7),
+    value: _lastMonth.toISOString().slice(0,7),
     style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" }
   });
   wrap.appendChild(el("div", { class: "card", style: { display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" } }, [
