@@ -2100,14 +2100,21 @@ function _collectDeletions() {
     }
   }
   // Also cover the month-sharded logs (shift_closes, cleaning_logs, signin_stamps,
-  // snapshots). These were originally left out — they're pure append-only logs with no
-  // delete UI, so tombstoning every row would have bloated the tombstone list for nothing.
-  // The Data Management panel now lets an owner delete individual rows here too, so a
-  // deletion needs the same protection: without a tombstone, a device that still has the
-  // just-deleted row in stale local state resurrects it the moment it next pushes (see
-  // autoPullOnStart's pre-flush tombstone refresh, which depends on this running first).
+  // snapshots) plus sales/order_items/orders (sharded by _syncSalesShards, not
+  // MONTH_SHARDED, but tracked with the exact same _lastShardSig baseline). These were
+  // originally left out — they're pure append-only logs with no delete UI, so tombstoning
+  // every row would have bloated the tombstone list for nothing. Sales now has a delete
+  // UI (Upload Sales → "Delete selected" / "Clear ALL sales"), so a deletion needs the
+  // same protection: without a tombstone, a device that still has the just-deleted row in
+  // stale local state resurrects it the moment it next pushes (see autoPullOnStart's
+  // pre-flush tombstone refresh, which depends on this running first). Without this,
+  // deleting an entire branch's month from Upload Sales looked like it worked (the row
+  // vanished locally) but reappeared on refresh: _syncSalesShards only rewrites a month's
+  // Firestore shard when that month still has local rows, so wiping a branch down to zero
+  // rows for a month left the stale remote shard untouched — a plain pull kept bringing it
+  // back with nothing here to strip it back out.
   // _lastShardSig already holds the right "last confirmed" baseline for these arrays.
-  for (const arr of Object.keys(MONTH_SHARDED)) {
+  for (const arr of [...Object.keys(MONTH_SHARDED), "sales", "order_items", "orders"]) {
     const prevRaw = _lastShardSig[arr];
     if (!prevRaw) continue;
     let prev; try { prev = JSON.parse(prevRaw); } catch (_) { continue; }
