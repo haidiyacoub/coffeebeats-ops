@@ -8209,6 +8209,16 @@ function getSalaryForMonth(uid, month) {
   return Number((state.salary_config[uid] || {}).monthly_salary || 0);
 }
 
+// Staff work across both branches, so their salary cost is split between Maadi and Zawya
+// rather than charged entirely to one. Owner-configurable via Monthly Overheads (defaults
+// to an even 50/50 split, matching the app's original fixed behavior). Stored in
+// state.settings so it rides along in the existing "config" sync chunk — no new wiring.
+function getSalarySplitPct(branch) {
+  const maadiPct = Math.min(100, Math.max(0, Number(state.settings?.salary_split_maadi_pct ?? 50) || 0));
+  const isMaadi = String(branch || "").trim().toLowerCase().includes("maadi");
+  return isMaadi ? maadiPct : (100 - maadiPct);
+}
+
 // ── End-of-month worked-days payroll cross-check (info only) ──
 // Pay runs on a 25-to-25 cycle, paid on the 1st of the following month. The cycle
 // for month M = days 26–30 of month M-1 (the "carry", 5 days; the 31st is not
@@ -8389,6 +8399,48 @@ routes.overheads = function (u) {
   state.overheads              = state.overheads              || [];
   state.overhead_presets       = state.overhead_presets       || {};
   state.overhead_monthly_amts  = state.overhead_monthly_amts  || {};
+
+  // ─── SECTION 0: Salary split between branches ─────────────────────────
+  // Staff work across both branches, so their salary cost is charged to Maadi/Zawya's
+  // net profit calc by this split rather than a fixed 50/50. Read by getSalarySplitPct(),
+  // used everywhere salariesTotal is computed (Dashboards net-profit trend, branch P&L
+  // cards, cash reality check). Stored in state.settings so it syncs via the existing
+  // "config" chunk with no new wiring.
+  const splitCard = el("div", { class: "card", style: { marginTop: "12px" } });
+  splitCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700", marginBottom:"8px" } }, "Salary split between branches"));
+  splitCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    "How much of the team's total monthly salary counts against each branch's net profit. Defaults to an even 50/50 split."));
+  const splitRow = el("div", { style: { display:"flex", alignItems:"center", gap:"14px", flexWrap:"wrap" } });
+  const maadiPctNow = getSalarySplitPct("maadi");
+  const splitInp = el("input", {
+    type: "range", min: "0", max: "100", step: "5", value: String(maadiPctNow),
+    // el() sets attributes via setAttribute, and "disabled" is a boolean HTML attribute —
+    // setAttribute("disabled", false) still adds it (any value's presence disables), so the
+    // key must be omitted entirely for the enabled case rather than passed as false.
+    ...(u.role !== "owner" ? { disabled: true } : {}),
+    style: { flex: "1", minWidth: "160px" },
+  });
+  const splitLabel = el("div", { style: { fontWeight: "700", fontSize: "15px", minWidth: "180px" } },
+    `🏠 Maadi ${maadiPctNow}% · 🏢 Zawya ${100 - maadiPctNow}%`);
+  splitRow.appendChild(splitInp);
+  splitRow.appendChild(splitLabel);
+  splitCard.appendChild(splitRow);
+  if (u.role === "owner") {
+    splitInp.addEventListener("input", () => {
+      const pct = Number(splitInp.value);
+      splitLabel.textContent = `🏠 Maadi ${pct}% · 🏢 Zawya ${100 - pct}%`;
+    });
+    splitInp.addEventListener("change", () => {
+      const pct = Number(splitInp.value);
+      state.settings = state.settings || {};
+      state.settings.salary_split_maadi_pct = pct;
+      saveState();
+      toast(`Salary split set: Maadi ${pct}% / Zawya ${100 - pct}%`);
+    });
+  } else {
+    splitCard.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, "Owner only — accountant can view but not change."));
+  }
+  wrap.appendChild(splitCard);
 
   // ─── SECTION 1: Fixed default amounts — both branches, inline edit ───────
   // Kept inside draw() so that typing a new amount re-renders all inputs from
@@ -11720,7 +11772,11 @@ routes.dashboard = function (u, params) {
     const monthSales = state.sales.filter(s => branchKey(s.branch) === bKey
       && normalizeDate(s.date).slice(0,7) === month
       && !(bKey === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item)));
-    const revenue = monthSales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
+    const grossRevenue = monthSales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
+    // At Zawya, Coffee Beats doesn't keep the full POS revenue: 14% VAT comes off the top,
+    // then Zawya takes a 10% share of what's left. Profitability must be measured against
+    // what CB actually retains, not the gross figure rung up at the register.
+    const revenue = bKey === "zawya" ? (grossRevenue / 1.14) * 0.90 : grossRevenue;
 
     const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
@@ -11753,7 +11809,7 @@ routes.dashboard = function (u, params) {
     const activeStaff = (state.users || []).filter(x =>
       ["barista","head_barista"].includes(x.role) && (x.active || !!(state.salary_config || {})[x.id]));
     const totalStaffSalary = activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
-    const salariesTotal = Math.round(totalStaffSalary / 2);
+    const salariesTotal = Math.round(totalStaffSalary * getSalarySplitPct(bKey) / 100);
     const totalOpex = overheadsTotal + salariesTotal;
 
     const grossProfit = revenue - cogs;
@@ -11796,7 +11852,7 @@ routes.dashboard = function (u, params) {
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      "Net profit % = (Revenue − COGS − paid overheads − salary ½-share) ÷ Revenue, per branch per month. \"Combined\" sums both branches' revenue and net profit for that month. A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added."));
+      `Net profit % = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, per branch per month. Salary is split ${getSalarySplitPct("maadi")}% Maadi / ${getSalarySplitPct("zawya")}% Zawya — adjustable in Monthly Overheads. Zawya's revenue is counted after 14% VAT and Zawya's 10% share, since that's what Coffee Beats actually keeps. "Combined" sums both branches' revenue and net profit for that month. A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
   }
   wrap.appendChild(trendCard);
 
@@ -11868,7 +11924,7 @@ routes.dashboard = function (u, params) {
     ]));
     cashCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
       "This is a partial reconciliation, not a full cash-flow statement — it only totals what's actually been logged in Purchases, Overheads (paid), ATM/Cash Deposits, and the Bank Ledger. " +
-      "Card/POS settlement deposits aren't tracked in the app, and salary payouts aren't logged as individual transactions yet (\"Book net profit\" uses a modeled ½-share estimate, not an actual payout) — so don't expect the columns to net out to the book number. " +
+      "Card/POS settlement deposits aren't tracked in the app, and salary payouts aren't logged as individual transactions yet (\"Book net profit\" uses a modeled salary-split estimate, not an actual payout) — so don't expect the columns to net out to the book number. " +
       "The most common driver of a gap: \"Purchases paid\" is what actually left the till/bank for stock, while the book P&L uses a theoretical COGS (units sold × recipe cost) — if you bought more than you sold (stocking up, waste, spoilage), real cash cost runs higher than the book number shows."));
   }
   wrap.appendChild(cashCard);
@@ -12231,16 +12287,26 @@ routes.dashboard = function (u, params) {
     );
     const _totalStaffSalary = rangeMonths.reduce((total, m) =>
       total + _activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, m), 0), 0);
-    const salariesTotal = Math.round(_totalStaffSalary / 2);
+    const _salarySplitPct = getSalarySplitPct(branch === "events" ? "maadi" : branch);
+    const salariesTotal = Math.round(_totalStaffSalary * _salarySplitPct / 100);
     const totalOpex = overheadsTotal + salariesTotal;
+
+    // ---------- Zawya revenue after deductions ----------
+    // At Zawya, Coffee Beats doesn't keep the full POS revenue: 14% VAT comes off the top,
+    // then Zawya takes a 10% share of what's left. plRevenue — what profitability (COGS%,
+    // gross margin%, net profit%, and the net profit EGP figure itself) is measured
+    // against — uses this net-of-share figure for Zawya; Maadi is unaffected.
+    const revenueAfterVat    = branch === "zawya" ? revenue / 1.14 : null;
+    const revenueAfterShares = revenueAfterVat   !== null ? revenueAfterVat * 0.90 : null;
+    const plRevenue = branch === "zawya" ? revenueAfterShares : revenue;
 
     // ---------- KEY METRICS ----------
     const cogs = cogsSales; // sales-derived (use theoretical if you prefer — see note on P&L card)
-    const grossProfit = revenue - cogs;
+    const grossProfit = plRevenue - cogs;
     const netProfit = grossProfit - totalOpex;
-    const cogsPct = revenue ? (cogs / revenue) * 100 : 0;
-    const gmPct = revenue ? (grossProfit / revenue) * 100 : 0;
-    const npPct = revenue ? (netProfit / revenue) * 100 : 0;
+    const cogsPct = plRevenue ? (cogs / plRevenue) * 100 : 0;
+    const gmPct = plRevenue ? (grossProfit / plRevenue) * 100 : 0;
+    const npPct = plRevenue ? (netProfit / plRevenue) * 100 : 0;
 
     // CB Sales % — only meaningful for Zawya (third-party concessions exist at that venue)
     // Deduplicate sales_meta by branch+month, keeping the latest entry (by id insertion order)
@@ -12256,10 +12322,6 @@ routes.dashboard = function (u, params) {
     const excludedNet = salesMetaInRange.reduce((s, m) => s + (Number(m.excluded_net) || 0), 0);
     const totalVenueNet = revenue + excludedNet;
     const cbPct = totalVenueNet > 0 ? (revenue / totalVenueNet) * 100 : null;
-
-    // ---------- Zawya revenue after deductions ----------
-    const revenueAfterVat    = branch === "zawya" ? revenue / 1.14 : null;
-    const revenueAfterShares = revenueAfterVat   !== null ? revenueAfterVat * 0.90 : null;
 
     // ---------- top KPI cards ----------
     const topKpis = [
@@ -12283,22 +12345,24 @@ routes.dashboard = function (u, params) {
       el("div", { class: "grid c3" }, [
         el("div", {}, [
           el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "COGS %"),
-          el("div", { style: { fontSize: "28px", fontWeight: "700", color: cogsPct > 35 ? "var(--bad)" : cogsPct > 28 ? "var(--warn)" : "var(--ok)" } }, (revenue ? cogsPct.toFixed(1) : "—") + "%"),
+          el("div", { style: { fontSize: "28px", fontWeight: "700", color: cogsPct > 35 ? "var(--bad)" : cogsPct > 28 ? "var(--warn)" : "var(--ok)" } }, (plRevenue ? cogsPct.toFixed(1) : "—") + "%"),
           el("div", { class: "muted small" }, money(cogs)),
         ]),
         el("div", {}, [
           el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "Gross margin %"),
-          el("div", { style: { fontSize: "28px", fontWeight: "700", color: gmPct >= 65 ? "var(--ok)" : gmPct >= 55 ? "var(--warn)" : "var(--bad)" } }, (revenue ? gmPct.toFixed(1) : "—") + "%"),
+          el("div", { style: { fontSize: "28px", fontWeight: "700", color: gmPct >= 65 ? "var(--ok)" : gmPct >= 55 ? "var(--warn)" : "var(--bad)" } }, (plRevenue ? gmPct.toFixed(1) : "—") + "%"),
           el("div", { class: "muted small" }, money(grossProfit)),
         ]),
         el("div", {}, [
           el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "Net profit %"),
-          el("div", { style: { fontSize: "28px", fontWeight: "700", color: npPct >= 20 ? "var(--ok)" : npPct >= 10 ? "var(--warn)" : "var(--bad)" } }, (revenue ? npPct.toFixed(1) : "—") + "%"),
+          el("div", { style: { fontSize: "28px", fontWeight: "700", color: npPct >= 20 ? "var(--ok)" : npPct >= 10 ? "var(--warn)" : "var(--bad)" } }, (plRevenue ? npPct.toFixed(1) : "—") + "%"),
           el("div", { class: "muted small" }, money(netProfit)),
         ]),
       ]),
       el("div", { class: "muted small", style: { marginTop: "8px" } },
-        `Revenue ${money(revenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ½ share ${money(salariesTotal)} = Net ${money(netProfit)}`),
+        branch === "zawya"
+          ? `Revenue ${money(revenue)} → after 14% VAT & Zawya's 10% share = ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries share ${money(salariesTotal)} = Net ${money(netProfit)}`
+          : `Revenue ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries share ${money(salariesTotal)} = Net ${money(netProfit)}`),
     ]));
 
     // ---------- P&L reconciliation ----------
@@ -12324,8 +12388,8 @@ routes.dashboard = function (u, params) {
       if (salariesTotal > 0) {
         card.appendChild(el("div", { class: "kv" }, [
           el("div", { class: "k" }, [
-            el("span", {}, "Staff salaries — ½ share (split equally across both branches)"),
-            el("div", { class: "muted small" }, `${money(_totalStaffSalary / 2)}/mo × ${_numMonths} month(s) = ${money(salariesTotal)} this branch`),
+            el("span", {}, `Staff salaries — ${_salarySplitPct}% share (Monthly Overheads → salary split)`),
+            el("div", { class: "muted small" }, `${money(_totalStaffSalary * _salarySplitPct / 100)}/mo × ${_numMonths} month(s) = ${money(salariesTotal)} this branch`),
           ]),
           el("div", { class: "v" }, money(salariesTotal)),
         ]));
@@ -19445,7 +19509,7 @@ routes.inventory_engine = function(u) {
         const cell = el("div", {});
         cell.appendChild(el("div", { class: "muted", style: { fontSize: "10px", marginBottom: "2px" } }, f.label));
         if (f.type === "select") {
-          const sel = el("select", { style: { fontSize: "12px", padding: "4px 6px", width: "100%" }, disabled: !isOwner });
+          const sel = el("select", { style: { fontSize: "12px", padding: "4px 6px", width: "100%" }, ...(!isOwner ? { disabled: true } : {}) });
           for (const opt of f.opts) {
             const o = el("option", { value: opt }, opt);
             if (String(t[f.key]) === opt) o.selected = true;
@@ -19457,7 +19521,7 @@ routes.inventory_engine = function(u) {
           });
           cell.appendChild(sel);
         } else {
-          const inp = el("input", { type: "number", step: f.step || "0.001", value: String(t[f.key] != null ? t[f.key] : ""), style: { fontSize: "12px", padding: "4px 6px", width: "100%" }, disabled: !isOwner });
+          const inp = el("input", { type: "number", step: f.step || "0.001", value: String(t[f.key] != null ? t[f.key] : ""), style: { fontSize: "12px", padding: "4px 6px", width: "100%" }, ...(!isOwner ? { disabled: true } : {}) });
           inp.addEventListener("change", () => {
             t[f.key] = Number(inp.value);
             saveState();
@@ -19490,7 +19554,7 @@ routes.inventory_engine = function(u) {
     for (const f of settingsFields) {
       const cell = el("div", {});
       cell.appendChild(el("label", { class: "muted", style: { fontSize: "11px", display: "block", marginBottom: "3px" } }, f.label));
-      const inp = el("input", { type: "number", step: "0.1", value: String(s_[f.key] != null ? s_[f.key] : ""), style: { fontSize: "13px", padding: "6px 8px", width: "100%" }, disabled: !isOwner });
+      const inp = el("input", { type: "number", step: "0.1", value: String(s_[f.key] != null ? s_[f.key] : ""), style: { fontSize: "13px", padding: "6px 8px", width: "100%" }, ...(!isOwner ? { disabled: true } : {}) });
       inp.addEventListener("change", () => {
         state.inv_engine.settings[f.key] = Number(inp.value);
         saveState();
