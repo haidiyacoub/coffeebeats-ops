@@ -11822,7 +11822,7 @@ routes.dashboard = function (u, params) {
     const grossProfit = revenue - cogs;
     const netProfit = grossProfit - totalOpex;
     const npPct = revenue ? (netProfit / revenue) * 100 : null;
-    return { revenue, cogs, overheadsTotal, salariesTotal, totalOpex, grossProfit, netProfit, npPct };
+    return { grossRevenue, revenue, cogs, overheadsTotal, salariesTotal, totalOpex, grossProfit, netProfit, npPct };
   }
 
   const trendCard = el("div", { class: "card", style: { marginTop: "10px" } });
@@ -11839,27 +11839,63 @@ routes.dashboard = function (u, params) {
       const color = pct >= 20 ? "var(--ok)" : pct >= 10 ? "var(--warn)" : "var(--bad)";
       return el("td", { class: "num", style: { color, fontWeight: "700" } }, pct.toFixed(1) + "%");
     };
-    const rows = trendMonths.map(m => {
-      const maadiPnl = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
-      const zawyaPnl = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
-      const combinedRevenue = (maadiPnl ? maadiPnl.revenue : 0) + (zawyaPnl ? zawyaPnl.revenue : 0);
-      const combinedNet     = (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0);
-      const combinedPct = combinedRevenue ? (combinedNet / combinedRevenue) * 100 : null;
-      combinedNetByMonth.set(m, combinedNet);
-      return el("tr", {}, [
-        el("td", {}, m),
-        pctCell(maadiPnl ? maadiPnl.npPct : null),
-        pctCell(zawyaPnl ? zawyaPnl.npPct : null),
-        pctCell(combinedPct),
-        el("td", { class: "num" }, money(combinedNet)),
-      ]);
-    });
+    // Grouped by calendar year so a "Total" row can accumulate Jan → Dec (m1 → m12) —
+    // a running year-end total rather than a per-month figure. Total-row %s are
+    // revenue-weighted (Σ net profit ÷ Σ revenue for the year), not an average of
+    // the monthly %s, since averaging percentages across months of unequal size
+    // would misstate the true year-to-date margin.
+    const years = [...new Set(trendMonths.map(m => m.slice(0,4)))].sort().reverse();
+    const rows = [];
+    for (const y of years) {
+      const monthsInYear = trendMonths.filter(m => m.slice(0,4) === y);
+      let yMaadiGross = 0, yZawyaGross = 0, yMaadiRev = 0, yZawyaRev = 0, yMaadiNet = 0, yZawyaNet = 0, yCombNet = 0;
+      for (const m of monthsInYear) {
+        const maadiPnl = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
+        const zawyaPnl = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
+        const maadiGross = maadiPnl ? maadiPnl.grossRevenue : 0;
+        const zawyaGross = zawyaPnl ? zawyaPnl.grossRevenue : 0;
+        const combinedRevenue = (maadiPnl ? maadiPnl.revenue : 0) + (zawyaPnl ? zawyaPnl.revenue : 0);
+        const combinedNet     = (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0);
+        const combinedPct = combinedRevenue ? (combinedNet / combinedRevenue) * 100 : null;
+        combinedNetByMonth.set(m, combinedNet);
+
+        yMaadiGross += maadiGross; yZawyaGross += zawyaGross;
+        yMaadiRev += maadiPnl ? maadiPnl.revenue : 0; yZawyaRev += zawyaPnl ? zawyaPnl.revenue : 0;
+        yMaadiNet += maadiPnl ? maadiPnl.netProfit : 0; yZawyaNet += zawyaPnl ? zawyaPnl.netProfit : 0;
+        yCombNet += combinedNet;
+
+        rows.push(el("tr", {}, [
+          el("td", {}, m),
+          el("td", { class: "num" }, money(maadiGross)),
+          el("td", { class: "num" }, money(zawyaGross)),
+          el("td", { class: "num" }, money(maadiGross + zawyaGross)),
+          pctCell(maadiPnl ? maadiPnl.npPct : null),
+          pctCell(zawyaPnl ? zawyaPnl.npPct : null),
+          pctCell(combinedPct),
+          el("td", { class: "num" }, money(combinedNet)),
+        ]));
+      }
+      const yMaadiPct = yMaadiRev ? (yMaadiNet / yMaadiRev) * 100 : null;
+      const yZawyaPct = yZawyaRev ? (yZawyaNet / yZawyaRev) * 100 : null;
+      const yCombRevForPct = yMaadiRev + yZawyaRev;
+      const yCombPct = yCombRevForPct ? (yCombNet / yCombRevForPct) * 100 : null;
+      rows.push(el("tr", { style: { fontWeight: "700", borderTop: "2px solid var(--border)" } }, [
+        el("td", {}, `${y} total (Jan–Dec)`),
+        el("td", { class: "num" }, money(yMaadiGross)),
+        el("td", { class: "num" }, money(yZawyaGross)),
+        el("td", { class: "num" }, money(yMaadiGross + yZawyaGross)),
+        pctCell(yMaadiPct),
+        pctCell(yZawyaPct),
+        pctCell(yCombPct),
+        el("td", { class: "num" }, money(yCombNet)),
+      ]));
+    }
     trendCard.appendChild(el("table", {}, [
-      el("thead", {}, el("tr", {}, ["Month","Maadi","Zawya","Combined","Combined net profit"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
+      el("thead", {}, el("tr", {}, ["Month","Maadi rev","Zawya rev","Combined rev","Maadi net%","Zawya net%","Combined net%","Combined net profit"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      `Net profit % = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, per branch per month. Salary is split ${getSalarySplitPct("maadi")}% Maadi / ${getSalarySplitPct("zawya")}% Zawya — adjustable in Monthly Overheads. Zawya's revenue is counted after 14% VAT and Zawya's 10% share, since that's what Coffee Beats actually keeps. "Combined" sums both branches' revenue and net profit for that month. A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
+      `The rev columns are gross POS net sales (before any deduction). Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, where Revenue for Zawya is counted after 14% VAT and Zawya's 10% share, since that's what Coffee Beats actually keeps — so net% won't divide evenly out of the rev column shown. Salary is split ${getSalarySplitPct("maadi")}% Maadi / ${getSalarySplitPct("zawya")}% Zawya — adjustable in Monthly Overheads. "Combined" sums both branches' revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
   }
   wrap.appendChild(trendCard);
 
@@ -12230,12 +12266,24 @@ routes.dashboard = function (u, params) {
     }
     const hasOrderItems = qtyByItem.size > 0;
 
+    // cogsPct/gmPct below are pure item-level cost-vs-price ratios (menu cost_egp vs menu
+    // price_egp, per item, summed) — deliberately independent of any revenue figure (net
+    // sales, VAT, Zawya's share) so they're comparable apples-to-apples across branches.
+    // Only pairs with BOTH a known cost and a known price count toward that ratio.
     let cogsSales = 0, matched = 0, unmatched = 0;
+    let cogsAtItemPrice = 0, salesAtItemPrice = 0;
     for (const r of sales) {
       const key = normName(r.item);
       const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
       const m = menuLookup(r.item);
-      if (m && m.cost_egp) { cogsSales += qty * (Number(m.cost_egp)||0); matched += qty; }
+      if (m && m.cost_egp) {
+        cogsSales += qty * (Number(m.cost_egp)||0);
+        matched += qty;
+        if (m.price_egp) {
+          cogsAtItemPrice += qty * (Number(m.cost_egp)||0);
+          salesAtItemPrice += qty * (Number(m.price_egp)||0);
+        }
+      }
       else unmatched += qty;
     }
 
@@ -12311,8 +12359,11 @@ routes.dashboard = function (u, params) {
     const cogs = cogsSales; // sales-derived (use theoretical if you prefer — see note on P&L card)
     const grossProfit = plRevenue - cogs;
     const netProfit = grossProfit - totalOpex;
-    const cogsPct = plRevenue ? (cogs / plRevenue) * 100 : 0;
-    const gmPct = plRevenue ? (grossProfit / plRevenue) * 100 : 0;
+    // COGS% / gross margin%: item cost vs item price only — never revenue — so Zawya and
+    // Maadi are comparable. Net profit% keeps using plRevenue since it must reflect what
+    // Coffee Beats actually retains (net of Zawya's VAT/share cut).
+    const cogsPct = salesAtItemPrice ? (cogsAtItemPrice / salesAtItemPrice) * 100 : 0;
+    const gmPct = salesAtItemPrice ? 100 - cogsPct : 0;
     const npPct = plRevenue ? (netProfit / plRevenue) * 100 : 0;
 
     // CB Sales % — only meaningful for Zawya (third-party concessions exist at that venue)
@@ -12352,12 +12403,12 @@ routes.dashboard = function (u, params) {
       el("div", { class: "grid c3" }, [
         el("div", {}, [
           el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "COGS %"),
-          el("div", { style: { fontSize: "28px", fontWeight: "700", color: cogsPct > 35 ? "var(--bad)" : cogsPct > 28 ? "var(--warn)" : "var(--ok)" } }, (plRevenue ? cogsPct.toFixed(1) : "—") + "%"),
+          el("div", { style: { fontSize: "28px", fontWeight: "700", color: cogsPct > 35 ? "var(--bad)" : cogsPct > 28 ? "var(--warn)" : "var(--ok)" } }, (salesAtItemPrice ? cogsPct.toFixed(1) : "—") + "%"),
           el("div", { class: "muted small" }, money(cogs)),
         ]),
         el("div", {}, [
           el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "Gross margin %"),
-          el("div", { style: { fontSize: "28px", fontWeight: "700", color: gmPct >= 65 ? "var(--ok)" : gmPct >= 55 ? "var(--warn)" : "var(--bad)" } }, (plRevenue ? gmPct.toFixed(1) : "—") + "%"),
+          el("div", { style: { fontSize: "28px", fontWeight: "700", color: gmPct >= 65 ? "var(--ok)" : gmPct >= 55 ? "var(--warn)" : "var(--bad)" } }, (salesAtItemPrice ? gmPct.toFixed(1) : "—") + "%"),
           el("div", { class: "muted small" }, money(grossProfit)),
         ]),
         el("div", {}, [
@@ -12410,18 +12461,25 @@ routes.dashboard = function (u, params) {
     }
 
     // ---------- top items ----------
+    // Margin% here is item cost vs. item menu price only — never actual net revenue —
+    // so it matches the branch-level COGS%/gross margin% fix above and isn't skewed by
+    // discounts or per-transaction price variance. Only pairs with both a known cost
+    // and a known price count toward it.
     const byItem = new Map();
     for (const r of sales) {
       const k = r.item || "—";
-      const cur = byItem.get(k) || { qty: 0, net: 0, cogs: 0 };
+      const cur = byItem.get(k) || { qty: 0, net: 0, cogs: 0, priceSales: 0 };
       const itemQty = hasOrderItems ? (qtyByItem.get(normName(k)) || 0) : (Number(r.qty)||0);
       cur.qty += itemQty;
       cur.net += Number(r.net_sales)||0;
       const m = menuLookup(k);
-      if (m && m.cost_egp) cur.cogs += itemQty * (Number(m.cost_egp)||0);
+      if (m && m.cost_egp) {
+        cur.cogs += itemQty * (Number(m.cost_egp)||0);
+        if (m.price_egp) cur.priceSales += itemQty * (Number(m.price_egp)||0);
+      }
       byItem.set(k, cur);
     }
-    const top = [...byItem.entries()].map(([name, v]) => ({ name, ...v, margin: v.net ? ((v.net - v.cogs)/v.net)*100 : 0 }))
+    const top = [...byItem.entries()].map(([name, v]) => ({ name, ...v, margin: v.priceSales ? ((v.priceSales - v.cogs)/v.priceSales)*100 : 0 }))
       .sort((a,b) => b.net - a.net).slice(0, 15);
     if (top.length) {
       const card = el("div", { class: "card", style: { marginTop: "14px" } });
@@ -12431,7 +12489,7 @@ routes.dashboard = function (u, params) {
         el("tbody", {}, top.map(r => el("tr", {}, [
           el("td", {}, r.name), el("td", { class: "num" }, String(r.qty)),
           el("td", { class: "num" }, money(r.net)),
-          el("td", { class: "num", style: { color: r.margin>60?"var(--ok)":r.margin>40?"var(--warn)":"var(--bad)" } }, r.cogs ? r.margin.toFixed(0)+"%" : "—"),
+          el("td", { class: "num", style: { color: r.margin>60?"var(--ok)":r.margin>40?"var(--warn)":"var(--bad)" } }, r.priceSales ? r.margin.toFixed(0)+"%" : "—"),
         ]))),
       ]);
       card.appendChild(tbl);
