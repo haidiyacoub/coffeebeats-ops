@@ -669,10 +669,14 @@ const ZAWYA_EXCLUDED_ITEM_PATTERNS = [
   // Confectionery / snacks
   "kitkat","kit kat","bounty","snickers","m&m","galaxy","cookies","cookie",
   // Non-food consumables
-  "tissues","tissue",
+  "tissues","tissue","coaster","coasters",
   // Merchandise / retail
   "tote","socks","t-shirt","tshirt",
 ];
+// Items in ZAWYA_EXCLUDED_ITEM_PATTERNS whose exclusion is Zawya-specific only — the
+// non-Zawya version IS a genuine Coffee Beats product. Currently just "water": Maadi's
+// water is Coffee Beats' own; Zawya's is the venue's third-party concession.
+const ZAWYA_ONLY_ITEM_PATTERNS = new Set(["water"]);
 async function readFileAsCSV(file) {
   if (/\.(xlsx|xls)$/i.test(file.name)) {
     const buf = await file.arrayBuffer();
@@ -690,6 +694,23 @@ function isZawyaExcluded(category, item) {
     if (c === ex || c.includes(ex)) return true;
   }
   for (const ex of ZAWYA_EXCLUDED_ITEM_PATTERNS) {
+    if (n.includes(ex)) return true;
+  }
+  return false;
+}
+// True for third-party concession items (popcorn, soft drinks, candy, merchandise) whose
+// cost and revenue belong entirely to the venue operator, never Coffee Beats — regardless
+// of which branch the sales row happens to be tagged with. Unlike isZawyaExcluded(), this
+// excludes "water" from the check since Maadi's water is Coffee Beats' own product.
+function isConcessionExcluded(category, item) {
+  const c = String(category || "").trim().toLowerCase();
+  const n = String(item || "").trim().toLowerCase();
+  if (!c && !n) return false;
+  for (const ex of ZAWYA_EXCLUDED_CATEGORIES) {
+    if (c === ex || c.includes(ex)) return true;
+  }
+  for (const ex of ZAWYA_EXCLUDED_ITEM_PATTERNS) {
+    if (ZAWYA_ONLY_ITEM_PATTERNS.has(ex)) continue;
     if (n.includes(ex)) return true;
   }
   return false;
@@ -1488,8 +1509,15 @@ function _groupByMonth(arr, keyFn) {
 // row whose branch this device is NOT writing, and append our local rows on top.
 // This is what stops "laptop pushes Zawya June and wipes Maadi June" — the exact
 // data-loss seen in the field.
-async function _mergeShardWrite(writes, docId, arrayName, localRows) {
-  const localBranches = new Set(localRows.map(r => r.branch));
+async function _mergeShardWrite(writes, docId, arrayName, localRows, affectedBranches) {
+  // Normally the set of branches this device is authoritative for is inferred from
+  // localRows. But when a branch+month is deleted down to ZERO local rows, localRows is
+  // empty and that inference silently breaks — an empty Set matches nothing, so `kept`
+  // below keeps every remote row (including the ones we're trying to delete) and the
+  // "merge" write re-saves the remote data completely unchanged. affectedBranches lets a
+  // caller (e.g. the sales-shard wipe queue) state explicitly which branch(es) it's
+  // authoritative for even when localRows can't carry that information anymore.
+  const localBranches = affectedBranches ? new Set(affectedBranches) : new Set(localRows.map(r => r.branch));
   let kept = [];
   // A failed read must ABORT (throw), never fall back to local-only — otherwise a transient
   // read blip drops the OTHER branch's rows that live in the same month shard.
@@ -1511,6 +1539,21 @@ async function _syncSalesShards() {
   const orderItemsByMonth = _groupByMonth(state.order_items, r => r.month);
   const ordersByMonth     = _groupByMonth(state.orders,      r => r.month);
 
+  // _groupByMonth only produces a key for months that still have at least one local row —
+  // so deleting an ENTIRE month+branch down to zero rows (e.g. "Delete selected" in Upload
+  // Sales for one branch/month) makes that month invisible here and it never gets rewritten,
+  // silently leaving the stale rows sitting in Firestore forever (they come right back on
+  // the next pull). state._sales_shard_wipes is a local device-only queue of {month,
+  // branches} a deletion touched; force those months into salesByMonth (as [] if now fully
+  // empty) so they're still included in the diff/write below, then cleared once the write
+  // succeeds. The branches list is passed through to _mergeShardWrite explicitly (see its
+  // comment) because an empty localRows can't tell it which branch to purge on its own.
+  const wipeQueue = state._sales_shard_wipes || [];
+  for (const w of wipeQueue) {
+    if (!(w.month in salesByMonth)) salesByMonth[w.month] = [];
+  }
+  const wipedBranchesByMonth = new Map(wipeQueue.map(w => [w.month, w.branches]));
+
   const salesMonths = new Set(Object.keys(salesByMonth));
   const oiMonths    = new Set(Object.keys(orderItemsByMonth));
   const ordMonths   = new Set(Object.keys(ordersByMonth));
@@ -1527,10 +1570,18 @@ async function _syncSalesShards() {
 
   // Merge-write each dirty month shard (reads remote first to preserve other branches' rows)
   await Promise.all([
-    ...dirtySales.map(m => _mergeShardWrite(writes, `sales__${m}`, "sales",       salesByMonth[m])),
+    ...dirtySales.map(m => {
+      const wiped = wipedBranchesByMonth.get(m);
+      const affectedBranches = wiped ? [...new Set([...salesByMonth[m].map(r => r.branch), ...wiped])] : undefined;
+      return _mergeShardWrite(writes, `sales__${m}`, "sales", salesByMonth[m], affectedBranches);
+    }),
     ...dirtyOi.map(m    => _mergeShardWrite(writes, `oi__${m}`,    "order_items", orderItemsByMonth[m])),
     ...dirtyOrd.map(m   => _mergeShardWrite(writes, `ord__${m}`,   "orders",      ordersByMonth[m])),
   ]);
+  // The wipe queue is only "safe to drop" once its shard writes above actually succeeded —
+  // Promise.all above throws (aborting doSync) before this line runs on any failure, so
+  // reaching here means every dirty month, wipes included, was written successfully.
+  if ((state._sales_shard_wipes || []).length) state._sales_shard_wipes = state._sales_shard_wipes.filter(w => !dirtySales.includes(w.month));
 
   // Index doc: store which months exist for each type so pullFromFirestore is precise.
   // MERGE (union) with the remote index instead of overwriting it. A device that only
@@ -9234,6 +9285,24 @@ routes.sales_import = function (u) {
         if (!confirm(`Delete ${toDelete.length} rows for ${label}? This can't be undone.`)) return;
         const ids = new Set(toDelete.map(s => s.id || JSON.stringify(s)));
         state.sales = state.sales.filter(s => !ids.has(s.id || JSON.stringify(s)));
+        // Queue every touched (month, branch) for the next sync so _syncSalesShards() still
+        // writes it even if this branch+month now has zero local rows left, and knows which
+        // branch(es) to actually purge from the remote shard (see the wipe-queue comments in
+        // _syncSalesShards / _mergeShardWrite — without this a full-month delete never
+        // reaches Firestore and the "deleted" rows come right back on the next pull).
+        state._sales_shard_wipes = state._sales_shard_wipes || [];
+        const touchedByMonth = new Map();
+        for (const s of toDelete) {
+          const m = (s.date || "").slice(0, 7);
+          if (!m) continue;
+          if (!touchedByMonth.has(m)) touchedByMonth.set(m, new Set());
+          touchedByMonth.get(m).add(s.branch);
+        }
+        for (const [m, branches] of touchedByMonth) {
+          let entry = state._sales_shard_wipes.find(w => w.month === m);
+          if (!entry) { entry = { month: m, branches: [] }; state._sales_shard_wipes.push(entry); }
+          for (const b of branches) if (!entry.branches.includes(b)) entry.branches.push(b);
+        }
         saveState();
         toast(`Deleted ${toDelete.length} rows (${label})`);
         renderStateCard();
@@ -11625,8 +11694,10 @@ routes.dashboard = function (u, params) {
   const branchSet = new Set();
   for (const s of state.sales) {
     const b = branchKey(s.branch);
-    // Strip Zawya concession items at runtime so they never appear in any report
-    if (b === "zawya" && isZawyaExcluded(s.category, s.item)) continue;
+    // Strip third-party concession items at runtime so they never appear in any report —
+    // water stays branch-specific (Zawya's is a concession, Maadi's is Coffee Beats' own),
+    // everything else (popcorn, candy, soda, merch) is never Coffee Beats' regardless of branch.
+    if (b === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item)) continue;
     const m = normalizeDate(s.date).slice(0,7);
     if (!m) continue;
     monthSet.add(m); branchSet.add(b);
@@ -11648,11 +11719,20 @@ routes.dashboard = function (u, params) {
     const bKey = branchKey(branchArg);
     const monthSales = state.sales.filter(s => branchKey(s.branch) === bKey
       && normalizeDate(s.date).slice(0,7) === month
-      && !(bKey === "zawya" && isZawyaExcluded(s.category, s.item)));
+      && !(bKey === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item)));
     const revenue = monthSales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
 
     const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
+    const menuLookup = (rawName) => {
+      const key = normName(rawName);
+      let m = menuByName.get(key);
+      if (!m) {
+        const base = normName(String(rawName||"").split(" - ")[0]);
+        if (base && base !== key) m = menuByName.get(base);
+      }
+      return m;
+    };
     const orderItemsInMonth = (state.order_items || []).filter(i => branchKey(i.branch) === bKey && i.month === month);
     const qtyByItem = new Map();
     for (const i of orderItemsInMonth) {
@@ -11664,7 +11744,7 @@ routes.dashboard = function (u, params) {
     for (const r of monthSales) {
       const key = normName(r.item);
       const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
-      const m = menuByName.get(key);
+      const m = menuLookup(r.item);
       if (m && m.cost_egp) cogs += qty * (Number(m.cost_egp)||0);
     }
 
@@ -11687,6 +11767,7 @@ routes.dashboard = function (u, params) {
   const trendMonths = [...new Set([...salesIndex.keys()].map(k => k.slice(k.indexOf("|")+1)))]
     .filter(m => salesIndex.has("maadi|"+m) || salesIndex.has("zawya|"+m))
     .sort().reverse();
+  const combinedNetByMonth = new Map(); // month -> book net profit, reused by the cash reality-check card below
   if (!trendMonths.length) {
     trendCard.appendChild(el("div", { class: "muted small" }, "No sales uploaded yet."));
   } else {
@@ -11701,6 +11782,7 @@ routes.dashboard = function (u, params) {
       const combinedRevenue = (maadiPnl ? maadiPnl.revenue : 0) + (zawyaPnl ? zawyaPnl.revenue : 0);
       const combinedNet     = (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0);
       const combinedPct = combinedRevenue ? (combinedNet / combinedRevenue) * 100 : null;
+      combinedNetByMonth.set(m, combinedNet);
       return el("tr", {}, [
         el("td", {}, m),
         pctCell(maadiPnl ? maadiPnl.npPct : null),
@@ -11717,6 +11799,79 @@ routes.dashboard = function (u, params) {
       "Net profit % = (Revenue − COGS − paid overheads − salary ½-share) ÷ Revenue, per branch per month. \"Combined\" sums both branches' revenue and net profit for that month. A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added."));
   }
   wrap.appendChild(trendCard);
+
+  // ---------- Cash reality check — book profit vs actual logged cash, from Sep 2026 ----------
+  // The net profit % above is a book P&L: COGS is theoretical (qty sold × recipe cost, not
+  // what was actually paid for stock), salary is a modeled ½-share (not an actual payout —
+  // state.salaries has no payout log yet), and it never touches purchases paid in cash,
+  // petty cash, ATM deposits, or bank transfers. This card surfaces what's actually been
+  // logged as real cash movement so a gap against the book number is visible and explainable,
+  // rather than a mystery. Starts at CASH_CHECK_START_MONTH per owner request — earlier
+  // months predate consistent cash-log usage and aren't shown here.
+  const CASH_CHECK_START_MONTH = "2026-09";
+  function computeMonthCash(month) {
+    const purch = (state.purchases || []).filter(p => !p.is_test && (p.date||"").slice(0,7) === month);
+    const purchasesPaid = purch.reduce((s,p) => s + (Number(p.total)||0), 0);
+    const ohPaid = (state.overheads || []).filter(o => (o.month||"") === month && o.paid !== false);
+    const overheadsPaid = ohPaid.reduce((s,o) => s + (Number(o.amount)||0), 0);
+    const deposits = (state.maadi_deposits || []).filter(d => (d.date||"").slice(0,7) === month);
+    const cashDeposited = deposits.reduce((s,d) => s + (Number(d.amount)||0), 0);
+    const bankRows = (state.bank_ledger || []).filter(b => (b.date||"").slice(0,7) === month);
+    const bankNet = bankRows.reduce((s,b) => s + (Number(b.amount)||0), 0);
+    const salaryPayouts = (state.salaries || []).filter(p => (p.date||"").slice(0,7) === month);
+    const salariesPaid = salaryPayouts.reduce((s,p) => s + (Number(p.amount)||0), 0);
+    return {
+      purchasesPaid, purchCount: purch.length,
+      overheadsPaid, ohCount: ohPaid.length,
+      cashDeposited, depositCount: deposits.length,
+      bankNet, bankCount: bankRows.length,
+      salariesPaid, hasSalaryLog: salaryPayouts.length > 0,
+      hasAnyLog: purch.length || ohPaid.length || deposits.length || bankRows.length || salaryPayouts.length,
+    };
+  }
+  const cashMonths = new Set();
+  const _nowMonth = (new Date()).toISOString().slice(0,7);
+  if (_nowMonth >= CASH_CHECK_START_MONTH) cashMonths.add(_nowMonth);
+  for (const m of trendMonths) if (m >= CASH_CHECK_START_MONTH) cashMonths.add(m);
+  for (const p of state.purchases || []) { const m = (p.date||"").slice(0,7); if (m >= CASH_CHECK_START_MONTH) cashMonths.add(m); }
+  for (const o of state.overheads || []) { const m = o.month || ""; if (m >= CASH_CHECK_START_MONTH) cashMonths.add(m); }
+  for (const d of state.maadi_deposits || []) { const m = (d.date||"").slice(0,7); if (m >= CASH_CHECK_START_MONTH) cashMonths.add(m); }
+  for (const b of state.bank_ledger || []) { const m = (b.date||"").slice(0,7); if (m >= CASH_CHECK_START_MONTH) cashMonths.add(m); }
+  const cashMonthsSorted = [...cashMonths].sort().reverse();
+
+  const cashCard = el("div", { class: "card", style: { marginTop: "10px" } });
+  cashCard.appendChild(el("h2", {}, `Cash reality check — book profit vs actual cash logged (${CASH_CHECK_START_MONTH} onward)`));
+  if (!cashMonthsSorted.length) {
+    cashCard.appendChild(el("div", { class: "muted small" }, `No months at or after ${CASH_CHECK_START_MONTH} yet.`));
+  } else {
+    const cashRows = cashMonthsSorted.map(m => {
+      const c = computeMonthCash(m);
+      const bookNet = combinedNetByMonth.has(m) ? combinedNetByMonth.get(m) : null;
+      if (!c.hasAnyLog && bookNet == null) {
+        return el("tr", {}, [
+          el("td", {}, m),
+          el("td", { class: "num muted", colSpan: 5 }, "No cash entries logged yet for this month"),
+        ]);
+      }
+      return el("tr", {}, [
+        el("td", {}, m),
+        el("td", { class: "num" }, bookNet == null ? "—" : money(bookNet)),
+        el("td", { class: "num" }, c.purchCount ? money(c.purchasesPaid) : "—"),
+        el("td", { class: "num" }, c.ohCount ? money(c.overheadsPaid) : "—"),
+        el("td", { class: "num" }, c.depositCount ? money(c.cashDeposited) : "—"),
+        el("td", { class: "num", style: { color: c.bankCount ? (c.bankNet >= 0 ? "var(--ok)" : "var(--bad)") : "inherit" } }, c.bankCount ? money(c.bankNet) : "—"),
+      ]);
+    });
+    cashCard.appendChild(el("table", {}, [
+      el("thead", {}, el("tr", {}, ["Month","Book net profit","Purchases paid","Overheads paid","Cash deposited (Maadi)","Bank ledger net"].map(h => el("th", {}, h)))),
+      el("tbody", {}, cashRows),
+    ]));
+    cashCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
+      "This is a partial reconciliation, not a full cash-flow statement — it only totals what's actually been logged in Purchases, Overheads (paid), ATM/Cash Deposits, and the Bank Ledger. " +
+      "Card/POS settlement deposits aren't tracked in the app, and salary payouts aren't logged as individual transactions yet (\"Book net profit\" uses a modeled ½-share estimate, not an actual payout) — so don't expect the columns to net out to the book number. " +
+      "The most common driver of a gap: \"Purchases paid\" is what actually left the till/bank for stock, while the book P&L uses a theoretical COGS (units sold × recipe cost) — if you bought more than you sold (stocking up, waste, spoilage), real cash cost runs higher than the book number shows."));
+  }
+  wrap.appendChild(cashCard);
 
   let branch = branchKey((params && params.branch) || (u.branches && u.branches[0]) || "maadi");
   // Multi-month range — default to latest available month (or current)
@@ -11958,10 +12113,12 @@ routes.dashboard = function (u, params) {
     );
     const _isEventDay = (d) => _evDays.has(normalizeDate(d).slice(0,10));
 
-    // Filter by branch + date, and strip Zawya concession items from all calculations at runtime
+    // Filter by branch + date, and strip third-party concession items from all calculations
+    // at runtime — water stays Zawya-only (Maadi's water is Coffee Beats' own product).
     const sales = state.sales.filter(s => {
       if (branch === "events") return branchKey(s.branch) === "maadi" && _isEventDay(s.date);
-      return branchKey(s.branch) === branch && inRange(s.date) && !(branch === "zawya" && isZawyaExcluded(s.category, s.item));
+      const excluded = branch === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item);
+      return branchKey(s.branch) === branch && inRange(s.date) && !excluded;
     });
     const waste = branch === "events"
       ? state.waste.filter(w => notTest(w) && branchKey(w.branch) === "maadi" && _isEventDay((w.at||"").slice(0,10)))
@@ -11985,6 +12142,17 @@ routes.dashboard = function (u, params) {
     // COGS from sales × menu cost (normalized name match)
     const normName = (s) => String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
+    // Sales/order-item names sometimes carry a " - <variant>" suffix (e.g. "Original Beats - Espresso")
+    // that isn't on the menu master record ("Original Beats"). Fall back to the part before " - ".
+    const menuLookup = (rawName) => {
+      const key = normName(rawName);
+      let m = menuByName.get(key);
+      if (!m) {
+        const base = normName(String(rawName||"").split(" - ")[0]);
+        if (base && base !== key) m = menuByName.get(base);
+      }
+      return m;
+    };
 
     // Use actual quantities from order_items (File 2) when available — more accurate than qty=1 default
     // For events: filter Maadi order_items by exact event date (extracted from order_ref).
@@ -12003,7 +12171,7 @@ routes.dashboard = function (u, params) {
     for (const r of sales) {
       const key = normName(r.item);
       const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
-      const m = menuByName.get(key);
+      const m = menuLookup(r.item);
       if (m && m.cost_egp) { cogsSales += qty * (Number(m.cost_egp)||0); matched += qty; }
       else unmatched += qty;
     }
@@ -12178,7 +12346,7 @@ routes.dashboard = function (u, params) {
       const itemQty = hasOrderItems ? (qtyByItem.get(normName(k)) || 0) : (Number(r.qty)||0);
       cur.qty += itemQty;
       cur.net += Number(r.net_sales)||0;
-      const m = menuByName.get(normName(k));
+      const m = menuLookup(k);
       if (m && m.cost_egp) cur.cogs += itemQty * (Number(m.cost_egp)||0);
       byItem.set(k, cur);
     }
