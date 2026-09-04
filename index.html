@@ -169,6 +169,7 @@
   th, td { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: left; }
   th { color: var(--ink-dim); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.num { text-align: right; }
   .sheet {
     position: fixed; inset: 0;
     background: rgba(0,0,0,.6);
@@ -11768,7 +11769,7 @@ routes.dashboard = function (u, params) {
       ]);
     });
     trendCard.appendChild(el("table", {}, [
-      el("thead", {}, el("tr", {}, ["Month","Maadi","Zawya","Combined","Combined net profit"].map(h => el("th", {}, h)))),
+      el("thead", {}, el("tr", {}, ["Month","Maadi","Zawya","Combined","Combined net profit"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
@@ -12246,7 +12247,7 @@ routes.dashboard = function (u, params) {
       const card = el("div", { class: "card", style: { marginTop: "14px" } });
       card.appendChild(el("h2", {}, "Top items by net revenue"));
       const tbl = el("table", {}, [
-        el("thead", {}, el("tr", {}, ["Item","Qty","Net","Margin%"].map(h => el("th", {}, h)))),
+        el("thead", {}, el("tr", {}, ["Item","Qty","Net","Margin%"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
         el("tbody", {}, top.map(r => el("tr", {}, [
           el("td", {}, r.name), el("td", { class: "num" }, String(r.qty)),
           el("td", { class: "num" }, money(r.net)),
