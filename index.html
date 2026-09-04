@@ -11852,7 +11852,10 @@ routes.dashboard = function (u, params) {
       for (const m of monthsInYear) {
         const maadiPnl = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
         const zawyaPnl = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
-        const maadiGross = maadiPnl ? maadiPnl.grossRevenue : 0;
+        // Maadi's POS revenue is VAT-inclusive too — that 14% just gets paid as a lump sum
+        // at year-end instead of deducted per-sale like Zawya's. Net it out here so the two
+        // branches' revenue figures are comparable.
+        const maadiGross = maadiPnl ? maadiPnl.grossRevenue / 1.14 : 0;
         const zawyaGross = zawyaPnl ? zawyaPnl.grossRevenue : 0;
         const combinedRevenue = (maadiPnl ? maadiPnl.revenue : 0) + (zawyaPnl ? zawyaPnl.revenue : 0);
         const combinedNet     = (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0);
@@ -11895,7 +11898,7 @@ routes.dashboard = function (u, params) {
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      `The rev columns are gross POS net sales (before any deduction). Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, where Revenue for Zawya is counted after 14% VAT and Zawya's 10% share, since that's what Coffee Beats actually keeps — so net% won't divide evenly out of the rev column shown. Salary is split ${getSalarySplitPct("maadi")}% Maadi / ${getSalarySplitPct("zawya")}% Zawya — adjustable in Monthly Overheads. "Combined" sums both branches' revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
+      `Maadi rev is net of its 14% VAT (paid as a lump sum at year-end, unlike Zawya's per-sale deduction) so the two branches' revenue are comparable; Zawya rev is still gross POS net sales, before its 14% VAT and 10% venue share. Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, where Revenue for Zawya is counted after that 14% VAT and 10% share, since that's what Coffee Beats actually keeps — so net% won't divide evenly out of the rev column shown. Salary is split ${getSalarySplitPct("maadi")}% Maadi / ${getSalarySplitPct("zawya")}% Zawya — adjustable in Monthly Overheads. "Combined" sums both branches' revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
   }
   wrap.appendChild(trendCard);
 
