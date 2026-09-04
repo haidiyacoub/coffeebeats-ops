@@ -9284,7 +9284,7 @@ routes.sales_import = function (u) {
     ]),
   ]));
 
-  const fInput = el("input", { type: "file", accept: ".csv,.xlsx,.xls,text/csv" });
+  const fInput = el("input", { type: "file", accept: ".csv,text/csv" });
   wrap.appendChild(fInput);
 
   // Running state-of-the-world card — always visible so the owner can see what's loaded right now
@@ -9377,8 +9377,8 @@ routes.sales_import = function (u) {
 
   // ---- File 2: order items ----
   wrap.appendChild(el("div", { class: "muted small", style: { marginTop: "14px", textTransform: "uppercase", letterSpacing: "1px" } }, "File 2 — Order Items (optional)"));
-  wrap.appendChild(el("div", { class: "banner-arch" }, 'Named "{Branch} order items {Month} {Year}.xlsx" — provides actual quantities, ticket size, COGS, and margin per item.'));
-  const fInput2 = el("input", { type: "file", accept: ".xlsx,.xls" });
+  wrap.appendChild(el("div", { class: "banner-arch" }, 'Named "{Branch} order items {Month} {Year}.csv" — provides actual quantities, ticket size, COGS, and margin per item.'));
+  const fInput2 = el("input", { type: "file", accept: ".csv,text/csv" });
   wrap.appendChild(fInput2);
   const preview2 = el("div", { class: "card", style: { marginTop: "10px", display: "none" } });
   wrap.appendChild(preview2);
@@ -9387,10 +9387,9 @@ routes.sales_import = function (u) {
   fInput2.addEventListener("change", async e => {
     const f = e.target.files[0]; if (!f) return;
     const detected = detectOrderItemsFilename(f.name);
-    if (!detected) { toast("Filename must be: Branch order items Month Year.xlsx", "error"); return; }
-    const buf = await f.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array", cellDates: true });
-    parsedOrderItems = { rows: parseOrderItemsSheet(wb, detected.branch, detected.isoMonth), branch: detected.branch, month: detected.isoMonth };
+    if (!detected) { toast("Filename must be: Branch order items Month Year.csv", "error"); return; }
+    const raw = _csvTextToRows(await readFileAsCSV(f));
+    parsedOrderItems = { rows: parseOrderItemsSheet(raw, detected.branch, detected.isoMonth), branch: detected.branch, month: detected.isoMonth };
     preview2.style.display = "block";
     preview2.innerHTML = "";
     preview2.appendChild(el("div", { class: "banner-arch" },
@@ -9424,8 +9423,8 @@ routes.sales_import = function (u) {
 
   // ---- File 3: orders (barista attribution) ----
   wrap.appendChild(el("div", { class: "muted small", style: { marginTop: "14px", textTransform: "uppercase", letterSpacing: "1px" } }, "File 3 — Orders (barista attribution, optional)"));
-  wrap.appendChild(el("div", { class: "banner-arch" }, 'Named "{Branch} orders {Month} {Year}.xlsx" — links each order to the barista who created it. Feeds Upselling KPI automatically.'));
-  const fInput3 = el("input", { type: "file", accept: ".xlsx,.xls" });
+  wrap.appendChild(el("div", { class: "banner-arch" }, 'Named "{Branch} orders {Month} {Year}.csv" — links each order to the barista who created it. Feeds Upselling KPI automatically.'));
+  const fInput3 = el("input", { type: "file", accept: ".csv,text/csv" });
   wrap.appendChild(fInput3);
   const preview3 = el("div", { class: "card", style: { marginTop: "10px", display: "none" } });
   wrap.appendChild(preview3);
@@ -9434,10 +9433,9 @@ routes.sales_import = function (u) {
   fInput3.addEventListener("change", async e => {
     const f = e.target.files[0]; if (!f) return;
     const detected = detectOrdersFilename(f.name);
-    if (!detected) { toast("Filename must be: Branch orders Month Year.xlsx", "error"); return; }
-    const buf = await f.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array", cellDates: true });
-    parsedOrders = { rows: parseOrdersSheet(wb, detected.branch, detected.isoMonth), branch: detected.branch, month: detected.isoMonth };
+    if (!detected) { toast("Filename must be: Branch orders Month Year.csv", "error"); return; }
+    const raw = _csvTextToRows(await readFileAsCSV(f));
+    parsedOrders = { rows: parseOrdersSheet(raw, detected.branch, detected.isoMonth), branch: detected.branch, month: detected.isoMonth };
     preview3.style.display = "block";
     preview3.innerHTML = "";
     preview3.appendChild(el("div", { class: "banner-arch" },
@@ -9486,10 +9484,10 @@ routes.sales_import = function (u) {
   fInput.addEventListener("change", async e => {
     const f = e.target.files[0]; if (!f) return;
     const detected = detectBranchSalesFilename(f.name);
-    if (detected && /\.(xlsx|xls)$/i.test(f.name)) {
-      const buf = await f.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array", cellDates: true });
-      parsed = parseBranchSalesSheet(wb, detected.branch, detected.isoMonth);
+    const text = await readFileAsCSV(f);
+    if (detected) {
+      const raw = _csvTextToRows(text);
+      parsed = parseBranchSalesSheet(raw, detected.branch, detected.isoMonth);
       branchDefault = detected.branch;
       branchPicker.querySelectorAll(".tab").forEach(tab => {
         tab.classList.toggle("on", tab.textContent.toLowerCase() === detected.branch);
@@ -9497,7 +9495,6 @@ routes.sales_import = function (u) {
       monthFallback.value = detected.isoMonth;
       parseContext = { filename: f.name, mode: "fixed-column", branch: detected.branch, month: detected.isoMonth };
     } else {
-      const text = await readFileAsCSV(f);
       const forceMonth = $("#_salesForceMonth")?.checked || false;
       parsed = parseSalesCSV(text, branchDefault, monthFallback.value, forceMonth);
       parseContext = { filename: f.name, forceMonth, fallback: monthFallback.value };
@@ -9717,9 +9714,7 @@ function detectBranchSalesFilename(filename) {
   return { branch, isoMonth };
 }
 
-function parseBranchSalesSheet(wb, branch, isoMonth) {
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+function parseBranchSalesSheet(raw, branch, isoMonth) {
   const dataRows = raw.slice(6); // rows 0–4 preamble, row 5 header, data at row 6+
   const fbDate = isoMonth + "-15";
   const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
@@ -9761,7 +9756,7 @@ function detectOrdersFilename(filename) {
   return { branch, isoMonth: `${m[3]}-${MONTHS[m[2]]}` };
 }
 
-// Parses "{Branch} order items {Month} {Year}" Excel format.
+// Parses "{Branch} order items {Month} {Year}" CSV format.
 // Rows 0–4 preamble, row 5 header, data at row 6+.
 /** Try to extract a YYYY-MM-DD date from a Foodics order_ref string.
  *  Foodics refs are typically "2026-06-05-00123" or "20260605-00123".
@@ -9784,9 +9779,7 @@ function extractDateFromOrderRef(orderRef, isoMonth) {
 }
 
 // A(0)=order_reference, D(3)=order_type, H(7)=name, J(9)=unit_price, L(11)=qty, O(14)=discount, P(15)=discount_name, U(20)=date
-function parseOrderItemsSheet(wb, branch, isoMonth) {
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", cellDates: true });
+function parseOrderItemsSheet(raw, branch, isoMonth) {
   const dataRows = raw.slice(6);
   const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
   const parseColDate = (v) => {
@@ -9815,12 +9808,10 @@ function parseOrderItemsSheet(wb, branch, isoMonth) {
   return rows;
 }
 
-// Parses "{Branch} orders {Month} {Year}" Excel format.
+// Parses "{Branch} orders {Month} {Year}" CSV format.
 // Rows 0–4 preamble, row 5 header, data at row 6+.
 // A(0)=order_reference, J(9)=date, X(23)=barista_name
-function parseOrdersSheet(wb, branch, isoMonth) {
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", cellDates: true });
+function parseOrdersSheet(raw, branch, isoMonth) {
   const dataRows = raw.slice(6);
   const parseColDate = (v) => {
     if (!v) return null;
@@ -9856,6 +9847,16 @@ function _csvParseLine(ln) {
     }
   }
   out.push(cur); return out;
+}
+
+// Parses raw CSV text into a 2D array of cell strings, one row per line —
+// the CSV equivalent of XLSX.utils.sheet_to_json(ws, { header: 1 }), used by
+// the fixed-column sales/order-items/orders parsers.
+function _csvTextToRows(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const lines = text.split(/\r?\n/);
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.map(_csvParseLine);
 }
 
 function _salesHeaderMap(headerLower) {
