@@ -1,0 +1,17 @@
+#!/bin/sh
+# Auto-bump the PWA build stamp whenever index.html is part of the commit.
+#
+# The mobile PWA only fetches fresh code when the build stamp baked into
+# index.html changes (see the cache-bust script at the top of the file).
+# Forgetting to bump it is why shipped fixes kept looking "reverted" on phones.
+# This hook makes the bump automatic — you can't forget it.
+
+if git diff --cached --name-only | grep -qx "index.html"; then
+  STAMP="$(date +%Y%m%d)-$(printf '%03d' "$(( ($(date +%s) / 60) % 1000 ))")"
+  # 1) HTML marker comment read by the network freshness check
+  perl -0pi -e "s/<!-- CB_BUILD:[0-9A-Za-z._-]+ -->/<!-- CB_BUILD:${STAMP} -->/" index.html
+  # 2) the JS constant the app and the cache-bust script compare against
+  perl -0pi -e "s/(\n\s*var BUILD = \")[0-9A-Za-z._-]+(\";)/\${1}${STAMP}\${2}/" index.html
+  git add index.html
+  echo "pre-commit: bumped PWA build stamp to ${STAMP}"
+fi

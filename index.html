@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- CB_BUILD:20260906-478 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -384,18 +385,44 @@
   a.gallery-row:hover { background: var(--surface-2) !important; }
 </style>
 <script>
-  // PWA cache-bust: if the stored build stamp differs from the one baked into this HTML,
-  // the device is serving a stale cached version — reload once to fetch fresh content.
+  // ── PWA cache-bust ─────────────────────────────────────────────────────────
+  // The old version of this compared BUILD (baked into this file) against a
+  // sessionStorage copy of the *same* baked value — so a stale cached HTML could
+  // never detect that it was stale (both sides were the old number), and
+  // sessionStorage is wiped every time an installed PWA is closed. Installed
+  // mobile PWAs therefore ran months-old code and every fix looked "reverted".
+  //
+  // New approach: after load, fetch THIS url fresh from the network (cache-
+  // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
+  // server's copy. If the server is newer than what we're running, hard-reload
+  // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
+  var BUILD = "20260906-478";
   (function() {
-    var BUILD = "20260629-001";
-    var key = "cb_build";
-    try {
-      var stored = sessionStorage.getItem(key);
-      if (stored !== BUILD) {
-        sessionStorage.setItem(key, BUILD);
-        if (stored !== null) { window.location.reload(true); }
-      }
-    } catch(e) {}
+    function checkFresh() {
+      try {
+        fetch(location.pathname + "?_cb=" + Date.now(), { cache: "reload" })
+          .then(function(r) { return r.ok ? r.text() : null; })
+          .then(function(html) {
+            if (!html) return;
+            var m = html.match(/CB_BUILD:([0-9A-Za-z._-]+)/);
+            if (!m || m[1] === BUILD) return;
+            var now = Date.now();
+            var last = 0;
+            try { last = +(localStorage.getItem("cb_build_reload_at") || 0); } catch (e) {}
+            if (now - last < 60000) return; // already reloaded in the last minute
+            try { localStorage.setItem("cb_build_reload_at", String(now)); } catch (e) {}
+            location.reload();
+          })
+          .catch(function() {});
+      } catch (e) {}
+    }
+    // Check on first load and every time the app is brought back to the
+    // foreground (how people actually "reopen" an installed PWA).
+    if (document.readyState === "complete") checkFresh();
+    else window.addEventListener("load", checkFresh);
+    document.addEventListener("visibilitychange", function() {
+      if (document.visibilityState === "visible") checkFresh();
+    });
   })();
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -458,21 +485,68 @@ const staffDir = (() => {
   }
 
   return {
-    /** Load all active staff from staff_public into the in-memory map. */
-    async load() {
-      try {
-        const snap = await db.collection("staff_public").get();
-        _map = new Map();
-        snap.forEach(doc => { _map.set(doc.id, _toUser(doc.id, doc.data())); });
-        // Rebuild the state.users proxy array so existing callsites stay in sync.
-        _rebuildStateUsers();
-      } catch (e) {
-        console.warn("staffDir.load failed:", e);
-        // Fall back: keep whatever is in _map (may be empty on first load).
-        // Surface this — a silent failure here means the Team page (and anything
-        // else keyed off staffDir) renders with an empty roster and no explanation.
-        if (typeof toast === "function") toast("Couldn't load staff directory — check your connection and retry.", "error");
+    /**
+     * Load all active staff from staff_public into the in-memory map.
+     * Retries with backoff on transient failures (flaky mobile connections were
+     * leaving the roster empty, so every shift-close / Team dropdown rendered
+     * blank on mobile while the laptop — on a stable link — was fine).
+     * On success the roster is cached to localStorage; on total failure we keep
+     * whatever the cache last held so names still appear offline.
+     */
+    async load({ retries = 3 } = {}) {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const snap = await db.collection("staff_public").get();
+          const next = new Map();
+          snap.forEach(doc => { next.set(doc.id, _toUser(doc.id, doc.data())); });
+          if (next.size === 0 && _map.size > 0) {
+            // A successful-but-empty read (permissions race, etc.) — don't wipe a
+            // good roster with nothing.
+            return;
+          }
+          _map = next;
+          _rebuildStateUsers();
+          try {
+            const raw = [];
+            snap.forEach(doc => raw.push({ id: doc.id, d: doc.data() }));
+            localStorage.setItem("cb_staff_cache", JSON.stringify(raw));
+          } catch (_) {}
+          return;
+        } catch (e) {
+          console.warn(`staffDir.load failed (attempt ${attempt + 1}/${retries + 1}):`, e);
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt)));
+          } else {
+            // Last resort: hydrate from the local cache so dropdowns aren't blank.
+            const hydrated = this.hydrateFromCache();
+            if (typeof toast === "function") {
+              toast(hydrated
+                ? "Showing last-known staff list — couldn't refresh from server."
+                : "Couldn't load staff directory — check your connection and retry.", "error");
+            }
+          }
+        }
       }
+    },
+
+    /** Populate _map synchronously from the localStorage cache. Returns true if it had data. */
+    hydrateFromCache() {
+      if (_map.size > 0) return true;
+      try {
+        const raw = JSON.parse(localStorage.getItem("cb_staff_cache") || "[]");
+        if (!Array.isArray(raw) || raw.length === 0) return false;
+        const next = new Map();
+        raw.forEach(({ id, d }) => next.set(id, _toUser(id, d)));
+        _map = next;
+        _rebuildStateUsers();
+        return true;
+      } catch (_) { return false; }
+    },
+
+    /** Ensure the directory is loaded; safe to call repeatedly. */
+    async ensureLoaded() {
+      this.hydrateFromCache();
+      if (_map.size === 0) await this.load();
     },
 
     /** Return an array of all staff (all roles, all statuses). */
@@ -5063,8 +5137,27 @@ routes.shift_close_new = function (u) {
   }
   const baristaAllowanceBox = el("div", {});
 
+  // If the staff directory hasn't loaded yet (flaky connection on this device),
+  // the barista dropdowns would render empty. Kick a reload and redraw when it
+  // lands, and show a hint meanwhile instead of a silent blank list.
+  let _staffTries = 0;
+  let _staffBusy = false;
+  function ensureStaffThenRedraw() {
+    if (_staffBusy || _staffTries >= 3 || staffDir.shiftStaff().length > 0) return;
+    _staffBusy = true; _staffTries++;
+    staffDir.load().then(() => { _staffBusy = false; draw(); });
+  }
+
   function draw() {
     form.innerHTML = "";
+
+    const staffLoading = staffDir.shiftStaff().length === 0;
+    if (staffLoading) {
+      ensureStaffThenRedraw();
+      form.appendChild(el("div", { class: "banner-arch", style: { background: "#fef3c7", color: "#92400e" } },
+        T("Loading staff list… if it stays empty, pull down to refresh or check your connection.",
+          "جارٍ تحميل قائمة الموظفين… إذا ظلت فارغة، حدّث الصفحة أو تحقق من الاتصال.")));
+    }
 
     form.appendChild(el("label", {}, T("Date","التاريخ")));
     const dInput = el("input", { type: "date", value: date });
@@ -20757,8 +20850,17 @@ auth.onAuthStateChanged(async fbUser => {
   authInitialized = true;
   clearTimeout(renderTimeout);
   await _resolveAuth(fbUser);
+  if (state._auth) {
+    // Load the staff directory on its own resilient path — NOT only as a step
+    // buried inside pullFromFirestore(), which skips it whenever an earlier
+    // Firestore read fails or a pending-write flush defers the pull. That gap is
+    // why the shift-close barista list kept showing on the laptop but not on
+    // mobile. Hydrate from cache first so the first paint already has names.
+    staffDir.hydrateFromCache();
+  }
   render();
   if (state._auth) {
+    staffDir.load().then(render);
     startIdleTimer();
     autoPullOnStart();
   } else {
