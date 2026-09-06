@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260906-515 -->
+<!-- CB_BUILD:20260906-522 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260906-515";
+  var BUILD = "20260906-522";
   (function() {
     function checkFresh() {
       try {
@@ -5078,8 +5078,10 @@ routes.shift_close_new = function (u) {
   const branchPicker = makeBranchPicker(u.branches, () => branch, b => {
     branch = b;
     baristaAllowanceDrinks = [{ who: "", drink: "" }];
-    drawBaristaAllowance();
-    drawHospitalityLabels();
+    // Zawya is a concession inside the cinema — card / InstaPay / Talabat are
+    // settled by the venue, so Coffee Beats only ever counts cash there.
+    if (b === "zawya") { instapay = ""; cc = ""; talabat_credit = ""; talabat_cash = ""; }
+    draw();
   });
   wrap.appendChild(branchPicker);
 
@@ -5172,26 +5174,38 @@ routes.shift_close_new = function (u) {
     form.appendChild(cbSel);
 
     // ── Cash & digital payments ──
+    const cashOnly = branch === "zawya";
     form.appendChild(el("h2", { style: { marginTop: "14px" } }, T("Payments received","المدفوعات المستلمة")));
+    if (cashOnly) {
+      form.appendChild(el("div", { class: "muted small" }, T("Zawya is a concession inside the cinema — card, InstaPay and Talabat are settled by the venue, so only cash is counted here.","زاوية ركن داخل السينما — البطاقة وإنستاباي وطلبات يسوّيها المكان، لذا يُحتسب النقدي فقط هنا.")));
+    }
     form.appendChild(el("label", {}, T("Cash (EGP)","نقدي (جنيه)")));
     form.appendChild(mkInput("number", cash, v => cash = v, "0.00"));
-    form.appendChild(el("label", {}, T("Instapay (EGP)","إنستاباي (جنيه)")));
-    form.appendChild(mkInput("number", instapay, v => instapay = v, "0.00"));
-    form.appendChild(el("label", {}, T("Customer credit card (EGP)","بطاقة ائتمان العميل (جنيه)")));
-    form.appendChild(mkInput("number", cc, v => cc = v, "0.00"));
-    form.appendChild(el("label", {}, T("Talabat — credit","طلبات — رصيد")));
-    form.appendChild(mkInput("number", talabat_credit, v => talabat_credit = v, "0.00"));
-    form.appendChild(el("label", {}, T("Talabat — cash","طلبات — نقدي")));
-    form.appendChild(mkInput("number", talabat_cash, v => talabat_cash = v, "0.00"));
+    if (!cashOnly) {
+      form.appendChild(el("label", {}, T("Instapay (EGP)","إنستاباي (جنيه)")));
+      form.appendChild(mkInput("number", instapay, v => instapay = v, "0.00"));
+      form.appendChild(el("label", {}, T("Customer credit card (EGP)","بطاقة ائتمان العميل (جنيه)")));
+      form.appendChild(mkInput("number", cc, v => cc = v, "0.00"));
+      form.appendChild(el("label", {}, T("Talabat — credit","طلبات — رصيد")));
+      form.appendChild(mkInput("number", talabat_credit, v => talabat_credit = v, "0.00"));
+      form.appendChild(el("label", {}, T("Talabat — cash","طلبات — نقدي")));
+      form.appendChild(mkInput("number", talabat_cash, v => talabat_cash = v, "0.00"));
+    }
 
-    const totalShift = (Number(cash)||0) + (Number(instapay)||0) + (Number(cc)||0) + (Number(talabat_credit)||0) + (Number(talabat_cash)||0);
+    const totalShift = cashOnly
+      ? (Number(cash)||0)
+      : (Number(cash)||0) + (Number(instapay)||0) + (Number(cc)||0) + (Number(talabat_credit)||0) + (Number(talabat_cash)||0);
     form.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px", padding: "10px 12px", background: "var(--surface2, #f5f5f5)", borderRadius: "8px", fontWeight: "600" } }, [
       el("span", {}, T("Total shift payments","إجمالي مدفوعات الشيفت")),
       el("span", { class: "pill" }, `EGP ${totalShift.toFixed(2)}`),
     ]));
 
-    form.appendChild(el("label", { style: { marginTop: "10px" } }, T("Extra money — notes (visa or cash surplus/discrepancy)","مبلغ إضافي — ملاحظات (فرق فيزا أو نقدي)")));
-    const emInp = el("textarea", { placeholder: T("e.g. Visa machine had EGP 50 extra · Cash drawer over by EGP 20","مثال: فيزا فيها 50 جنيه زيادة · الدرج فيه 20 جنيه زيادة"), rows: "2", style: { resize: "vertical" } }, extraMoneyNotes);
+    form.appendChild(el("label", { style: { marginTop: "10px" } }, cashOnly
+      ? T("Extra money — notes (cash surplus/discrepancy)","مبلغ إضافي — ملاحظات (فرق نقدي)")
+      : T("Extra money — notes (visa or cash surplus/discrepancy)","مبلغ إضافي — ملاحظات (فرق فيزا أو نقدي)")));
+    const emInp = el("textarea", { placeholder: cashOnly
+      ? T("e.g. Cash drawer over by EGP 20","مثال: الدرج فيه 20 جنيه زيادة")
+      : T("e.g. Visa machine had EGP 50 extra · Cash drawer over by EGP 20","مثال: فيزا فيها 50 جنيه زيادة · الدرج فيه 20 جنيه زيادة"), rows: "2", style: { resize: "vertical" } }, extraMoneyNotes);
     emInp.addEventListener("input", () => extraMoneyNotes = emInp.value);
     form.appendChild(emInp);
 
@@ -5314,8 +5328,10 @@ routes.shift_close_list = function (u) {
         ]),
       ]),
       el("div", { class: "muted small", style: { marginTop: "4px" } }, [
-        T(`Cash ${money(c.cash||0)} · Instapay ${money(c.instapay||0)} · CC ${money(c.cc||0)} · Talabat cr ${money(c.talabat_credit||0)} · Talabat ca ${money(c.talabat_cash||0)}`,
-          `نقدي ${money(c.cash||0)} · إنستاباي ${money(c.instapay||0)} · بطاقة ${money(c.cc||0)} · طلبات رصيد ${money(c.talabat_credit||0)} · طلبات نقدي ${money(c.talabat_cash||0)}`)
+        c.branch === "zawya"
+          ? T(`Cash ${money(c.cash||0)} (cash-only branch)`, `نقدي ${money(c.cash||0)} (فرع نقدي فقط)`)
+          : T(`Cash ${money(c.cash||0)} · Instapay ${money(c.instapay||0)} · CC ${money(c.cc||0)} · Talabat cr ${money(c.talabat_credit||0)} · Talabat ca ${money(c.talabat_cash||0)}`,
+              `نقدي ${money(c.cash||0)} · إنستاباي ${money(c.instapay||0)} · بطاقة ${money(c.cc||0)} · طلبات رصيد ${money(c.talabat_credit||0)} · طلبات نقدي ${money(c.talabat_cash||0)}`)
       ]),
       c.extra_money_notes ? el("div", { class: "muted small", style: { color: "var(--warn, #b45309)" } }, T(`💰 Extra: ${c.extra_money_notes}`, `💰 إضافي: ${c.extra_money_notes}`)) : null,
       el("div", { class: "muted small" }, T(`Barista drinks: ${baDrinks}`, `مشروبات البريستا: ${baDrinks}`)),
@@ -14632,7 +14648,7 @@ routes.handbook = function (u) {
       content: [
         { type: "para", text: "The shift close is completed in the Operations App at the end of every shift by the barista closing the branch. It is the end-of-shift money and handover report — never leave without submitting it." },
         { type: "subheader", text: "What you enter" },
-        { type: "bullets", items: ["<strong>Date</strong> and <strong>closing barista</strong> (your name).", "<strong>Money counted</strong>, split by method: cash in the till, InstaPay, card/visa, Talabat (credit) and Talabat (cash).", "<strong>Barista allowance drinks</strong> — any staff drinks taken during the shift, one row per drink (who + what).", "<strong>Hospitality / cinema free drinks</strong> — count and a short note. At Zawya, enter these per screening.", "<strong>Management drinks</strong> — comps given to Haïdi, Luke or Youssef.", "<strong>Extra money notes</strong> — explain any surplus or shortfall vs expected.", "<strong>Notes</strong> — waste, breakages, handover info, anything unusual."] },
+        { type: "bullets", items: ["<strong>Date</strong> and <strong>closing barista</strong> (your name).", "<strong>Money counted.</strong> <strong>Maadi</strong>: split by method — cash in the till, InstaPay, card/visa, Talabat (credit) and Talabat (cash). <strong>Zawya</strong>: cash only — the screen hides the other fields, because card, InstaPay and Talabat at Zawya are settled by the cinema, not Coffee Beats.", "<strong>Barista allowance drinks</strong> — any staff drinks taken during the shift, one row per drink (who + what).", "<strong>Hospitality / cinema free drinks</strong> — count and a short note. At Zawya, enter these per screening.", "<strong>Management drinks</strong> — comps given to Haïdi, Luke or Youssef.", "<strong>Extra money notes</strong> — explain any surplus or shortfall vs expected.", "<strong>Notes</strong> — waste, breakages, handover info, anything unusual."] },
         { type: "subheader", text: "Mandatory Photo Rule" },
         { type: "para", text: "If one or more drinks are added anywhere in the shift close (allowance, hospitality or management), at least one photo must be attached before you can submit. Multiple photos are allowed and encouraged." },
         { type: "subheader", text: "Submitting" },
@@ -14641,7 +14657,7 @@ routes.handbook = function (u) {
       ar_content: [
         { type: "para", text: "يُكمِل البريستا المُغلِق للفرع شاشة إغلاق الشيفت في تطبيق العمليات في نهاية كل شيفت. هي تقرير نهاية الشيفت للأموال والتسليم — لا تغادر أبداً دون تقديمها." },
         { type: "subheader", text: "ما الذي تُدخله" },
-        { type: "bullets", items: ["<strong>التاريخ</strong> و<strong>البريستا المُغلِق</strong> (اسمك).", "<strong>الأموال المعدودة</strong>، مقسّمة حسب الطريقة: كاش في الدرج، إنستاباي، بطاقة/فيزا، طلبات (آجل) وطلبات (كاش).", "<strong>مشروبات بدل البريستا</strong> — أي مشروبات موظفين أُخذت خلال الشيفت، صف لكل مشروب (من + ماذا).", "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد وملاحظة قصيرة. في زاوية، أدخلها لكل عرض.", "<strong>مشروبات الإدارة</strong> — المجانيات المقدَّمة لهايدي أو لوك أو يوسف.", "<strong>ملاحظات أموال إضافية</strong> — اشرح أي زيادة أو نقص عن المتوقع.", "<strong>ملاحظات</strong> — الهدر، الكسر، معلومات التسليم، أي شيء غير عادي."] },
+        { type: "bullets", items: ["<strong>التاريخ</strong> و<strong>البريستا المُغلِق</strong> (اسمك).", "<strong>الأموال المعدودة.</strong> <strong>المعادي</strong>: مقسّمة حسب الطريقة — كاش في الدرج، إنستاباي، بطاقة/فيزا، طلبات (آجل) وطلبات (كاش). <strong>زاوية</strong>: كاش فقط — تُخفي الشاشة باقي الحقول، لأن البطاقة وإنستاباي وطلبات في زاوية تسوّيها السينما وليست Coffee Beats.", "<strong>مشروبات بدل البريستا</strong> — أي مشروبات موظفين أُخذت خلال الشيفت، صف لكل مشروب (من + ماذا).", "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد وملاحظة قصيرة. في زاوية، أدخلها لكل عرض.", "<strong>مشروبات الإدارة</strong> — المجانيات المقدَّمة لهايدي أو لوك أو يوسف.", "<strong>ملاحظات أموال إضافية</strong> — اشرح أي زيادة أو نقص عن المتوقع.", "<strong>ملاحظات</strong> — الهدر، الكسر، معلومات التسليم، أي شيء غير عادي."] },
         { type: "subheader", text: "قاعدة الصورة الإلزامية" },
         { type: "para", text: "إذا أُضيف مشروب واحد أو أكثر في أي مكان بإغلاق الشيفت (بدل، ضيافة أو إدارة)، يجب إرفاق صورة واحدة على الأقل قبل التقديم. يُسمح بأكثر من صورة ويُشجَّع عليه." },
         { type: "subheader", text: "التقديم" },
@@ -15912,22 +15928,28 @@ routes.app_guide = function (u) {
       en_title: "Shift Close",
       ar_title: "إغلاق الشيفت",
       en_steps: [
-        "At the end of your shift, tap <strong>Shift Close</strong>.",
-        "Select your <strong>branch</strong>.",
-        "Fill in the <strong>closing cash</strong> (the money in the till at close).",
-        "Record any <strong>management drinks</strong> given out (manager/owner comps).",
-        "Add any notes about the shift — unusual events, issues, or handover info.",
-        "Tap <strong>Save shift close</strong>.",
-        "⚠ The shift close must be done before you leave — never skip it.",
+        "At the end of your shift, tap <strong>Shift Close</strong>. The barista closing the branch fills it in.",
+        "Select your <strong>branch</strong> and your name as <strong>closing barista</strong>.",
+        "<strong>Payments received.</strong> <strong>Maadi:</strong> enter each method separately — cash, InstaPay, customer credit card, Talabat (credit), Talabat (cash). <strong>Zawya:</strong> only a <strong>Cash</strong> field appears — card, InstaPay and Talabat there are settled by the cinema, not Coffee Beats.",
+        "<strong>Extra money notes</strong> — explain any surplus or shortfall vs what was expected.",
+        "<strong>Complimentary drinks</strong> — add a row per staff drink (who + what), and enter them on Foodics with the right discount code.",
+        "<strong>Hospitality / cinema free drinks</strong> — count + note (per screening at Zawya).",
+        "<strong>Management drinks</strong> — one row per drink taken by Haïdi, Luke or Youssef.",
+        "<strong>Discount receipts</strong> — attach a photo of any signed discount receipt.",
+        "⚠ If any drink was added anywhere (allowance, hospitality or management), at least one <strong>photo</strong> is required before you can submit.",
+        "Tap <strong>Submit shift close</strong> — before you leave, every time.",
       ],
       ar_steps: [
-        "في نهاية شيفتك، اضغط على <strong>إغلاق الشيفت</strong>.",
-        "اختر <strong>الفرع</strong>.",
-        "أدخل <strong>الكاش الختامي</strong> (المبلغ في الكاشير عند الإغلاق).",
-        "سجّل أي <strong>مشروبات إدارة</strong> تم توزيعها (مشروبات مجانية للمدير/المالك).",
-        "أضف أي ملاحظات عن الشيفت — أحداث غير عادية أو مشاكل أو معلومات للتسليم.",
-        "اضغط <strong>حفظ</strong>.",
-        "⚠ يجب إتمام إغلاق الشيفت قبل مغادرتك — لا تتجاوزه أبداً.",
+        "في نهاية شيفتك، اضغط على <strong>إغلاق الشيفت</strong>. يملؤه البريستا المُغلِق للفرع.",
+        "اختر <strong>الفرع</strong> واسمك كـ <strong>بريستا مُغلِق</strong>.",
+        "<strong>المدفوعات المستلمة.</strong> <strong>المعادي:</strong> أدخل كل طريقة على حدة — كاش، إنستاباي، بطاقة ائتمان العميل، طلبات (آجل)، طلبات (كاش). <strong>زاوية:</strong> يظهر حقل <strong>الكاش</strong> فقط — البطاقة وإنستاباي وطلبات هناك تسوّيها السينما وليست Coffee Beats.",
+        "<strong>ملاحظات أموال إضافية</strong> — اشرح أي زيادة أو نقص عن المتوقع.",
+        "<strong>المشروبات المجانية</strong> — أضف صفاً لكل مشروب موظف (من + ماذا)، وأدخلها على Foodics بكود الخصم الصحيح.",
+        "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد + ملاحظة (لكل عرض في زاوية).",
+        "<strong>مشروبات الإدارة</strong> — صف لكل مشروب أخذه هايدي أو لوك أو يوسف.",
+        "<strong>إيصالات الخصم</strong> — أرفق صورة لأي إيصال خصم موقّع.",
+        "⚠ إذا أُضيف أي مشروب في أي مكان (بدل، ضيافة أو إدارة)، يلزم إرفاق <strong>صورة</strong> واحدة على الأقل قبل التقديم.",
+        "اضغط <strong>إرسال إغلاق الشيفت</strong> — قبل المغادرة، في كل مرة.",
       ],
     },
     {
@@ -16732,7 +16754,8 @@ routes.app_guide = function (u) {
   sections.forEach(s => { byTitle[s.en_title] = s; });
 
   function sectionCard(sec, number) {
-    const card = el("div", { class: "card", style: { marginBottom: "12px" } });
+    const isAr = lang === "ar";
+    const card = el("div", { class: "card", style: { marginBottom: "12px", direction: isAr ? "rtl" : "ltr", textAlign: isAr ? "right" : "left" } });
     const hd = el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" } });
     hd.appendChild(el("span", { style: { fontSize: "24px" } }, sec.icon));
     hd.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px" } },
@@ -16757,6 +16780,8 @@ routes.app_guide = function (u) {
   function renderGuide() {
     guideBody.innerHTML = "";
     const isAr = lang === "ar";
+    guideBody.style.direction = isAr ? "rtl" : "ltr";
+    guideBody.style.textAlign = isAr ? "right" : "left";
     const role = (u && u.role) || "barista";
     const cfg = ROLE_GUIDE[role] || ROLE_GUIDE.barista;
     const rl = isAr ? cfg.ar : cfg.en;
