@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260906-599 -->
+<!-- CB_BUILD:20260906-647 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260906-599";
+  var BUILD = "20260906-647";
   (function() {
     function checkFresh() {
       try {
@@ -11919,10 +11919,13 @@ routes.dashboard = function (u, params) {
       && normalizeDate(s.date).slice(0,7) === month
       && !(bKey === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item)));
     const grossRevenue = monthSales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
-    // At Zawya, Coffee Beats doesn't keep the full POS revenue: 14% VAT comes off the top,
-    // then Zawya takes a 10% share of what's left. Profitability must be measured against
-    // what CB actually retains, not the gross figure rung up at the register.
-    const revenue = bKey === "zawya" ? (grossRevenue / 1.14) * 0.90 : grossRevenue;
+    // Neither branch keeps the full POS revenue. 14% VAT comes off the top at BOTH branches
+    // (Zawya deducts it per-sale; Maadi pays it as a year-end lump sum), and at Zawya the
+    // venue then takes a 10% share of what's left. Profitability is measured against what CB
+    // actually retains, not the gross rung up at the register — so Maadi and Zawya net profit
+    // and net% sit on the same retained-revenue basis and can be compared directly.
+    const afterVat = grossRevenue / 1.14;
+    const revenue = bKey === "zawya" ? afterVat * 0.90 : afterVat;
 
     const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
@@ -11992,11 +11995,11 @@ routes.dashboard = function (u, params) {
       for (const m of monthsInYear) {
         const maadiPnl = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
         const zawyaPnl = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
-        // Maadi's POS revenue is VAT-inclusive too — that 14% just gets paid as a lump sum
-        // at year-end instead of deducted per-sale like Zawya's. Net it out here so the two
-        // branches' revenue figures are comparable.
-        const maadiGross = maadiPnl ? maadiPnl.grossRevenue / 1.14 : 0;
-        const zawyaGross = zawyaPnl ? zawyaPnl.grossRevenue : 0;
+        // Both revenue columns show what CB actually retains — Maadi after its 14% VAT
+        // (year-end lump sum), Zawya after its 14% VAT and the venue's 10% share — so net%
+        // divides evenly out of the revenue shown and the branches are directly comparable.
+        const maadiGross = maadiPnl ? maadiPnl.revenue : 0;
+        const zawyaGross = zawyaPnl ? zawyaPnl.revenue : 0;
         const combinedRevenue = (maadiPnl ? maadiPnl.revenue : 0) + (zawyaPnl ? zawyaPnl.revenue : 0);
         const combinedNet     = (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0);
         const combinedPct = combinedRevenue ? (combinedNet / combinedRevenue) * 100 : null;
@@ -12038,7 +12041,7 @@ routes.dashboard = function (u, params) {
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      `Maadi rev is net of its 14% VAT (paid as a lump sum at year-end, unlike Zawya's per-sale deduction) so the two branches' revenue are comparable; Zawya rev is still gross POS net sales, before its 14% VAT and 10% venue share. Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, where Revenue for Zawya is counted after that 14% VAT and 10% share, since that's what Coffee Beats actually keeps — so net% won't divide evenly out of the rev column shown. Salary is allocated per barista to the branch they work at (rotating staff split 50/50) — set in Monthly Overheads → Staff salaries. "Combined" sums both branches' revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
+      `Revenue for both branches is what Coffee Beats actually keeps: Maadi is net of its 14% VAT (paid as a year-end lump sum, unlike Zawya's per-sale deduction), Zawya is net of its 14% VAT and then the venue's 10% share of the remainder. Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue on that same retained-revenue basis for both branches, so it divides evenly out of the revenue column shown and Maadi vs Zawya is a like-for-like comparison. Salary is allocated per barista to the branch they work at (rotating staff split 50/50) — set in Monthly Overheads → Staff salaries. "Combined" sums both branches' retained revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
   }
   wrap.appendChild(trendCard);
 
