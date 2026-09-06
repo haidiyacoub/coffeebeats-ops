@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260906-478 -->
+<!-- CB_BUILD:20260906-515 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260906-478";
+  var BUILD = "20260906-515";
   (function() {
     function checkFresh() {
       try {
@@ -14576,12 +14576,18 @@ routes.handbook = function (u) {
     {
       number: "2", title: "Opening Procedures", ar_title: "إجراءات الفتح",
       content: [
-        { type: "para", text: "Complete the following steps before serving the first customer of the day:" },
-        { type: "bullets", items: ["Turn on the espresso machine and allow it to reach operating temperature.", "Calibrate the grinder and verify espresso extraction is within target profile.", "Prepare milk and all perishable ingredients.", "Check syrup, sauce, and topping levels — replenish as needed.", "Clean and prepare the workspace and bar area.", "Verify the POS system is running correctly.", "Prepare cups, lids, and all service items."] },
+        { type: "subheader", text: "Opening time" },
+        { type: "para", text: "Each branch has an official opening time that is set at the start of every month and can change month to month (seasonal hours, Ramadan, events). Your current opening time is always shown in the app — on the Weekly Schedule and, for management, on Staff HR → Attendance Opening Times. Never assume last month's time. If you are unsure, confirm with your head barista before the shift." },
+        { type: "para", text: "You must arrive early enough to finish every step below and have the bar ready to serve at the published opening time — not to start opening at that time. Aim to be in the branch at least 30 minutes before opening." },
+        { type: "subheader", text: "Before the first customer" },
+        { type: "bullets", items: ["Submit your Sign-In Stamp the moment you arrive (see Section 9).", "Turn on the espresso machine and allow it to reach operating temperature.", "Calibrate the grinder and verify espresso extraction is within the target profile.", "Prepare milk and all perishable ingredients.", "Check syrup, sauce, and topping levels — replenish as needed.", "Clean and prepare the workspace and bar area.", "Verify the POS system is running correctly.", "Prepare cups, lids, and all service items."] },
       ],
       ar_content: [
-        { type: "para", text: "أكمل الخطوات التالية قبل خدمة أول زبون في اليوم:" },
-        { type: "bullets", items: ["شغّل ماكينة الإسبريسو واتركها تصل إلى درجة حرارة التشغيل.", "اضبط الطاحونة وتحقق من أن استخلاص الإسبريسو ضمن المواصفات المستهدفة.", "حضّر الحليب وجميع المكونات سريعة التلف.", "تحقق من مستويات الشراب والصوص والإضافات — أعد التعبئة عند الحاجة.", "نظّف مساحة العمل والبار وجهّزها.", "تحقق من تشغيل نظام نقاط البيع بشكل صحيح.", "حضّر الأكواب والأغطية وجميع أدوات الخدمة."] },
+        { type: "subheader", text: "موعد الفتح" },
+        { type: "para", text: "لكل فرع موعد فتح رسمي يُحدَّد في بداية كل شهر وقد يتغير من شهر لآخر (مواعيد موسمية، رمضان، فعاليات). موعد فتح فرعك الحالي يظهر دائماً في التطبيق — في الجدول الأسبوعي، وللإدارة في الموارد البشرية ← مواعيد فتح الحضور. لا تفترض موعد الشهر الماضي. إذا لم تكن متأكداً، تأكد من رئيس البريستا قبل الشيفت." },
+        { type: "para", text: "يجب أن تصل مبكراً بما يكفي لإنهاء كل الخطوات أدناه وأن يكون البار جاهزاً للخدمة عند موعد الفتح المعلن — وليس أن تبدأ الفتح في ذلك الوقت. احرص على التواجد في الفرع قبل الفتح بـ 30 دقيقة على الأقل." },
+        { type: "subheader", text: "قبل أول زبون" },
+        { type: "bullets", items: ["سجّل بصمة الحضور فور وصولك (انظر القسم 9).", "شغّل ماكينة الإسبريسو واتركها تصل إلى درجة حرارة التشغيل.", "اضبط الطاحونة وتحقق من أن استخلاص الإسبريسو ضمن المواصفات المستهدفة.", "حضّر الحليب وجميع المكونات سريعة التلف.", "تحقق من مستويات الشراب والصوص والإضافات — أعد التعبئة عند الحاجة.", "نظّف مساحة العمل والبار وجهّزها.", "تحقق من تشغيل نظام نقاط البيع بشكل صحيح.", "حضّر الأكواب والأغطية وجميع أدوات الخدمة."] },
       ]
     },
     {
@@ -14624,22 +14630,22 @@ routes.handbook = function (u) {
     {
       number: "6", title: "Shift Close", ar_title: "إغلاق الشيفت",
       content: [
-        { type: "para", text: "The shift close is completed in the operations app at the end of every shift. Steps differ between branches as noted below." },
+        { type: "para", text: "The shift close is completed in the Operations App at the end of every shift by the barista closing the branch. It is the end-of-shift money and handover report — never leave without submitting it." },
+        { type: "subheader", text: "What you enter" },
+        { type: "bullets", items: ["<strong>Date</strong> and <strong>closing barista</strong> (your name).", "<strong>Money counted</strong>, split by method: cash in the till, InstaPay, card/visa, Talabat (credit) and Talabat (cash).", "<strong>Barista allowance drinks</strong> — any staff drinks taken during the shift, one row per drink (who + what).", "<strong>Hospitality / cinema free drinks</strong> — count and a short note. At Zawya, enter these per screening.", "<strong>Management drinks</strong> — comps given to Haïdi, Luke or Youssef.", "<strong>Extra money notes</strong> — explain any surplus or shortfall vs expected.", "<strong>Notes</strong> — waste, breakages, handover info, anything unusual."] },
         { type: "subheader", text: "Mandatory Photo Rule" },
-        { type: "para", text: "If one or more drinks are added during shift close, at least one photo must be attached before the shift close can be submitted. Multiple photos are allowed and encouraged." },
-        { type: "subheader", text: "Maadi — Shift Close Steps" },
-        { type: "bullets", items: ["Open the Shift Close screen in the operations app.", "Enter drinks served during the shift using the standard menu.", "If 1 or more drinks are added, attach at least one photo.", "Record any waste or breakages in the Notes field.", "Submit the shift close. Do not submit without completing all mandatory fields.", "Hospitality: enter these separately in the Hospitality section if applicable."] },
-        { type: "subheader", text: "Zawya — Shift Close Steps" },
-        { type: "bullets", items: ["Open the Shift Close screen in the operations app.", "Enter drinks served during the shift.", "Hospitality: enter separately per screening if applicable.", "If 1 or more drinks are added (standard or hospitality), attach at least one photo.", "Record any waste or breakages in the Notes field.", "Submit the shift close. Do not submit without completing all mandatory fields."] },
+        { type: "para", text: "If one or more drinks are added anywhere in the shift close (allowance, hospitality or management), at least one photo must be attached before you can submit. Multiple photos are allowed and encouraged." },
+        { type: "subheader", text: "Submitting" },
+        { type: "para", text: "Fill every mandatory field, then tap Submit. A late or missing shift close is visible to the owner and head barista." },
       ],
       ar_content: [
-        { type: "para", text: "يتم إغلاق الشيفت في تطبيق العمليات في نهاية كل شيفت. تختلف الخطوات بين الفروع كما هو موضح أدناه." },
+        { type: "para", text: "يُكمِل البريستا المُغلِق للفرع شاشة إغلاق الشيفت في تطبيق العمليات في نهاية كل شيفت. هي تقرير نهاية الشيفت للأموال والتسليم — لا تغادر أبداً دون تقديمها." },
+        { type: "subheader", text: "ما الذي تُدخله" },
+        { type: "bullets", items: ["<strong>التاريخ</strong> و<strong>البريستا المُغلِق</strong> (اسمك).", "<strong>الأموال المعدودة</strong>، مقسّمة حسب الطريقة: كاش في الدرج، إنستاباي، بطاقة/فيزا، طلبات (آجل) وطلبات (كاش).", "<strong>مشروبات بدل البريستا</strong> — أي مشروبات موظفين أُخذت خلال الشيفت، صف لكل مشروب (من + ماذا).", "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد وملاحظة قصيرة. في زاوية، أدخلها لكل عرض.", "<strong>مشروبات الإدارة</strong> — المجانيات المقدَّمة لهايدي أو لوك أو يوسف.", "<strong>ملاحظات أموال إضافية</strong> — اشرح أي زيادة أو نقص عن المتوقع.", "<strong>ملاحظات</strong> — الهدر، الكسر، معلومات التسليم، أي شيء غير عادي."] },
         { type: "subheader", text: "قاعدة الصورة الإلزامية" },
-        { type: "para", text: "إذا تمت إضافة مشروب واحد أو أكثر أثناء إغلاق الشيفت، يجب إرفاق صورة واحدة على الأقل قبل تقديم الإغلاق. يُسمح بأكثر من صورة ويُشجَّع عليه." },
-        { type: "subheader", text: "المعادي — خطوات إغلاق الشيفت" },
-        { type: "bullets", items: ["افتح شاشة إغلاق الشيفت في تطبيق العمليات.", "أدخل المشروبات المقدّمة خلال الشيفت باستخدام القائمة المعيارية.", "إذا أُضيف مشروب واحد أو أكثر، أرفق صورة واحدة على الأقل.", "سجّل أي هدر أو كسر في حقل الملاحظات.", "قدّم إغلاق الشيفت. لا تقدّمه دون استكمال جميع الحقول الإلزامية.", "الضيافة: أدخلها بشكل منفصل في قسم الضيافة إن وُجدت."] },
-        { type: "subheader", text: "زاوية — خطوات إغلاق الشيفت" },
-        { type: "bullets", items: ["افتح شاشة إغلاق الشيفت في تطبيق العمليات.", "أدخل المشروبات المقدّمة خلال الشيفت.", "الضيافة: أدخلها بشكل منفصل لكل عرض إن وُجدت.", "إذا أُضيف مشروب واحد أو أكثر (معياري أو ضيافة)، أرفق صورة واحدة على الأقل.", "سجّل أي هدر أو كسر في حقل الملاحظات.", "قدّم إغلاق الشيفت. لا تقدّمه دون استكمال جميع الحقول الإلزامية."] },
+        { type: "para", text: "إذا أُضيف مشروب واحد أو أكثر في أي مكان بإغلاق الشيفت (بدل، ضيافة أو إدارة)، يجب إرفاق صورة واحدة على الأقل قبل التقديم. يُسمح بأكثر من صورة ويُشجَّع عليه." },
+        { type: "subheader", text: "التقديم" },
+        { type: "para", text: "املأ كل حقل إلزامي ثم اضغط تقديم. الإغلاق المتأخر أو المفقود مرئي للمالك ورئيس البريستا." },
       ]
     },
     {
@@ -14684,25 +14690,31 @@ routes.handbook = function (u) {
       number: "9", title: "Sign-In Stamps", ar_title: "بصمة الحضور",
       content: [
         { type: "para", text: "The Sign-In Stamp is the official daily attendance record for all morning-shift baristas. Every morning shift must begin with a clock-in photo submitted through the Operations App." },
+        { type: "subheader", text: "What counts as \"on time\"" },
+        { type: "para", text: "\"Late\" is measured against your branch's opening time for the current month — the same time shown on your Weekly Schedule. That time is set by management each month and can change, so all the rules below are written relative to it, never to a fixed clock time. Lateness is the number of minutes between your stamp and that opening time." },
         { type: "subheader", text: "How to Submit a Sign-In Stamp" },
         { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or Zawya).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
-        { type: "subheader", text: "Automatic Deduction Rules" },
-        { type: "bullets", items: ["Up to 10 min late: no penalty (grace period).", "Late 10–60 min: ½ day deducted.", "Late 60–120 min: 1 full day deducted.", "Late more than 120 min: 2 days deducted.", "No stamp at all: 3 days deducted.", "If the same barista is late 2 or more times in a calendar month, every subsequent penalty in that month is doubled automatically.", "Covering a shift not assigned to you earns +50 punctuality KPI bonus points."] },
+        { type: "subheader", text: "Automatic Salary Deduction Tiers" },
+        { type: "para", text: "Applied automatically the moment your stamp is uploaded. Each deduction is a share of one day's pay (monthly salary ÷ 30), so the EGP amount scales with your own salary." },
+        { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "No stamp at all for an assigned morning shift: 3 days deducted (applied when management runs the missing-stamp check).", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a morning shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points."] },
         { type: "subheader", text: "Punctuality KPI Impact" },
-        { type: "para", text: "Your Punctuality KPI starts at 100 each month. Late arrivals deduct points directly from that score — not added as a fixed number. Late 11–120 min: −20 pts. Late more than 120 min: −50 pts. No stamp: −100 pts. Covering a shift not assigned to you: +50 pts. If deductions exceed your Punctuality score (below 0), the overflow is subtracted from your overall KPI total." },
-        { type: "subheader", text: "Early Arrival Bonus" },
-        { type: "para", text: "Arriving 15–30 min before opening adds +5 pts to your Punctuality KPI. Arriving 30+ min early adds +10 pts. Both trigger an automatic bonus on clock-in and are reflected in your monthly KPI score." },
+        { type: "para", text: "Separate from the salary deduction. Your Punctuality KPI starts at 100 each month and each morning shift adjusts it: 30+ min early = +10 pts · 15–30 min early = +5 pts · on time or within the 10-min grace = 0 · 11–120 min late = −20 pts · more than 120 min late = −50 pts · no stamp = −100 pts · covering an unassigned shift = +50 pts. If the deductions push your Punctuality score below 0, the overflow is taken off your overall KPI total." },
+        { type: "subheader", text: "Notifications" },
+        { type: "para", text: "Any stamp more than 10 minutes late sends an immediate in-app alert and email to the owner and head barista. If no stamp is recorded within one hour of opening, a second alert is sent automatically." },
       ],
       ar_content: [
         { type: "para", text: "بصمة الحضور هي سجل الحضور اليومي الرسمي لجميع بريستا الشيفت الصباحي. يجب أن يبدأ كل شيفت صباحي بصورة حضور مُقدَّمة عبر تطبيق العمليات." },
+        { type: "subheader", text: "ما الذي يُعتبر \"في الموعد\"" },
+        { type: "para", text: "يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك للشهر الحالي — نفس الموعد الظاهر في جدولك الأسبوعي. تُحدده الإدارة كل شهر وقد يتغير، لذا كل القواعد أدناه مكتوبة نسبةً إليه وليس إلى وقت ثابت. التأخير هو عدد الدقائق بين بصمتك وموعد الفتح ذاك." },
         { type: "subheader", text: "كيفية تقديم بصمة الحضور" },
         { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو زاوية).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
-        { type: "subheader", text: "قواعد الخصم التلقائي" },
-        { type: "bullets", items: ["تأخر 10 دقائق أو أقل: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "غياب بدون بصمة: خصم 3 أيام.", "إذا تأخر نفس البريستا مرتين أو أكثر في شهر ميلادي واحد، يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت غير مُخصَّص لك تمنحك +50 نقطة مكافأة في مؤشر الانضباط."] },
+        { type: "subheader", text: "شرائح الخصم التلقائي من الراتب" },
+        { type: "para", text: "تُطبَّق تلقائياً لحظة رفع البصمة. كل خصم هو جزء من أجر يوم واحد (الراتب الشهري ÷ 30)، فيتناسب المبلغ مع راتبك أنت." },
+        { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك: خصم 3 أيام (يُطبَّق عند تشغيل الإدارة لفحص البصمات المفقودة).", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت صباحي غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط."] },
         { type: "subheader", text: "تأثير مؤشر الانضباط" },
-        { type: "para", text: "يبدأ مؤشر الانضباط من 100 كل شهر. التأخر 11–120 دقيقة: −20 نقطة. التأخر أكثر من 120 دقيقة: −50 نقطة. غياب بدون بصمة: −100 نقطة. تغطية شيفت: +50 نقطة. إذا تجاوزت الخصومات درجة الانضباط، ينعكس الفائض على إجمالي مؤشر الأداء." },
-        { type: "subheader", text: "مكافأة الحضور المبكر" },
-        { type: "para", text: "الحضور قبل 15–30 دقيقة من الفتح يضيف +5 نقاط. الحضور قبل 30+ دقيقة يضيف +10 نقاط. كلاهما يُسجَّل تلقائياً عند تقديم بصمة الحضور." },
+        { type: "para", text: "منفصل عن خصم الراتب. يبدأ مؤشر الانضباط من 100 كل شهر ويعدّله كل شيفت صباحي: مبكر 30 دقيقة أو أكثر = +10 · مبكر 15–30 دقيقة = +5 · في الموعد أو ضمن سماح الـ10 دقائق = 0 · تأخر 11–120 دقيقة = −20 · تأخر أكثر من 120 دقيقة = −50 · بدون بصمة = −100 · تغطية شيفت غير مخصص = +50. إذا دفعت الخصومات درجتك تحت الصفر، يُخصم الفائض من إجمالي مؤشر الأداء." },
+        { type: "subheader", text: "الإشعارات" },
+        { type: "para", text: "أي بصمة متأخرة أكثر من 10 دقائق ترسل تنبيهاً فورياً داخل التطبيق وبريداً إلكترونياً للمالك ورئيس البريستا. وإذا لم تُسجَّل بصمة خلال ساعة من الفتح، يُرسَل تنبيه ثانٍ تلقائياً." },
       ]
     },
     {
@@ -14714,8 +14726,8 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Open the Operations App and tap the red banner or \"Restock\".", "Tick at least one checkbox: Called the supplier directly — or — Communicated to head barista.", "Add a comment with useful details (delivery date, who you spoke to).", "Tap Save Action. The red banner clears."] },
         { type: "subheader", text: "Follow-Up Alarm Schedule" },
         { type: "bullets", items: ["Day 0: Initial alert fires. Action required before shift ends.", "Day +3: First follow-up alarm fires if item not yet in purchase log.", "Day +5: Second follow-up — \"URGENT — reorder overdue.\"", "Day +6: Final alarm — \"CRITICAL — reorder still missing.\""] },
-        { type: "subheader", text: "Inventory Engine (Inventory Manager)" },
-        { type: "para", text: "The barista assigned as Inventory Manager this month has access to the Inventory Engine screen. This screen shows POS-driven consumption forecasting, days of stock remaining, reorder thresholds, and five alert types: Low Stock, Critical Stock, Dead Inventory, Supplier Delay Risk, and Consumption Spike. Alerts clear automatically once a purchase is logged for the item. The Inventory Manager is responsible for monitoring this screen daily and escalating any critical alerts immediately." },
+        { type: "subheader", text: "Inventory Engine (Budget & Inventory Manager)" },
+        { type: "para", text: "The person holding the monthly Budget & Inventory Manager role (see Section 11) has access to the Inventory Engine screen. It shows POS-driven consumption forecasting, days of stock remaining, reorder thresholds, and five alert types: Low Stock, Critical Stock, Dead Inventory, Supplier Delay Risk, and Consumption Spike. Alerts clear automatically once a purchase is logged for the item. This person monitors the screen daily and escalates any critical alert immediately." },
         { type: "subheader", text: "KPI Impact" },
         { type: "bullets", items: ["Action logged within 24 hours: no penalty.", "Action logged within 3 days: −10 points from Teamwork score.", "Action after first follow-up: −20 points.", "Action after second follow-up: −30 points.", "No action after 6 days: −50 points."] },
       ],
@@ -14725,8 +14737,8 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["افتح تطبيق العمليات واضغط على الشريط الأحمر أو \"إجراءات إعادة الطلب\".", "ضع علامة على خانة واحدة على الأقل: اتصلت بالمورد مباشرة — أو — أبلغت رئيس البريستا.", "أضف تعليقاً بتفاصيل مفيدة (تاريخ التسليم، من تحدثت معه).", "اضغط حفظ الإجراء. يختفي الشريط الأحمر."] },
         { type: "subheader", text: "جدول تنبيهات المتابعة" },
         { type: "bullets", items: ["اليوم 0: يُطلَق التنبيه الأولي. الإجراء مطلوب قبل نهاية الشيفت.", "اليوم +3: أول تنبيه متابعة إذا لم يُسجَّل الصنف في سجل المشتريات.", "اليوم +5: تنبيه ثانٍ — \"عاجل — تأخر إعادة الطلب\".", "اليوم +6: التنبيه الأخير — \"حرج — إعادة الطلب لا تزال مفقودة\"."] },
-        { type: "subheader", text: "محرك المخزون (مدير المخزون)" },
-        { type: "para", text: "البريستا المعيّن مديراً للمخزون هذا الشهر لديه وصول إلى شاشة محرك المخزون. تعرض هذه الشاشة توقعات الاستهلاك المدفوعة بنقاط البيع، وأيام المخزون المتبقية، وحدود إعادة الطلب، وخمسة أنواع من التنبيهات: مخزون منخفض، مخزون حرج، مخزون راكد، خطر تأخير المورد، وارتفاع حاد في الاستهلاك. تختفي التنبيهات تلقائياً بمجرد تسجيل مشتريات للصنف. مدير المخزون مسؤول عن مراقبة هذه الشاشة يومياً والتصعيد الفوري لأي تنبيهات حرجة." },
+        { type: "subheader", text: "محرك المخزون (مدير الميزانية والمخزون)" },
+        { type: "para", text: "من يحمل دور مدير الميزانية والمخزون الشهري (انظر القسم 11) لديه وصول إلى شاشة محرك المخزون. تعرض توقعات الاستهلاك المدفوعة بنقاط البيع، وأيام المخزون المتبقية، وحدود إعادة الطلب، وخمسة أنواع من التنبيهات: مخزون منخفض، مخزون حرج، مخزون راكد، خطر تأخير المورد، وارتفاع حاد في الاستهلاك. تختفي التنبيهات تلقائياً بمجرد تسجيل مشتريات للصنف. هذا الشخص يراقب الشاشة يومياً ويصعّد أي تنبيه حرج فوراً." },
         { type: "subheader", text: "التأثير على مؤشرات الأداء" },
         { type: "bullets", items: ["تسجيل الإجراء خلال 24 ساعة: لا خصومات.", "تسجيل الإجراء خلال 3 أيام: −10 نقاط من درجة العمل الجماعي.", "الإجراء بعد أول تنبيه متابعة: −20 نقطة.", "الإجراء بعد التنبيه الثاني: −30 نقطة.", "عدم اتخاذ إجراء بعد 6 أيام: −50 نقطة."] },
       ]
@@ -14734,47 +14746,79 @@ routes.handbook = function (u) {
     {
       number: "11", title: "Monthly Leadership Roles", ar_title: "الأدوار القيادية الشهرية",
       content: [
-        { type: "para", text: "Each month, specific operational responsibilities are assigned to individual baristas or head baristas. Every assigned role carries a direct accountability requirement and unlocks additional screens in the Operations App for the duration of that month." },
-        { type: "subheader", text: "The Three Monthly Roles" },
+        { type: "para", text: "Two monthly accountability roles are assigned in the Operations App. Each one unlocks extra screens for that month and carries its own penalties. If a Head Barista is active, they automatically hold both roles; otherwise the owner assigns a barista to each." },
+        { type: "subheader", text: "The Two Roles" },
         { type: "bullets", items: [
-          "<strong>Schedule Manager</strong> — Accountable for weekly schedule accuracy and sign-in stamp compliance. Gains edit access to the Weekly Schedule screen for the month — can create, update, and publish rosters. Each unresolved missing stamp deducts 15 pts from Leadership KPI; a late stamp deducts 10 pts.",
-          "<strong>Inventory Manager</strong> — Responsible for daily stock monitoring and must submit the end-of-month inventory snapshot before midnight on the last day. Gains access to the Inventory Engine screen — a POS-driven forecasting dashboard showing consumption rates, days remaining, reorder thresholds, and risk alerts. A missing snapshot results in a half-day salary deduction plus a Leadership KPI penalty. <em>Accountability note: if a Head Barista is assigned this month, the penalty is applied to them first; it falls to the Inventory Manager only when no Head Barista is assigned.</em>",
-          "<strong>Cash Manager</strong> — Responsible for logging the weekly Maadi ATM cash deposit and maintaining the petty cash log. Gains access to the Petty Cash screen and the ATM Deposit screen (Maadi branch) for the month. A reminder fires automatically every Thursday. Missed deposit entries result in a ¼ day salary deduction per week."
+          "<strong>📅 Schedule Manager</strong> — Accountable for the weekly schedule and sign-in-stamp compliance, and manages leave requests for the month. Gains edit access to the Weekly Schedule and to view/submit leaves. Gets alerted when stamps are late or missing. <strong>Penalty:</strong> each unresolved missing stamp = −15 pts Leadership KPI; each late stamp (more than 10 min) = −10 pts. The window to act is same-day: if the barista's stamp is submitted before the owner runs the missing-stamp check, nothing is deducted.",
+          "<strong>💰 Budget & Inventory Manager</strong> — Manages petty cash, logs the weekly Maadi ATM cash deposit, and submits the end-of-month inventory snapshot. Gains full access to every inventory screen (Items, Suppliers, Restock, Waste, Purchases, Inventory Count / Engine) and the cash screens (Petty Cash, Maadi Deposits). Gets low-stock and reorder alerts. <strong>Penalty:</strong> ¼ day salary per missed weekly deposit; ½ day if the end-of-month inventory snapshot is missing.",
         ] },
+        { type: "subheader", text: "How the reward works" },
+        { type: "para", text: "A Head Barista holding a role has its performance counted inside their own Leadership KPI (20% weight — see Section 12). A regular barista holding a role instead earns a flat <strong>10% salary bonus</strong> for the weeks they were on shift that month, and their KPI is not affected by the role." },
         { type: "subheader", text: "How App Access Works" },
-        { type: "para", text: "Access is granted automatically when assignments are set in Leadership Roles. It expires when the assignment changes. The assigned screens appear as dedicated tiles on the home screen under a labelled section (e.g. \"Inventory Manager\", \"Cash Manager\"). If no new assignment is made, the previous month carries forward." },
-        { type: "subheader", text: "How Assignments Work" },
-        { type: "para", text: "At the beginning of each month, management assigns one barista or head barista to each role via the Leadership Roles screen. Role holders are notified automatically when alerts relevant to their role fire." },
+        { type: "para", text: "Access is granted automatically when the assignment is set on the Leadership Roles screen and is removed when the assignment changes. The unlocked screens appear as a labelled section of tiles on the home screen. If no new assignment is made for a month, the previous month's assignment carries forward until saved." },
+        { type: "subheader", text: "End-of-month check" },
+        { type: "para", text: "At month end the owner runs the End-of-Month Check on the Leadership Roles screen. It reviews each role's record for the month and applies any KPI deductions or salary penalties owed." },
       ],
       ar_content: [
-        { type: "para", text: "في كل شهر، يتم تعيين مسؤوليات تشغيلية محددة لبريستا أو رئيس بريستا بعينهم. كل دور معيّن يحمل متطلب مساءلة مباشر ويفتح شاشات إضافية في تطبيق العمليات لمدة ذلك الشهر." },
-        { type: "subheader", text: "الأدوار الشهرية الثلاثة" },
+        { type: "para", text: "يُعيَّن في تطبيق العمليات دوران قياديان شهرياً. كل دور يفتح شاشات إضافية لذلك الشهر وله عقوباته الخاصة. إذا كان هناك رئيس بريستا نشط، فهو يحمل الدورين تلقائياً؛ وإلا يعيّن المالك بريستا لكل دور." },
+        { type: "subheader", text: "الدوران" },
         { type: "bullets", items: [
-          "<strong>مدير الجدول</strong> — مسؤول عن دقة الجدول الأسبوعي وامتثال بصمات الحضور. يحصل على صلاحية تعديل شاشة الجدول الأسبوعي للشهر — يمكنه إنشاء الجداول وتحديثها ونشرها. كل بصمة غائبة غير محلولة تخصم 15 نقطة من مؤشر القيادة؛ والبصمة المتأخرة تخصم 10 نقاط.",
-          "<strong>مدير المخزون</strong> — مسؤول عن المراقبة اليومية للمخزون ويجب تقديم جرد المخزون في نهاية الشهر قبل منتصف ليل اليوم الأخير. يحصل على وصول إلى شاشة محرك المخزون — لوحة توقعات مدفوعة بنقاط البيع تعرض معدلات الاستهلاك والأيام المتبقية وحدود إعادة الطلب وتنبيهات المخاطر. الجرد المفقود يؤدي إلى خصم نصف يوم من الراتب إضافة إلى عقوبة في مؤشر القيادة. <em>ملاحظة المساءلة: إذا كان هناك رئيس بريستا معيّن هذا الشهر، تُطبَّق العقوبة عليه أولاً؛ وتنتقل إلى مدير المخزون فقط في غياب رئيس البريستا.</em>",
-          "<strong>مدير الكاش</strong> — مسؤول عن تسجيل إيداع الكاش الأسبوعي في ماكينة الصراف الآلي بالمعادي والحفاظ على سجل النثريات. يحصل على وصول إلى شاشة النثريات وشاشة إيداع الصراف الآلي (فرع المعادي) للشهر. يُرسَل تذكير تلقائياً كل خميس. الإدخالات المفقودة تؤدي إلى خصم ربع يوم من الراتب عن كل أسبوع."
+          "<strong>📅 مدير الجدول</strong> — مسؤول عن الجدول الأسبوعي وامتثال بصمات الحضور، ويدير طلبات الإجازات للشهر. يحصل على صلاحية تعديل الجدول الأسبوعي وعرض/تقديم الإجازات. يُنبَّه عند تأخر أو غياب البصمات. <strong>العقوبة:</strong> كل بصمة غائبة غير محلولة = −15 نقطة قيادة؛ كل بصمة متأخرة (أكثر من 10 دقائق) = −10 نقاط. مهلة التصرف في نفس اليوم: إذا قُدِّمت بصمة البريستا قبل أن يشغّل المالك فحص البصمات المفقودة، فلا خصم.",
+          "<strong>💰 مدير الميزانية والمخزون</strong> — يدير النثرية، ويسجّل إيداع كاش الصراف الآلي الأسبوعي بالمعادي، ويقدّم جرد نهاية الشهر. يحصل على وصول كامل لكل شاشات المخزون (الأصناف، الموردون، إعادة الطلب، الهدر، المشتريات، جرد/محرك المخزون) وشاشات الكاش (النثرية، إيداعات المعادي). يتلقى تنبيهات النقص وإعادة الطلب. <strong>العقوبة:</strong> ربع يوم راتب عن كل إيداع أسبوعي مفقود؛ نصف يوم إذا غاب جرد نهاية الشهر.",
         ] },
+        { type: "subheader", text: "كيف تعمل المكافأة" },
+        { type: "para", text: "رئيس البريستا الذي يحمل دوراً يُحتسب أداؤه ضمن مؤشر القيادة الخاص به (وزن 20% — انظر القسم 12). أما البريستا العادي الذي يحمل دوراً فيحصل بدلاً من ذلك على <strong>مكافأة راتب ثابتة 10%</strong> عن الأسابيع التي كان فيها على الشيفت ذلك الشهر، ولا يتأثر مؤشر أدائه بالدور." },
         { type: "subheader", text: "كيفية عمل صلاحيات التطبيق" },
-        { type: "para", text: "تُمنح الصلاحيات تلقائياً عند تعيين الأدوار في الأدوار القيادية. تنتهي صلاحيتها عند تغيير التعيين. تظهر الشاشات المخصصة كبلاطات مخصصة على الشاشة الرئيسية تحت قسم مُسمّى (مثل \"مدير المخزون\"، \"مدير الكاش\"). إذا لم يتم تعيين جديد، يستمر التعيين السابق." },
-        { type: "subheader", text: "كيفية عمل التعيينات" },
-        { type: "para", text: "في بداية كل شهر، تعيّن الإدارة بريستا أو رئيس بريستا لكل دور عبر شاشة الأدوار القيادية. يتم إشعار أصحاب الأدوار تلقائياً عند إطلاق التنبيهات المتعلقة بدورهم." },
+        { type: "para", text: "تُمنح الصلاحيات تلقائياً عند تعيين الدور في شاشة الأدوار القيادية وتُسحب عند تغيير التعيين. تظهر الشاشات المفتوحة كقسم بلاطات مُسمّى على الشاشة الرئيسية. إذا لم يُعيَّن جديد لشهر، يستمر تعيين الشهر السابق حتى يُحفظ." },
+        { type: "subheader", text: "فحص نهاية الشهر" },
+        { type: "para", text: "في نهاية الشهر يشغّل المالك \"فحص نهاية الشهر\" في شاشة الأدوار القيادية. يراجع سجل كل دور للشهر ويطبّق أي خصومات مؤشر أداء أو عقوبات راتب مستحقة." },
       ]
     },
     {
       number: "12", title: "KPI Dashboard & Scorecard", ar_title: "لوحة المؤشرات وبطاقة التقييم",
       content: [
-        { type: "para", text: "The KPI Scorecard is a monthly performance summary for every barista and head barista, aggregating data into a single weighted score from 0 to 100." },
-        { type: "subheader", text: "The Nine KPI Categories" },
-        { type: "bullets", items: ["<strong>Punctuality (5%)</strong> — Calculated from sign-in stamp data.", "<strong>Waste Control (15%)</strong> — Derived from monthly waste log entries.", "<strong>Cleanliness (10%)</strong> — Pulled each month from the cleaning logs.", "<strong>Coffee Craft (15%)</strong> — Pulled from customer reviews on the Coffee Beats website.", "<strong>Upselling (10%)</strong> — Tracks successful add-on suggestions via ticket size report.", "<strong>Customer Score (15%)</strong> — Based on customer feedback from the Coffee Beats website.", "<strong>Teamwork (5%)</strong> — Reflects response to restock alerts and shared tasks.", "<strong>Leadership (20%)</strong> — The highest-weighted category. Scored from monthly role performance.", "<strong>Hygiene (5%)</strong> — Scored from the Penalties log. Every \"not wearing uniform\" or hygiene penalty deducts 25 points."] },
+        { type: "para", text: "The KPI Scorecard is a monthly performance summary for every barista and head barista. Ten categories are each scored 0–100, then combined by weight into one total score out of 100. Almost everything is calculated automatically from what is recorded in the app during the month." },
+        { type: "subheader", text: "The Ten KPI Categories" },
+        { type: "bullets", items: [
+          "<strong>Punctuality (5%)</strong> — from sign-in stamp timing vs the branch opening time.",
+          "<strong>Waste Control (15%)</strong> — from the monthly waste log (a missing morning-shift entry costs points).",
+          "<strong>Cleanliness (10%)</strong> — from the cleaning logs submitted that month.",
+          "<strong>Coffee Craft (15%)</strong> — from customer reviews on the Coffee Beats website.",
+          "<strong>Upselling (10%)</strong> — from average ticket size / items-per-order in the sales data.",
+          "<strong>Customer Score (15%)</strong> — from customer feedback on the Coffee Beats website.",
+          "<strong>Teamwork (5%)</strong> — from response to restock alerts and shared tasks.",
+          "<strong>Leadership (15%)</strong> — from monthly leadership-role performance (see Section 11). Only applies to whoever holds a role.",
+          "<strong>Hygiene (5%)</strong> — starts at 100; every \"not wearing uniform\" or personal-hygiene penalty in the Penalties log deducts points.",
+          "<strong>Training Test (10%)</strong> — your score on this month's training quiz (see Section 12 quiz notes / App Guide).",
+        ] },
+        { type: "subheader", text: "If you don't hold a leadership role" },
+        { type: "para", text: "The 15% Leadership weight is spread proportionally across your other nine categories, so not holding a role never counts against you — your score is judged purely on the areas you control." },
+        { type: "subheader", text: "Reward Tiers" },
+        { type: "para", text: "At month end your total decides your tier: 🥇 Gold (90+), 🥈 Silver (80+), 🥉 Bronze (70+), or 📈 Rising (below 70). The tier shows on your HR dashboard next to that month's payout, and each tier carries its own reward (bonus day off, voucher, schedule priority, etc.)." },
         { type: "subheader", text: "Important Rules" },
-        { type: "para", text: "Scores are locked at the end of each month. Disputes must be raised with the branch manager within seven days of month-end. The scorecard is used for performance reviews, bonus calculations, and promotion decisions." },
+        { type: "para", text: "Scores lock at the end of each month. Raise any dispute with your branch manager within seven days of month-end. The scorecard feeds performance reviews, bonus decisions, and the monthly Leaderboard." },
       ],
       ar_content: [
-        { type: "para", text: "بطاقة مؤشرات الأداء هي ملخص أداء شهري لكل بريستا ورئيس بريستا، تجمع البيانات في درجة مرجحة واحدة من 0 إلى 100." },
-        { type: "subheader", text: "فئات مؤشرات الأداء التسع" },
-        { type: "bullets", items: ["<strong>الانضباط (5%)</strong> — يُحسب من بيانات بصمة الحضور.", "<strong>ضبط الهدر (15%)</strong> — مستمد من إدخالات سجل الهدر الشهري.", "<strong>النظافة (10%)</strong> — يُسحب كل شهر من سجلات النظافة.", "<strong>حرفة القهوة (15%)</strong> — مستمد من آراء الزبائن على موقع كوفي بيتس.", "<strong>البيع الإضافي (10%)</strong> — يتتبع نجاح اقتراحات الإضافات عبر تقرير حجم الطلب.", "<strong>رضا الزبون (15%)</strong> — مبني على تغذية راجعة الزبائن من موقع كوفي بيتس.", "<strong>العمل الجماعي (5%)</strong> — يعكس الاستجابة لتنبيهات إعادة التخزين والمهام المشتركة.", "<strong>القيادة (20%)</strong> — أعلى الفئات وزناً. يُحسب من أداء الدور الشهري.", "<strong>الصحة العامة (5%)</strong> — يُحسب من سجل العقوبات. كل عقوبة \"عدم ارتداء الزي\" أو مخالفة صحية تخصم 25 نقطة."] },
+        { type: "para", text: "بطاقة مؤشرات الأداء هي ملخص أداء شهري لكل بريستا ورئيس بريستا. عشرة محاور، كل منها يُقيَّم من 0 إلى 100، ثم تُجمَع بالوزن في درجة إجمالية واحدة من 100. كل شيء تقريباً يُحسب تلقائياً مما يُسجَّل في التطبيق خلال الشهر." },
+        { type: "subheader", text: "محاور مؤشر الأداء العشرة" },
+        { type: "bullets", items: [
+          "<strong>الانضباط (5%)</strong> — من توقيت بصمة الحضور مقارنةً بموعد فتح الفرع.",
+          "<strong>ضبط الهدر (15%)</strong> — من سجل الهدر الشهري (غياب إدخال شيفت صباحي يخصم نقاطاً).",
+          "<strong>النظافة (10%)</strong> — من سجلات النظافة المُقدَّمة ذلك الشهر.",
+          "<strong>حرفة القهوة (15%)</strong> — من آراء الزبائن على موقع كوفي بيتس.",
+          "<strong>البيع الإضافي (10%)</strong> — من متوسط حجم الفاتورة / عدد الأصناف لكل طلب في بيانات المبيعات.",
+          "<strong>رضا الزبون (15%)</strong> — من تقييمات الزبائن على موقع كوفي بيتس.",
+          "<strong>العمل الجماعي (5%)</strong> — من الاستجابة لتنبيهات إعادة الطلب والمهام المشتركة.",
+          "<strong>القيادة (15%)</strong> — من أداء الدور القيادي الشهري (انظر القسم 11). يخص فقط من يحمل دوراً.",
+          "<strong>النظافة الشخصية (5%)</strong> — يبدأ من 100؛ كل عقوبة \"عدم ارتداء الزي\" أو نظافة شخصية في سجل العقوبات تخصم نقاطاً.",
+          "<strong>الاختبار الشهري (10%)</strong> — درجتك في اختبار التدريب لهذا الشهر.",
+        ] },
+        { type: "subheader", text: "إذا لم تكن تحمل دوراً قيادياً" },
+        { type: "para", text: "يُوزَّع وزن القيادة (15%) بالتناسب على محاورك التسعة الأخرى، فعدم حمل دور لا يُحسب ضدك أبداً — تُقيَّم درجتك فقط على المجالات التي تتحكم بها." },
+        { type: "subheader", text: "مستويات المكافأة" },
+        { type: "para", text: "في نهاية الشهر تحدد درجتك مستواك: 🥇 ذهبي (90+)، 🥈 فضي (80+)، 🥉 برونزي (70+)، أو 📈 في تطور (أقل من 70). يظهر المستوى في لوحة الموارد البشرية بجانب راتب ذلك الشهر، ولكل مستوى مكافأته (يوم إجازة، كوبون، أولوية في الجدول، إلخ)." },
         { type: "subheader", text: "قواعد مهمة" },
-        { type: "para", text: "تُقفَل الدرجات في نهاية كل شهر. يجب تقديم الاعتراضات لمدير الفرع خلال سبعة أيام من نهاية الشهر. تُستخدم بطاقة التقييم في مراجعات الأداء وحسابات المكافآت وقرارات الترقية." },
+        { type: "para", text: "تُقفَل الدرجات في نهاية كل شهر. قدّم أي اعتراض لمدير فرعك خلال سبعة أيام من نهاية الشهر. تُغذّي البطاقة مراجعات الأداء وقرارات المكافآت ولوحة الصدارة الشهرية." },
       ]
     },
     {
@@ -14783,7 +14827,7 @@ routes.handbook = function (u) {
         { type: "para", text: "The Operations App includes a built-in HR module that manages payroll, attendance penalties, overtime, loans, and leave for all baristas and head baristas. All data is calculated automatically from recorded activity — no manual payroll entry is required." },
         { type: "subheader", text: "My HR — Individual View" },
         { type: "para", text: "Every barista and head barista can access their personal HR dashboard from the Operations App by tapping My HR. The dashboard shows:" },
-        { type: "bullets", items: ["<strong>Base Salary</strong> — the fixed monthly salary for the role.", "<strong>Overtime</strong> — additional pay for shifts worked beyond contracted hours, logged automatically.", "<strong>Penalties</strong> — salary deductions applied for attendance violations (late/missed stamps), hygiene violations, and missed leadership role duties. Each entry shows the date, reason, and amount deducted.", "<strong>Loans</strong> — any salary advance or loan balance tracked against the barista's account.", "<strong>Net Due</strong> — the final calculated amount to be paid after adding overtime and subtracting penalties and loan repayments.", "<strong>KPI Reward Tier</strong> — at month end, the barista's KPI score determines their tier: Gold (90+), Silver (80+), Bronze (70+), or Development (below 70). Reflected in the HR dashboard alongside the monthly payout summary.", "<strong>Leave</strong> — approved leave days taken during the month. Unapproved absences are flagged separately as penalty entries."] },
+        { type: "bullets", items: ["<strong>Base Salary</strong> — the fixed monthly salary for the role.", "<strong>Overtime</strong> — additional pay for shifts worked beyond contracted hours, logged automatically.", "<strong>Penalties</strong> — salary deductions applied for attendance violations (late/missed stamps), hygiene violations, and missed leadership role duties. Each entry shows the date, reason, and amount deducted.", "<strong>Loans</strong> — any salary advance or loan balance tracked against the barista's account.", "<strong>Net Due</strong> — the final calculated amount to be paid after adding overtime and subtracting penalties and loan repayments.", "<strong>KPI Reward Tier</strong> — at month end, the barista's KPI score determines their tier: 🥇 Gold (90+), 🥈 Silver (80+), 🥉 Bronze (70+), or 📈 Rising (below 70). Reflected in the HR dashboard alongside the monthly payout summary.", "<strong>Leave</strong> — approved leave days taken during the month. Unapproved absences are flagged separately as penalty entries."] },
         { type: "para", text: "The dashboard supports month navigation — baristas can review any prior month's full salary breakdown." },
         { type: "subheader", text: "Staff HR — Management View" },
         { type: "para", text: "Owners, accountants, and head baristas can access the Staff HR view showing the complete payroll summary for all active staff:" },
@@ -15797,7 +15841,7 @@ routes.app_guide = function (u) {
         "The app will ask for the <strong>team code</strong> the first time — enter it once and you're set.",
         "You'll see the staff list. Tap your name.",
         "Enter your <strong>4-digit PIN</strong>. If you forgot it, ask the head barista or owner.",
-        "You are now signed in. The app will remember you until the shift ends (auto-logout after 8 hours).",
+        "You stay signed in on this device, but the app signs you out automatically after <strong>10 minutes with no activity</strong> (a 60-second warning appears first — tap <em>Stay signed in</em> to keep your session). Just tap your name and re-enter your PIN to come back.",
         "<strong>Language:</strong> tap the 🇬🇧 EN / 🇪🇬 AR chip in the top bar any time to switch the whole app between English and Arabic.",
       ],
       ar_steps: [
@@ -15805,7 +15849,7 @@ routes.app_guide = function (u) {
         "في أول مرة، سيطلب منك التطبيق <strong>كود الفريق</strong> — أدخله مرة واحدة وانتهى.",
         "ستظهر لك قائمة الموظفين. اضغط على اسمك.",
         "أدخل <strong>الـ PIN المكون من 4 أرقام</strong>. لو نسيت الكود، اسأل رئيس البريستا أو المالك.",
-        "أنت الآن مسجّل الدخول. التطبيق يتذكرك حتى نهاية الشيفت (تسجيل خروج تلقائي بعد 8 ساعات).",
+        "تبقى مسجّلاً على هذا الجهاز، لكن التطبيق يسجّل خروجك تلقائياً بعد <strong>10 دقائق دون نشاط</strong> (يظهر تحذير 60 ثانية أولاً — اضغط <em>ابقَ مسجّلاً</em> للاستمرار). اضغط اسمك وأعد إدخال الـ PIN للعودة.",
         "<strong>اللغة:</strong> اضغط على زر 🇬🇧 EN / 🇪🇬 AR في الشريط العلوي في أي وقت للتبديل بين الإنجليزية والعربية في كل التطبيق.",
       ],
     },
@@ -15818,20 +15862,24 @@ routes.app_guide = function (u) {
         "Select your branch: <strong>Maadi</strong> or <strong>Zawya</strong>.",
         "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
         "Tap <strong>Submit clock-in</strong>.",
-        "<strong>⚠ Automatic penalty rules:</strong> ≤10 min late = <strong>no penalty</strong> (grace period). Late 10–60 min = <strong>½ day deducted</strong>. Late 61–120 min = <strong>1 full day deducted</strong>. Late more than 120 min = <strong>2 days deducted</strong>. No stamp at all = <strong>3 days deducted</strong>.",
-        "<strong>Repeat offender rule:</strong> If the same barista is late 2 or more times in one calendar month, every further penalty that month is <strong>doubled automatically</strong>.",
-        "<strong>Substitute cover bonus:</strong> If you stamp a shift that was not assigned to you (covering for a colleague), you earn <strong>+50 punctuality KPI bonus points</strong> automatically.",
-        "<strong>Punctuality KPI:</strong> Your score starts at 100 each month. Late 11–120 min = <strong>−20 pts</strong>. Late 120+ min = <strong>−50 pts</strong>. No stamp = <strong>−100 pts</strong>. Covering a shift = <strong>+50 pts</strong>. If deductions exceed your Punctuality score, the overflow reduces your overall KPI total. Arriving 15–30 min early = <strong>+5 pts</strong>. Arriving 30+ min early = <strong>+10 pts</strong>.",
-        "<strong>Notifications:</strong> Any stamp 10+ minutes late triggers an immediate in-app alert and email to the owner and head barista. If no stamp is recorded within 1 hour of opening, a second alert is sent automatically.",
+        "<strong>\"Late\" is measured against your branch's opening time for the current month</strong> — the time on your Weekly Schedule. It is set by management each month and can change, so the rules below are always relative to it, never to a fixed clock time.",
+        "<strong>⚠ Automatic salary deduction:</strong> within 10 min after opening = <strong>no penalty</strong> (grace). 10–60 min late = <strong>½ day</strong>. 60–120 min late = <strong>1 full day</strong>. More than 120 min late = <strong>2 days</strong>. No stamp for an assigned morning shift = <strong>3 days</strong>. Each deduction is a share of one day's pay (monthly salary ÷ 30).",
+        "<strong>Repeat-offender rule:</strong> from your 2nd late stamp in one calendar month onward, every further late penalty that month is <strong>doubled automatically</strong>.",
+        "<strong>Substitute cover:</strong> stamping a morning shift not assigned to you (covering a colleague) = no penalty even if late, plus <strong>+50 Punctuality KPI</strong>.",
+        "<strong>Punctuality KPI</strong> (separate from the salary deduction): starts at 100 each month. 30+ min early = <strong>+10</strong>. 15–30 min early = <strong>+5</strong>. On time / within grace = 0. 11–120 min late = <strong>−20</strong>. 120+ min late = <strong>−50</strong>. No stamp = <strong>−100</strong>. Cover = <strong>+50</strong>. Anything past 0 spills into your overall KPI.",
+        "<strong>Notifications:</strong> any stamp more than 10 min late sends an immediate in-app alert + email to the owner and head barista. No stamp within 1 hour of opening sends a second alert automatically.",
       ],
       ar_steps: [
         "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
         "اختر الفرع: <strong>المعادي</strong> أو <strong>زاوية</strong>.",
         "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك.",
         "اضغط <strong>تسجيل الحضور</strong>.",
-        "<strong>⚠ قواعد الخصم التلقائي:</strong> تأخر 1–60 دقيقة = <strong>خصم نصف يوم</strong>. تأخر 61–120 دقيقة = <strong>خصم يوم كامل</strong>. تأخر أكثر من 120 دقيقة = <strong>خصم يومين</strong>. غياب بدون بصمة = <strong>خصم 3 أيام</strong>.",
-        "<strong>قاعدة التكرار:</strong> إذا تأخر البريستا 3 مرات أو أكثر في نفس الشهر، يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً.",
-        "<strong>الإشعارات:</strong> أي بصمة متأخرة 15 دقيقة أو أكثر ترسل تنبيهاً فورياً داخل التطبيق وبريداً إلكترونياً للمالك ورئيس البريستا. وإذا لم تُسجَّل بصمة خلال ساعة من الفتح، يُرسَل تنبيه ثانٍ تلقائياً.",
+        "<strong>يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك للشهر الحالي</strong> — الموعد الظاهر في جدولك الأسبوعي. تحدده الإدارة كل شهر وقد يتغير، لذا القواعد أدناه دائماً نسبةً إليه وليس إلى وقت ثابت.",
+        "<strong>⚠ الخصم التلقائي من الراتب:</strong> خلال 10 دقائق بعد الفتح = <strong>لا خصم</strong> (سماح). تأخر 10–60 دقيقة = <strong>نصف يوم</strong>. 60–120 دقيقة = <strong>يوم كامل</strong>. أكثر من 120 دقيقة = <strong>يومان</strong>. غياب بدون بصمة لشيفت صباحي مُخصَّص = <strong>3 أيام</strong>. كل خصم جزء من أجر يوم (الراتب الشهري ÷ 30).",
+        "<strong>قاعدة التكرار:</strong> من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق تلقائياً.",
+        "<strong>تغطية شيفت:</strong> بصمة شيفت صباحي غير مُخصَّص لك (تغطية زميل) = لا خصم حتى لو تأخرت، و<strong>+50 نقطة انضباط</strong>.",
+        "<strong>مؤشر الانضباط</strong> (منفصل عن خصم الراتب): يبدأ من 100 كل شهر. مبكر 30 دقيقة+ = <strong>+10</strong>. مبكر 15–30 دقيقة = <strong>+5</strong>. في الموعد/ضمن السماح = 0. تأخر 11–120 دقيقة = <strong>−20</strong>. 120+ دقيقة = <strong>−50</strong>. بدون بصمة = <strong>−100</strong>. تغطية = <strong>+50</strong>. أي فائض تحت الصفر يُخصم من إجمالي المؤشر.",
+        "<strong>الإشعارات:</strong> أي بصمة متأخرة أكثر من 10 دقائق ترسل تنبيهاً فورياً وبريداً للمالك ورئيس البريستا. وبدون بصمة خلال ساعة من الفتح يُرسَل تنبيه ثانٍ تلقائياً.",
       ],
     },
     {
@@ -16032,18 +16080,22 @@ routes.app_guide = function (u) {
       en_title: "Leadership Roles",
       ar_title: "الأدوار القيادية",
       en_steps: [
-        "Tap <strong>Leadership Roles</strong> to see this month's assigned roles.",
-        "Three roles are assigned monthly: <strong>Waste Champion</strong>, <strong>Stock & Inventory Lead</strong>, and <strong>Cleanliness & Standards Lead</strong>.",
-        "The role holder is accountable for that area's KPI outcomes — missed duties affect the Leadership score (20% of total KPI).",
-        "Owners and head baristas can assign and reassign roles from this page.",
-        "A penalty is automatically applied if a role holder's responsibilities are not fulfilled.",
+        "Owner-only screen. Tap <strong>Leadership Roles</strong> and pick a month to assign that month's accountability roles.",
+        "There are <strong>two roles</strong>: <strong>📅 Schedule Manager</strong> (weekly schedule + sign-in-stamp compliance + leave requests) and <strong>💰 Budget & Inventory Manager</strong> (petty cash + weekly Maadi ATM deposit + end-of-month inventory snapshot).",
+        "If a <strong>head barista</strong> is active, both roles are auto-assigned to them and locked. With no head barista, assign a barista to each from the dropdowns and tap <strong>Save Assignments</strong>.",
+        "Each role unlocks its screens for the assigned person for that month only, and expires when the assignment changes. If a month has no record, the previous month carries forward until you save.",
+        "<strong>Penalties:</strong> Schedule Manager — −15 pts Leadership KPI per unresolved missing stamp, −10 pts per late stamp. Budget & Inventory Manager — ¼ day salary per missed weekly deposit, ½ day for a missing end-of-month snapshot.",
+        "<strong>Reward:</strong> a head barista's role performance counts inside their Leadership KPI (15% weight). A regular barista in a role instead gets a flat <strong>10% salary bonus</strong> for weeks on shift, with no KPI effect.",
+        "At month end tap <strong>⚙ End-of-Month Check</strong> to review each role and apply what's owed.",
       ],
       ar_steps: [
-        "اضغط على <strong>الأدوار القيادية</strong> لعرض الأدوار المُعينة هذا الشهر.",
-        "يُعيَّن ثلاثة أدوار شهرياً: <strong>بطل الهدر</strong>، <strong>مسؤول المخزون</strong>، و<strong>مسؤول النظافة والمعايير</strong>.",
-        "صاحب الدور مسؤول عن نتائج تقييم الأداء لذلك المجال — يؤثر التقصير على درجة القيادة (20% من إجمالي التقييم).",
-        "يمكن للملاك ورؤساء البريستا تعيين الأدوار وإعادة تعيينها.",
-        "يُطبَّق خصم تلقائياً إذا لم يستوفِ صاحب الدور مسؤولياته.",
+        "شاشة للمالك فقط. اضغط <strong>الأدوار القيادية</strong> واختر شهراً لتعيين أدوار المساءلة لذلك الشهر.",
+        "يوجد <strong>دوران</strong>: <strong>📅 مدير الجدول</strong> (الجدول الأسبوعي + امتثال بصمات الحضور + طلبات الإجازات) و<strong>💰 مدير الميزانية والمخزون</strong> (النثرية + إيداع كاش الصراف الأسبوعي بالمعادي + جرد نهاية الشهر).",
+        "إذا كان هناك <strong>رئيس بريستا</strong> نشط، يُسنَد إليه الدوران تلقائياً ويُقفلان. بدون رئيس بريستا، عيّن بريستا لكل دور من القوائم واضغط <strong>حفظ التعيينات</strong>.",
+        "كل دور يفتح شاشاته للشخص المعيَّن لذلك الشهر فقط، وينتهي عند تغيير التعيين. إذا لم يكن للشهر سجل، يستمر تعيين الشهر السابق حتى تحفظ.",
+        "<strong>العقوبات:</strong> مدير الجدول — −15 نقطة قيادة عن كل بصمة غائبة غير محلولة، −10 نقاط عن كل بصمة متأخرة. مدير الميزانية والمخزون — ربع يوم راتب عن كل إيداع أسبوعي مفقود، نصف يوم عن جرد نهاية الشهر المفقود.",
+        "<strong>المكافأة:</strong> أداء دور رئيس البريستا يُحتسب ضمن مؤشر القيادة الخاص به (وزن 15%). أما البريستا العادي في الدور فيحصل على <strong>مكافأة راتب ثابتة 10%</strong> عن أسابيع الشيفت، دون تأثير على المؤشر.",
+        "في نهاية الشهر اضغط <strong>⚙ فحص نهاية الشهر</strong> لمراجعة كل دور وتطبيق المستحق.",
       ],
     },
     {
@@ -16572,53 +16624,211 @@ routes.app_guide = function (u) {
     },
   ];
 
+  // ── Role-aware guide config ────────────────────────────────────────────────
+  // Which "area" each section belongs to, for the grouped reference view.
+  const GUIDE_AREA = {
+    "Signing In": "start", "Key Rules — Must Follow": "start", "Test Mode": "start",
+    "Sign-In Stamp (Clock In)": "shift", "Record Waste": "shift", "Shift Close": "shift",
+    "Cleaning Log": "shift", "Weekly Schedule": "shift", "Barista Handbook": "shift",
+    "Request Leave": "shift", "Restock Alerts & Supplier Orders": "shift",
+    "My HR": "me", "My Job Description": "me", "KPI Scorecard": "me",
+    "Monthly Training Quiz": "me", "My ID": "me", "Notifications & Alerts": "me",
+    "Suggestions & Complaints": "me", "Leaderboard": "me",
+    "Inventory Items & Suppliers": "inventory", "Inventory Count (Stock Take)": "inventory",
+    "Record Purchase": "inventory", "Inventory Intelligence Engine": "inventory",
+    "Petty Cash": "money", "Bank Ledger": "money", "Monthly Overheads": "money",
+    "Maadi Deposits": "money", "Upload Sales (POS Import)": "money", "Menu & Pricing": "money",
+    "Salaries & Payroll": "people", "Penalties": "people", "Staff HR Overview": "people",
+    "Team Management & Access Rights": "people", "Leadership Roles": "people",
+    "Training Quiz Dashboard": "people",
+    "Dashboards & Reports": "reports", "Assets": "reports", "Photo Gallery": "reports",
+    "Master PIN": "admin", "Settings & Backups": "admin",
+  };
+  const AREA_LABEL = {
+    start:     { en: "Getting started", ar: "البداية" },
+    shift:     { en: "Every shift", ar: "كل شيفت" },
+    me:        { en: "Your profile, pay & performance", ar: "ملفك وراتبك وأداؤك" },
+    inventory: { en: "Stock & purchasing", ar: "المخزون والمشتريات" },
+    money:     { en: "Money & sales", ar: "الأموال والمبيعات" },
+    people:    { en: "People & payroll", ar: "الفريق والرواتب" },
+    reports:   { en: "Reports & records", ar: "التقارير والسجلات" },
+    admin:     { en: "Owner admin", ar: "إدارة المالك" },
+  };
+  // Ordered walkthrough per role — the exact screens that role uses, in the order
+  // they meet them. Anything not listed shows under "Every other screen".
+  const ROLE_GUIDE = {
+    barista: {
+      en: { who: "You are a Barista.", intro: "Everything you touch in the app, in the order of a normal day. Do the ⚠ items every single shift — they are scored automatically." },
+      ar: { who: "أنت بريستا.", intro: "كل ما تستخدمه في التطبيق بترتيب يوم عادي. نفّذ بنود ⚠ في كل شيفت — تُقيَّم تلقائياً." },
+      duties: {
+        en: ["<strong>Every shift:</strong> Sign-In Stamp on arrival · Record Waste (or No Waste) · Cleaning Log with photo · act on any Restock alert · Shift Close before you leave.",
+             "<strong>Each month:</strong> finish your Training Quiz when it appears · check your KPI Scorecard.",
+             "<strong>Keep current:</strong> your PIN private · Emergency Contact in My HR · documents in My ID."],
+        ar: ["<strong>كل شيفت:</strong> بصمة الحضور عند الوصول · تسجيل الهدر (أو لا هدر) · سجل النظافة بصورة · التصرف بأي تنبيه إعادة طلب · إغلاق الشيفت قبل المغادرة.",
+             "<strong>كل شهر:</strong> أنهِ اختبار التدريب عند ظهوره · راجع بطاقة تقييم أدائك.",
+             "<strong>حافظ على التحديث:</strong> الـ PIN خاص بك · جهة الطوارئ في الموارد البشرية · مستنداتك في هويتي."],
+      },
+      screens: ["Signing In", "Sign-In Stamp (Clock In)", "Record Waste", "Cleaning Log",
+        "Restock Alerts & Supplier Orders", "Shift Close", "Weekly Schedule", "Barista Handbook",
+        "Request Leave", "Monthly Training Quiz", "KPI Scorecard", "My Job Description",
+        "My HR", "My ID", "Notifications & Alerts", "Suggestions & Complaints", "Leaderboard",
+        "Test Mode", "Key Rules — Must Follow"],
+    },
+    head_barista: {
+      en: { who: "You are a Head Barista.", intro: "You do everything a barista does, plus branch money, inventory, roster and payroll oversight. If you're active this month you also hold both leadership roles automatically." },
+      ar: { who: "أنت رئيس بريستا.", intro: "تفعل كل ما يفعله البريستا، بالإضافة إلى أموال الفرع والمخزون والجدول والإشراف على الرواتب. إذا كنت نشطاً هذا الشهر فأنت تحمل الدورين القياديين تلقائياً." },
+      duties: {
+        en: ["<strong>All barista shift duties</strong> (stamp, waste, cleaning, restock, shift close).",
+             "<strong>Weekly:</strong> publish/adjust the roster · log the Maadi ATM deposit · review petty cash.",
+             "<strong>Monthly:</strong> submit the end-of-month Inventory Count · review Staff HR before payroll · run the Leadership End-of-Month Check.",
+             "<strong>Ongoing:</strong> approve leave, enter penalties, keep menu costs and supplier data current."],
+        ar: ["<strong>كل واجبات شيفت البريستا</strong> (بصمة، هدر، نظافة، إعادة طلب، إغلاق شيفت).",
+             "<strong>أسبوعياً:</strong> نشر/تعديل الجدول · تسجيل إيداع الصراف بالمعادي · مراجعة النثرية.",
+             "<strong>شهرياً:</strong> تقديم جرد نهاية الشهر · مراجعة الموارد البشرية قبل الرواتب · تشغيل فحص نهاية الشهر القيادي.",
+             "<strong>مستمر:</strong> اعتماد الإجازات، إدخال العقوبات، تحديث تكاليف المنيو وبيانات الموردين."],
+      },
+      screens: ["Signing In", "Sign-In Stamp (Clock In)", "Record Waste", "Cleaning Log",
+        "Restock Alerts & Supplier Orders", "Shift Close", "Weekly Schedule", "Barista Handbook",
+        "Inventory Count (Stock Take)", "Record Purchase", "Inventory Items & Suppliers",
+        "Inventory Intelligence Engine", "Petty Cash", "Maadi Deposits", "Bank Ledger",
+        "Salaries & Payroll", "Penalties", "Staff HR Overview", "Leadership Roles",
+        "Dashboards & Reports", "Training Quiz Dashboard", "Request Leave",
+        "Monthly Training Quiz", "KPI Scorecard", "My Job Description", "My HR", "My ID",
+        "Notifications & Alerts", "Suggestions & Complaints", "Leaderboard", "Test Mode",
+        "Key Rules — Must Follow"],
+    },
+    manager: {
+      en: { who: "You are a Manager (Zawya support).", intro: "A light account: your profile, the handbook, leave and messages. You don't run shift or money screens." },
+      ar: { who: "أنت مدير (دعم زاوية).", intro: "حساب محدود: ملفك، الدليل، الإجازات والرسائل. لا تدير شاشات الشيفت أو الأموال." },
+      duties: {
+        en: ["Keep your My ID and Emergency Contact current.", "Use the Barista Handbook as the operations reference.", "Submit leave requests in advance.", "Raise anything for attention through Suggestions & Complaints."],
+        ar: ["حافظ على تحديث هويتي وجهة الطوارئ.", "استخدم دليل البريستا كمرجع تشغيلي.", "قدّم طلبات الإجازة مسبقاً.", "ارفع أي ملاحظة عبر الاقتراحات والشكاوى."],
+      },
+      screens: ["Signing In", "Barista Handbook", "Request Leave", "My HR", "My ID",
+        "Notifications & Alerts", "Suggestions & Complaints"],
+    },
+    helper: {
+      en: { who: "You are a Helper (Zawya support).", intro: "A light account: sign in, read the handbook, check notifications, send a suggestion." },
+      ar: { who: "أنت مساعد (دعم زاوية).", intro: "حساب محدود: تسجيل الدخول، قراءة الدليل، متابعة الإشعارات، إرسال اقتراح." },
+      duties: {
+        en: ["Keep your My ID documents current.", "Use the Barista Handbook for recipes and standards.", "Check Notifications each shift.", "Send anything for attention via Suggestions & Complaints."],
+        ar: ["حافظ على تحديث مستندات هويتي.", "استخدم دليل البريستا للوصفات والمعايير.", "تابع الإشعارات كل شيفت.", "أرسل أي ملاحظة عبر الاقتراحات والشكاوى."],
+      },
+      screens: ["Signing In", "Barista Handbook", "Notifications & Alerts", "Suggestions & Complaints", "My ID"],
+    },
+    owner: {
+      en: { who: "You are the Owner.", intro: "Full access to every screen. Below is the whole app grouped by area — this doubles as the orientation you'd give a new hire: open the group for their role and walk them through it." },
+      ar: { who: "أنت المالك.", intro: "وصول كامل لكل شاشة. بالأسفل التطبيق كله مقسّماً حسب المجال — يصلح كتوجيه للموظف الجديد: افتح مجموعة دوره واشرحها معه." },
+      duties: null, screens: null, // full grouped view
+    },
+    accountant: {
+      en: { who: "You are the Accountant.", intro: "Full access. The Money & sales and People & payroll groups below are your day-to-day; the rest is here for context." },
+      ar: { who: "أنت المحاسب.", intro: "وصول كامل. مجموعتا الأموال والمبيعات والفريق والرواتب هما عملك اليومي؛ والباقي للسياق." },
+      duties: null, screens: null,
+    },
+  };
+
+  const byTitle = {};
+  sections.forEach(s => { byTitle[s.en_title] = s; });
+
+  function sectionCard(sec, number) {
+    const card = el("div", { class: "card", style: { marginBottom: "12px" } });
+    const hd = el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" } });
+    hd.appendChild(el("span", { style: { fontSize: "24px" } }, sec.icon));
+    hd.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px" } },
+      (number ? number + ". " : "") + (lang === "en" ? sec.en_title : sec.ar_title)));
+    card.appendChild(hd);
+    const steps = lang === "en" ? sec.en_steps : sec.ar_steps;
+    const ol = el(number ? "ol" : "ul", { style: {
+      margin: "0", paddingInlineStart: "20px",
+      direction: lang === "ar" ? "rtl" : "ltr",
+      textAlign: lang === "ar" ? "right" : "left",
+      fontSize: "13.5px", lineHeight: "1.7", color: "var(--ink)"
+    }});
+    steps.forEach(step => {
+      const li = el("li", { style: { marginBottom: "7px" } });
+      li.innerHTML = step;
+      ol.appendChild(li);
+    });
+    card.appendChild(ol);
+    return card;
+  }
+
   function renderGuide() {
     guideBody.innerHTML = "";
+    const isAr = lang === "ar";
+    const role = (u && u.role) || "barista";
+    const cfg = ROLE_GUIDE[role] || ROLE_GUIDE.barista;
+    const rl = isAr ? cfg.ar : cfg.en;
+    const guided = Array.isArray(cfg.screens);
 
-    // Intro card
-    const intro = el("div", { class: "card", style: { marginBottom: "14px", background: "var(--ink)", color: "var(--accent-2)" } });
-    intro.appendChild(el("div", { style: { fontSize: "28px", marginBottom: "8px", textAlign: "center" } }, "☕"));
-    intro.appendChild(el("div", { style: { fontWeight: "700", fontSize: "16px", marginBottom: "6px", textAlign: "center" } },
-      lang === "en" ? "Coffee Beats Operations App" : "تطبيق عمليات Coffee Beats"));
-    intro.appendChild(el("div", { style: { fontSize: "13px", textAlign: "center", opacity: "0.85" } },
-      lang === "en"
-        ? "This guide explains how to use every feature. Read it once, keep it as a reference."
-        : "هذا الدليل يشرح كيفية استخدام كل ميزة. اقرأه مرة واحدة واحتفظ به كمرجع."));
+    // Role intro card
+    const intro = el("div", { class: "card", style: { marginBottom: "14px", background: "var(--ink)", color: "var(--accent-2)", direction: isAr ? "rtl" : "ltr", textAlign: isAr ? "right" : "left" } });
+    intro.appendChild(el("div", { style: { fontWeight: "800", fontSize: "16px", marginBottom: "6px" } }, "☕ " + rl.who));
+    intro.appendChild(el("div", { style: { fontSize: "13px", opacity: "0.9", marginBottom: cfg.duties ? "10px" : "0" } }, rl.intro));
+    if (cfg.duties) {
+      const dl = el("ul", { style: { margin: "0", paddingInlineStart: "18px", fontSize: "12.5px", lineHeight: "1.7" } });
+      (isAr ? cfg.duties.ar : cfg.duties.en).forEach(d => {
+        const li = el("li", { style: { marginBottom: "4px" } }); li.innerHTML = d; dl.appendChild(li);
+      });
+      intro.appendChild(dl);
+    }
     guideBody.appendChild(intro);
 
-    sections.forEach(sec => {
-      const card = el("div", { class: "card", style: { marginBottom: "12px" } });
-
-      // Section header
-      const hd = el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" } });
-      hd.appendChild(el("span", { style: { fontSize: "24px" } }, sec.icon));
-      hd.appendChild(el("div", { style: { fontWeight: "700", fontSize: "15px" } },
-        lang === "en" ? sec.en_title : sec.ar_title));
-      card.appendChild(hd);
-
-      // Steps
-      const steps = lang === "en" ? sec.en_steps : sec.ar_steps;
-      const ol = el("ol", { style: {
-        margin: "0", paddingInlineStart: "20px",
-        direction: lang === "ar" ? "rtl" : "ltr",
-        textAlign: lang === "ar" ? "right" : "left",
-        fontSize: "13.5px", lineHeight: "1.7", color: "var(--ink)"
-      }});
-      steps.forEach(step => {
-        const li = el("li", { style: { marginBottom: "7px" } });
-        li.innerHTML = step; // safe — we control the content
-        ol.appendChild(li);
+    if (guided) {
+      // 1) Ordered walkthrough of this role's own screens
+      guideBody.appendChild(el("div", { class: "notif-section-hdr", style: { marginTop: "4px" } },
+        isAr ? "شاشاتك — بالترتيب الذي ستستخدمها به" : "Your screens — in the order you'll use them"));
+      let n = 0;
+      cfg.screens.forEach(title => {
+        const sec = byTitle[title];
+        if (sec) guideBody.appendChild(sectionCard(sec, ++n));
       });
-      card.appendChild(ol);
-      guideBody.appendChild(card);
-    });
+
+      // 2) Everything else, collapsed, grouped by area
+      const covered = new Set(cfg.screens);
+      const rest = sections.filter(s => !covered.has(s.en_title));
+      if (rest.length) {
+        const wrapEx = el("div", { style: { marginTop: "8px" } });
+        const head = el("div", { class: "card", style: { cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", fontWeight: "700", fontSize: "13.5px" } });
+        head.appendChild(el("span", {}, isAr ? "كل الشاشات الأخرى (للاطّلاع)" : "Every other screen (for reference)"));
+        const caret = el("span", {}, "▼");
+        head.appendChild(caret);
+        const body = el("div", { style: { display: "none", marginTop: "10px" } });
+        head.addEventListener("click", () => {
+          const open = body.style.display !== "none";
+          body.style.display = open ? "none" : "";
+          caret.textContent = open ? "▼" : "▲";
+        });
+        const areaOrder = ["shift", "me", "inventory", "money", "people", "reports", "admin", "start"];
+        areaOrder.forEach(area => {
+          const inArea = rest.filter(s => (GUIDE_AREA[s.en_title] || "start") === area);
+          if (!inArea.length) return;
+          body.appendChild(el("div", { class: "notif-section-hdr" }, isAr ? AREA_LABEL[area].ar : AREA_LABEL[area].en));
+          inArea.forEach(sec => body.appendChild(sectionCard(sec)));
+        });
+        wrapEx.appendChild(head);
+        wrapEx.appendChild(body);
+        guideBody.appendChild(wrapEx);
+      }
+    } else {
+      // Full grouped view (owner / accountant)
+      const areaOrder = ["start", "shift", "me", "inventory", "money", "people", "reports", "admin"];
+      areaOrder.forEach(area => {
+        const inArea = sections.filter(s => (GUIDE_AREA[s.en_title] || "start") === area);
+        if (!inArea.length) return;
+        guideBody.appendChild(el("div", { class: "notif-section-hdr", style: { marginTop: "6px" } },
+          isAr ? AREA_LABEL[area].ar : AREA_LABEL[area].en));
+        inArea.forEach(sec => guideBody.appendChild(sectionCard(sec)));
+      });
+    }
 
     guideBody.appendChild(el("div", { class: "card", style: { textAlign: "center", marginTop: "6px", background: "var(--surface-2)", border: "1px dashed var(--border)" } }, [
       el("div", { style: { fontSize: "20px", marginBottom: "4px" } }, "💬"),
       el("div", { style: { fontSize: "13px", color: "var(--ink-dim)" } },
-        lang === "en"
-          ? "Questions? Contact the head barista or owner. The app syncs to all devices in real time."
-          : "أسئلة؟ تواصل مع رئيس البريستا أو المالك. التطبيق يُزامن مع كل الأجهزة في الوقت الفعلي."),
+        isAr
+          ? "أسئلة؟ تواصل مع رئيس البريستا أو المالك. التطبيق يُزامن مع كل الأجهزة في الوقت الفعلي."
+          : "Questions? Contact the head barista or owner. The app syncs to all devices in real time."),
     ]));
   }
 
