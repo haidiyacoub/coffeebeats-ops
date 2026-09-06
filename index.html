@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260906-522 -->
+<!-- CB_BUILD:20260906-599 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260906-522";
+  var BUILD = "20260906-599";
   (function() {
     function checkFresh() {
       try {
@@ -8318,14 +8318,42 @@ function getSalaryForMonth(uid, month) {
   return Number((state.salary_config[uid] || {}).monthly_salary || 0);
 }
 
-// Staff work across both branches, so their salary cost is split between Maadi and Zawya
-// rather than charged entirely to one. Owner-configurable via Monthly Overheads (defaults
-// to an even 50/50 split, matching the app's original fixed behavior). Stored in
-// state.settings so it rides along in the existing "config" sync chunk — no new wiring.
-function getSalarySplitPct(branch) {
-  const maadiPct = Math.min(100, Math.max(0, Number(state.settings?.salary_split_maadi_pct ?? 50) || 0));
-  const isMaadi = String(branch || "").trim().toLowerCase().includes("maadi");
-  return isMaadi ? maadiPct : (100 - maadiPct);
+// ── Per-barista salary → branch allocation ───────────────────────────────
+// Each staff member's monthly salary is charged to the branch they actually
+// work at, rather than a blanket percentage across the whole team.
+//   • assigned to Maadi  → 100% of their salary hits Maadi's P&L
+//   • assigned to Zawya  → 100% hits Zawya
+//   • rotating           → split 50/50 between the two branches
+// Source of truth: state.salary_config[uid].salary_branch = "maadi" | "zawya" | "split".
+// Set by the owner in Monthly Overheads → Staff salaries. Rides the existing
+// "config" sync chunk (salary_config), so no new wiring. When unset, the
+// allocation is derived from the person's branch list: tagged to exactly one
+// branch → charged there; tagged to both (or none) → rotating.
+function normBranchKey(branch) {
+  const b = String(branch || "").trim().toLowerCase();
+  return b.includes("maadi") ? "maadi" : b.includes("zawya") ? "zawya" : "";
+}
+function getStaffSalaryBranch(uid) {
+  const cfg = (state.salary_config || {})[uid] || {};
+  if (["maadi", "zawya", "split"].includes(cfg.salary_branch)) return cfg.salary_branch;
+  const usr = (state.users || []).find(x => x.id === uid || x.uid === uid);
+  const brs = [...new Set((usr && Array.isArray(usr.branches) ? usr.branches : [])
+    .map(b => normBranchKey(b)).filter(Boolean))];
+  return brs.length === 1 ? brs[0] : "split";
+}
+// Fraction (0..1) of this person's salary that lands on `branch`.
+function staffSalaryShareForBranch(uid, branch) {
+  const bKey = normBranchKey(branch);
+  const assign = getStaffSalaryBranch(uid);
+  if (assign === "split") return bKey ? 0.5 : 0;
+  return assign === bKey ? 1 : 0;
+}
+// Total staff salary charged to `branch` for `month` (rounded EGP).
+function branchSalaryForMonth(branch, month, staffList) {
+  const staff = staffList || (state.users || []).filter(x =>
+    ["barista", "head_barista"].includes(x.role) && (x.active || !!(state.salary_config || {})[x.id]));
+  return Math.round(staff.reduce((s, p) =>
+    s + getSalaryForMonth(p.id, month) * staffSalaryShareForBranch(p.id, branch), 0));
 }
 
 // ── End-of-month worked-days payroll cross-check (info only) ──
@@ -8509,47 +8537,12 @@ routes.overheads = function (u) {
   state.overhead_presets       = state.overhead_presets       || {};
   state.overhead_monthly_amts  = state.overhead_monthly_amts  || {};
 
-  // ─── SECTION 0: Salary split between branches ─────────────────────────
-  // Staff work across both branches, so their salary cost is charged to Maadi/Zawya's
-  // net profit calc by this split rather than a fixed 50/50. Read by getSalarySplitPct(),
-  // used everywhere salariesTotal is computed (Dashboards net-profit trend, branch P&L
-  // cards, cash reality check). Stored in state.settings so it syncs via the existing
-  // "config" chunk with no new wiring.
-  const splitCard = el("div", { class: "card", style: { marginTop: "12px" } });
-  splitCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700", marginBottom:"8px" } }, "Salary split between branches"));
-  splitCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "How much of the team's total monthly salary counts against each branch's net profit. Defaults to an even 50/50 split."));
-  const splitRow = el("div", { style: { display:"flex", alignItems:"center", gap:"14px", flexWrap:"wrap" } });
-  const maadiPctNow = getSalarySplitPct("maadi");
-  const splitInp = el("input", {
-    type: "range", min: "0", max: "100", step: "5", value: String(maadiPctNow),
-    // el() sets attributes via setAttribute, and "disabled" is a boolean HTML attribute —
-    // setAttribute("disabled", false) still adds it (any value's presence disables), so the
-    // key must be omitted entirely for the enabled case rather than passed as false.
-    ...(u.role !== "owner" ? { disabled: true } : {}),
-    style: { flex: "1", minWidth: "160px" },
-  });
-  const splitLabel = el("div", { style: { fontWeight: "700", fontSize: "15px", minWidth: "180px" } },
-    `🏠 Maadi ${maadiPctNow}% · 🏢 Zawya ${100 - maadiPctNow}%`);
-  splitRow.appendChild(splitInp);
-  splitRow.appendChild(splitLabel);
-  splitCard.appendChild(splitRow);
-  if (u.role === "owner") {
-    splitInp.addEventListener("input", () => {
-      const pct = Number(splitInp.value);
-      splitLabel.textContent = `🏠 Maadi ${pct}% · 🏢 Zawya ${100 - pct}%`;
-    });
-    splitInp.addEventListener("change", () => {
-      const pct = Number(splitInp.value);
-      state.settings = state.settings || {};
-      state.settings.salary_split_maadi_pct = pct;
-      saveState();
-      toast(`Salary split set: Maadi ${pct}% / Zawya ${100 - pct}%`);
-    });
-  } else {
-    splitCard.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, "Owner only — accountant can view but not change."));
-  }
-  wrap.appendChild(splitCard);
+  // ─── SECTION 0: per-barista salary → branch allocation ────────────────
+  // Replaces the old blanket "salary split %" slider. Each barista's salary is
+  // charged to the branch they work at; rotating staff split 50/50. The editable
+  // list lives in drawSalaryCard() (rendered inside draw() so it stays in step
+  // with the totals card). Assignment is stored in salary_config[uid].salary_branch
+  // and rides the existing "config" sync chunk.
 
   // ─── SECTION 1: Fixed default amounts — both branches, inline edit ───────
   // Kept inside draw() so that typing a new amount re-renders all inputs from
@@ -8751,39 +8744,76 @@ routes.overheads = function (u) {
     return panel;
   }
 
+  // Active staff whose salary feeds branch overhead. Shared by the salary card and totals card.
+  function overheadStaff() {
+    return state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+  }
+
   function drawSalaryCard() {
-    const numBranches = 2;
-    const allBaristas = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
-    const totalSalary = allBaristas.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
-    const salaryShare = totalSalary > 0 ? Math.round(totalSalary / numBranches) : 0;
+    const staff = overheadStaff();
+    const totalSalary = staff.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
+    const maadiTotal  = branchSalaryForMonth("maadi", month, staff);
+    const zawyaTotal  = branchSalaryForMonth("zawya", month, staff);
+    const canEdit = u.role === "owner";
 
     const card = el("div", { class:"card", style:{ marginTop:"12px" } });
-    card.appendChild(el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", marginBottom:"8px", fontWeight:"700" } },
-      `Staff salaries — split equally · ${numBranches} branches`));
-    card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", alignItems:"center" } }, [
-      el("div", {}, [
-        el("div", { style:{ fontWeight:"500" } }, "Total all staff"),
-        el("div", { class:"muted small" }, `÷ ${numBranches} = ${money(salaryShare)} per branch`),
-      ]),
-      el("div", { style:{ textAlign:"center", fontWeight:"700", fontSize:"22px" } }, money(totalSalary)),
-      el("div", { style:{ textAlign:"right" } }, [
-        el("div", { style:{ fontWeight:"700", fontSize:"16px" } }, `🏠 ${money(salaryShare)}`),
-        el("div", { style:{ fontWeight:"700", fontSize:"16px" } }, `🏢 ${money(salaryShare)}`),
-      ]),
+    card.appendChild(el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", marginBottom:"6px", fontWeight:"700" } },
+      `Staff salaries — branch allocation · ${month}`));
+    card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } },
+      canEdit
+        ? "Assign each person's salary to the branch they work at. Rotating staff are split 50/50 between Maadi and Zawya. Unset baristas fall back to their profile branch list."
+        : "How each person's salary is charged to a branch. Owner only — accountant can view but not change."));
+
+    // Totals row
+    card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr auto auto", gap:"10px", alignItems:"center", fontWeight:"700", borderBottom:"1px solid var(--border)", paddingBottom:"6px", marginBottom:"8px" } }, [
+      el("div", {}, `Total ${money(totalSalary)}`),
+      el("div", { style:{ textAlign:"right", minWidth:"88px" } }, `🏠 ${money(maadiTotal)}`),
+      el("div", { style:{ textAlign:"right", minWidth:"88px" } }, `🏢 ${money(zawyaTotal)}`),
     ]));
-    if (allBaristas.length > 0) {
-      const detail = el("div", { class:"muted small", style:{ marginTop:"6px", fontSize:"12px" } });
-      detail.textContent = allBaristas.map(p => `${p.name} ${money(getSalaryForMonth(p.id, month))}`).join(" · ");
-      card.appendChild(detail);
+
+    if (staff.length === 0) {
+      card.appendChild(el("div", { class:"muted small" }, "No active baristas."));
+      return card;
+    }
+
+    for (const p of staff.slice().sort((a,b) => a.name.localeCompare(b.name))) {
+      const sal = getSalaryForMonth(p.id, month);
+      const cur = getStaffSalaryBranch(p.id);
+      const isDerived = !["maadi","zawya","split"].includes(((state.salary_config || {})[p.id] || {}).salary_branch);
+      const curLabel = cur === "split" ? "Rotating · split 50/50" : cur === "maadi" ? "→ Maadi" : "→ Zawya";
+
+      const row = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr auto", gap:"10px", alignItems:"center", marginBottom:"7px" } });
+      row.appendChild(el("div", {}, [
+        el("div", { style:{ fontWeight:"500", fontSize:"13px" } }, p.name + (p.role === "head_barista" ? " · HB" : "")),
+        el("div", { class:"muted small" }, `${money(sal)}/mo · ${curLabel}${isDerived ? " (from profile)" : ""}`),
+      ]));
+
+      if (canEdit) {
+        const sel = el("select", { style:{ padding:"5px 8px", borderRadius:"6px", border:"1px solid var(--border,#ddd)", background:"var(--surface,#fff)", color:"var(--ink,#222)", fontSize:"12px" } }, [
+          el("option", { value:"maadi", selected: cur === "maadi" ? "true" : null }, "🏠 Maadi"),
+          el("option", { value:"zawya", selected: cur === "zawya" ? "true" : null }, "🏢 Zawya"),
+          el("option", { value:"split", selected: cur === "split" ? "true" : null }, "🔄 Rotating"),
+        ]);
+        sel.addEventListener("change", () => {
+          state.salary_config = state.salary_config || {};
+          state.salary_config[p.id] = { ...(state.salary_config[p.id] || {}), salary_branch: sel.value };
+          saveState();
+          toast(`${p.name}: salary → ${sel.value === "split" ? "rotating (50/50)" : sel.value === "maadi" ? "Maadi" : "Zawya"}`);
+          draw();
+        });
+        row.appendChild(sel);
+      } else {
+        row.appendChild(el("div", { class:"muted small" }, cur === "split" ? "Rotating" : cur === "maadi" ? "Maadi" : "Zawya"));
+      }
+      card.appendChild(row);
     }
     return card;
   }
 
   function drawTotalsCard() {
-    const numBranches = 2;
-    const allBaristas = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
-    const totalSalary = allBaristas.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
-    const salaryShare = totalSalary > 0 ? Math.round(totalSalary / numBranches) : 0;
+    const _staff = overheadStaff();
+    const maadiSalary = branchSalaryForMonth("maadi", month, _staff);
+    const zawyaSalary = branchSalaryForMonth("zawya", month, _staff);
 
     const card = el("div", { class:"card", style:{ marginTop:"12px" } });
     card.appendChild(el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", marginBottom:"8px", fontWeight:"700" } },
@@ -8826,9 +8856,9 @@ routes.overheads = function (u) {
     }
     // Salary
     card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"13px", paddingBottom:"4px", borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px" } }, [
-      el("div", {}, "Staff salary share"),
-      el("div", { style:{textAlign:"right"} }, money(salaryShare)),
-      el("div", { style:{textAlign:"right"} }, money(salaryShare)),
+      el("div", {}, "Staff salary"),
+      el("div", { style:{textAlign:"right"} }, money(maadiSalary)),
+      el("div", { style:{textAlign:"right"} }, money(zawyaSalary)),
     ]));
     // Grand total
     const maadiBills = ["maadi"].reduce((s, br) =>
@@ -8849,8 +8879,8 @@ routes.overheads = function (u) {
       }, 0), 0);
     card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"14px", fontWeight:"700", borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px" } }, [
       el("div", {}, "Total overhead"),
-      el("div", { style:{textAlign:"right", color:"var(--ok)"} }, money(maadiBills + varMaadi + salaryShare)),
-      el("div", { style:{textAlign:"right", color:"var(--ok)"} }, money(zawyaBills + varZawya + salaryShare)),
+      el("div", { style:{textAlign:"right", color:"var(--ok)"} }, money(maadiBills + varMaadi + maadiSalary)),
+      el("div", { style:{textAlign:"right", color:"var(--ok)"} }, money(zawyaBills + varZawya + zawyaSalary)),
     ]));
     return card;
   }
@@ -11924,8 +11954,9 @@ routes.dashboard = function (u, params) {
     const overheadsTotal = ohRows.reduce((s,o) => s + (Number(o.amount)||0), 0);
     const activeStaff = (state.users || []).filter(x =>
       ["barista","head_barista"].includes(x.role) && (x.active || !!(state.salary_config || {})[x.id]));
-    const totalStaffSalary = activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
-    const salariesTotal = Math.round(totalStaffSalary * getSalarySplitPct(bKey) / 100);
+    // Each barista's salary is charged to the branch they work at (rotating staff split 50/50)
+    // — see branchSalaryForMonth / getStaffSalaryBranch. Set in Monthly Overheads → Staff salaries.
+    const salariesTotal = branchSalaryForMonth(bKey, month, activeStaff);
     const totalOpex = overheadsTotal + salariesTotal;
 
     const grossProfit = revenue - cogs;
@@ -12007,7 +12038,7 @@ routes.dashboard = function (u, params) {
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      `Maadi rev is net of its 14% VAT (paid as a lump sum at year-end, unlike Zawya's per-sale deduction) so the two branches' revenue are comparable; Zawya rev is still gross POS net sales, before its 14% VAT and 10% venue share. Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, where Revenue for Zawya is counted after that 14% VAT and 10% share, since that's what Coffee Beats actually keeps — so net% won't divide evenly out of the rev column shown. Salary is split ${getSalarySplitPct("maadi")}% Maadi / ${getSalarySplitPct("zawya")}% Zawya — adjustable in Monthly Overheads. "Combined" sums both branches' revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
+      `Maadi rev is net of its 14% VAT (paid as a lump sum at year-end, unlike Zawya's per-sale deduction) so the two branches' revenue are comparable; Zawya rev is still gross POS net sales, before its 14% VAT and 10% venue share. Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue, where Revenue for Zawya is counted after that 14% VAT and 10% share, since that's what Coffee Beats actually keeps — so net% won't divide evenly out of the rev column shown. Salary is allocated per barista to the branch they work at (rotating staff split 50/50) — set in Monthly Overheads → Staff salaries. "Combined" sums both branches' revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
   }
   wrap.appendChild(trendCard);
 
@@ -12452,10 +12483,10 @@ routes.dashboard = function (u, params) {
       ["barista","head_barista"].includes(x.role) &&
       (x.active || !!(state.salary_config || {})[x.id])
     );
-    const _totalStaffSalary = rangeMonths.reduce((total, m) =>
-      total + _activeStaff.reduce((s, p) => s + getSalaryForMonth(p.id, m), 0), 0);
-    const _salarySplitPct = getSalarySplitPct(branch === "events" ? "maadi" : branch);
-    const salariesTotal = Math.round(_totalStaffSalary * _salarySplitPct / 100);
+    // Per-barista branch allocation (rotating staff split 50/50), summed across the range.
+    const _salaryBranch = branch === "events" ? "maadi" : branch;
+    const salariesTotal = rangeMonths.reduce((total, m) =>
+      total + branchSalaryForMonth(_salaryBranch, m, _activeStaff), 0);
     const totalOpex = overheadsTotal + salariesTotal;
 
     // ---------- Zawya revenue after deductions ----------
@@ -12531,8 +12562,8 @@ routes.dashboard = function (u, params) {
       ]),
       el("div", { class: "muted small", style: { marginTop: "8px" } },
         branch === "zawya"
-          ? `Revenue ${money(revenue)} → after 14% VAT & Zawya's 10% share = ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries share ${money(salariesTotal)} = Net ${money(netProfit)}`
-          : `Revenue ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries share ${money(salariesTotal)} = Net ${money(netProfit)}`),
+          ? `Revenue ${money(revenue)} → after 14% VAT & Zawya's 10% share = ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} = Net ${money(netProfit)}`
+          : `Revenue ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} = Net ${money(netProfit)}`),
     ]));
 
     // ---------- P&L reconciliation ----------
@@ -12556,10 +12587,16 @@ routes.dashboard = function (u, params) {
         ]));
       }
       if (salariesTotal > 0) {
+        const _perPerson = _activeStaff.map(p => {
+          const share = staffSalaryShareForBranch(p.id, _salaryBranch);
+          if (share <= 0) return null;
+          const amt = rangeMonths.reduce((s, m) => s + getSalaryForMonth(p.id, m) * share, 0);
+          return amt > 0 ? { name: p.name, amt: Math.round(amt), rotating: getStaffSalaryBranch(p.id) === "split" } : null;
+        }).filter(Boolean).sort((a, b) => b.amt - a.amt);
         card.appendChild(el("div", { class: "kv" }, [
           el("div", { class: "k" }, [
-            el("span", {}, `Staff salaries — ${_salarySplitPct}% share (Monthly Overheads → salary split)`),
-            el("div", { class: "muted small" }, `${money(_totalStaffSalary * _salarySplitPct / 100)}/mo × ${_numMonths} month(s) = ${money(salariesTotal)} this branch`),
+            el("span", {}, `Staff salaries — per-barista allocation (Monthly Overheads → Staff salaries)`),
+            el("div", { class: "muted small" }, _perPerson.map(x => `${x.name} ${money(x.amt)}${x.rotating ? " (½)" : ""}`).join(" · ") + ` · ${_numMonths} month(s)`),
           ]),
           el("div", { class: "v" }, money(salariesTotal)),
         ]));
