@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260907-856 -->
+<!-- CB_BUILD:20260907-896 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260907-856";
+  var BUILD = "20260907-896";
   (function() {
     function checkFresh() {
       try {
@@ -6406,7 +6406,13 @@ routes.purchase_new = function (u) {
 
   state.purchase_units = state.purchase_units || {};
 
+  // "Both branches" tab — for shared costs (marketing, agency, software) that
+  // belong to Maadi and Zawya together. Only offered to users who manage both.
+  const canBothBranches = (u.branches || []).includes("maadi") && (u.branches || []).includes("zawya");
+  const pickerBranches = canBothBranches ? [...u.branches, "both"] : u.branches;
+
   let branch = u.branches[0];
+  let splitZawyaPct = 50;   // Zawya's share when branch === "both"; Maadi gets the rest
   let supplier = "";
   let paid_by = "petty_cash";
   let date = new Date().toISOString().slice(0,10);
@@ -6424,7 +6430,14 @@ routes.purchase_new = function (u) {
   // Receipt photos — initialized once, re-appended on each draw()
   const receiptPhotoField = makePhotoField({ label: T("Receipt photo(s)","صورة/صور الفاتورة"), formLabel: "Purchase Receipt" });
 
-  const branchPicker = makeBranchPicker(u.branches, () => branch, b => { branch = b; draw(); });
+  const branchPicker = makeBranchPicker(pickerBranches, () => branch, b => {
+    branch = b;
+    // Both-branches purchases are shared costs only — coerce every line to "Other".
+    if (b === "both") lines.forEach(l => {
+      l.kind = "other"; l.amount = l.amount || 0; l.description = l.description || "";
+    });
+    draw();
+  });
   wrap.appendChild(branchPicker);
 
   const form = el("div", { class: "stack" });
@@ -6458,6 +6471,37 @@ routes.purchase_new = function (u) {
 
   function draw() {
     form.innerHTML = "";
+
+    // Both-branches: explain + capture how the shared cost is split
+    if (branch === "both") {
+      const zPct = Math.min(100, Math.max(0, Number(splitZawyaPct) || 0));
+      const splitCard = el("div", { class: "card", style: { borderColor: "var(--accent)" } });
+      splitCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } },
+        T("🔀 Both branches — shared cost","🔀 الفرعان معاً — تكلفة مشتركة")));
+      splitCard.appendChild(el("div", { class: "muted small" },
+        T("For costs that serve Maadi and Zawya together (marketing, agency retainer, software). Only 'Other' lines are allowed. This is saved as two linked purchases — one per branch — so each branch's P&L carries its share.",
+          "للتكاليف التي تخدم المعادي وزاوية معاً (تسويق، وكالة، برامج). يُسمح ببنود 'أخرى' فقط. يُحفظ كمشتريين مرتبطين — واحد لكل فرع — بحيث يتحمّل كل فرع نصيبه في الأرباح والخسائر.")));
+      splitCard.appendChild(el("label", { style: { marginTop: "8px" } }, T("Zawya share (%) — Maadi gets the rest","نصيب زاوية (%) — والباقي للمعادي")));
+      const zIn = el("input", { type: "number", min: "0", max: "100", value: zPct, style: { maxWidth: "100px" } });
+      const prev = el("div", { class: "muted small", style: { marginTop: "6px" } });
+      const drawPrev = () => {
+        const z = Math.min(100, Math.max(0, Number(zIn.value) || 0));
+        const t = lines.reduce((s2, l) => s2 + (Number(l.amount) || 0), 0);
+        const zAmt = Math.round(t * z / 100);
+        prev.textContent = T(`Zawya ${money(zAmt)} (${z}%)  ·  Maadi ${money(t - zAmt)} (${100 - z}%)`,
+                             `زاوية ${money(zAmt)} (${z}%)  ·  معادي ${money(t - zAmt)} (${100 - z}%)`);
+      };
+      zIn.addEventListener("input", () => { splitZawyaPct = Number(zIn.value) || 0; drawPrev(); });
+      drawPrev();
+      splitCard.appendChild(zIn);
+      splitCard.appendChild(el("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "6px" } }, [
+        el("button", { class: "btn ghost", onClick: () => { splitZawyaPct = 50; draw(); } }, "50 / 50"),
+        el("button", { class: "btn ghost", onClick: () => { splitZawyaPct = 60; draw(); } }, T("60 Zawya / 40 Maadi","60 زاوية / 40 معادي")),
+      ]));
+      splitCard.appendChild(prev);
+      form.appendChild(splitCard);
+    }
+
     form.appendChild(el("label", {}, T("Date","التاريخ")));
     const dInput = el("input", { type:"date", value: date });
     dInput.addEventListener("input", () => date = dInput.value); form.appendChild(dInput);
@@ -6479,8 +6523,14 @@ routes.purchase_new = function (u) {
     form.appendChild(paySel);
 
     if (paid_by === "petty_cash") {
-      const bal = pettyCashBalance(branch);
-      form.appendChild(el("div", { class: "muted small" }, T(`Current petty cash at ${branch}: ${money(bal)}`, `العهدة النقدية الحالية في ${branch}: ${money(bal)}`)));
+      if (branch === "both") {
+        form.appendChild(el("div", { class: "muted small" }, T(
+          `Current petty cash — Maadi ${money(pettyCashBalance("maadi"))} · Zawya ${money(pettyCashBalance("zawya"))} (each branch's float covers its own share)`,
+          `العهدة النقدية الحالية — معادي ${money(pettyCashBalance("maadi"))} · زاوية ${money(pettyCashBalance("zawya"))} (كل فرع يغطي نصيبه)`)));
+      } else {
+        const bal = pettyCashBalance(branch);
+        form.appendChild(el("div", { class: "muted small" }, T(`Current petty cash at ${branch}: ${money(bal)}`, `العهدة النقدية الحالية في ${branch}: ${money(bal)}`)));
+      }
     }
 
     // lines
@@ -6489,18 +6539,22 @@ routes.purchase_new = function (u) {
       const card = el("div", { class: "card" });
       form.appendChild(card);
 
-      // Line type selector
-      card.appendChild(el("label", {}, T(`Line ${idx+1} — Type`, `بند ${idx+1} — النوع`)));
-      const typeSel = el("select", {}, [
-        el("option", { value: "inventory", selected: ln.kind === "inventory" ? "true" : null }, T("Inventory item (milk, coffee, etc.)","صنف مخزون (حليب، قهوة، إلخ)")),
-        el("option", { value: "other",     selected: ln.kind === "other"     ? "true" : null }, T("Other (transportation, packaging, card fees…)","أخرى (نقل، تغليف، رسوم بطاقة…)")),
-      ]);
-      typeSel.addEventListener("change", () => {
-        ln.kind = typeSel.value;
-        if (ln.kind === "other") { ln.amount = ln.amount || 0; ln.description = ln.description || ""; }
-        draw();
-      });
-      card.appendChild(typeSel);
+      // Line type selector — hidden for both-branches purchases (Other only)
+      if (branch !== "both") {
+        card.appendChild(el("label", {}, T(`Line ${idx+1} — Type`, `بند ${idx+1} — النوع`)));
+        const typeSel = el("select", {}, [
+          el("option", { value: "inventory", selected: ln.kind === "inventory" ? "true" : null }, T("Inventory item (milk, coffee, etc.)","صنف مخزون (حليب، قهوة، إلخ)")),
+          el("option", { value: "other",     selected: ln.kind === "other"     ? "true" : null }, T("Other (transportation, packaging, card fees…)","أخرى (نقل، تغليف، رسوم بطاقة…)")),
+        ]);
+        typeSel.addEventListener("change", () => {
+          ln.kind = typeSel.value;
+          if (ln.kind === "other") { ln.amount = ln.amount || 0; ln.description = ln.description || ""; }
+          draw();
+        });
+        card.appendChild(typeSel);
+      } else {
+        card.appendChild(el("div", { class: "muted small", style: { fontWeight: "600" } }, T(`Line ${idx+1} — shared cost`, `بند ${idx+1} — تكلفة مشتركة`)));
+      }
 
       if (ln.kind === "inventory") {
         // Item picker
@@ -6594,13 +6648,13 @@ routes.purchase_new = function (u) {
     });
 
     form.appendChild(el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } }, [
-      el("button", {
+      branch !== "both" ? el("button", {
         class: "btn secondary",
         onClick: () => {
           lines.push({ kind: "inventory", inv_item_id: null, purchase_unit: "", pack_size: 0, purchase_qty: 1, unit_price: 0, expiry_date: "", note: "" });
           draw();
         }
-      }, T("+ Inventory line","+ بند مخزون")),
+      }, T("+ Inventory line","+ بند مخزون")) : null,
       el("button", {
         class: "btn secondary",
         onClick: () => {
@@ -6651,6 +6705,9 @@ routes.purchase_new = function (u) {
   async function submit() {
     if (!supplier) return toast(T("Enter supplier name","أدخل اسم المورد"), "error");
     if (no_receipt && !no_receipt_reason.trim()) return toast(T("Enter a reason for submitting without a receipt","أدخل سبب الإرسال بدون فاتورة"), "error");
+    if (branch === "both" && lines.some(l => l.kind === "inventory")) {
+      return toast(T("Both-branches purchases can only have 'Other' (shared-cost) lines.","مشتريات الفرعين معاً تقبل بنود 'أخرى' (تكلفة مشتركة) فقط."), "error");
+    }
     for (const ln of lines) {
       if (ln.kind === "inventory") {
         if (!ln.inv_item_id) return toast(T("Pick an inventory item for every inventory line","اختر صنف مخزون لكل بند مخزون"), "error");
@@ -6711,42 +6768,68 @@ routes.purchase_new = function (u) {
       };
     });
 
-    const purch = {
-      id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
-      branch, date, supplier, paid_by, total,
-      lines: outLines,
-      receipt_photo_id: photoId,
-      receipt_photo_ids: photoIds,
-      receipt_photo_names: photoNames,
-      receipt_drive_ids: receiptPhotoField.getDriveIds(),
-      image_url: (receiptPhotoField.getCloudUrls().filter(Boolean)[0]) || "",
-      no_receipt,
-      no_receipt_reason: no_receipt ? no_receipt_reason.trim() : "",
-      ...(isTestMode() ? { is_test: true } : {}),
-    };
-    state.purchases.push(purch);
-    // ledger side-effects — also tagged is_test so a test purchase never moves the real
-    // petty cash / bank balance (pettyCashBalance and the bank total both filter these out).
-    if (paid_by === "petty_cash") {
-      const bal = pettyCashBalance(branch);
-      state.petty_cash.push({
-        id: uuid(), branch, date, type: "purchase", amount: -total,
-        balance_after: bal - total, ref: purch.id,
-        by: s.by, by_name: s.by_name, at: s.at, note: `Purchase from ${supplier}`,
+    // Create one purchase record for a branch + its matching petty-cash / bank entry.
+    function pushPurchaseFor(branchName, brLines, brTotal, extra) {
+      const purch = {
+        id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
+        branch: branchName, date, supplier, paid_by, total: brTotal,
+        lines: brLines,
+        receipt_photo_id: photoId,
+        receipt_photo_ids: photoIds,
+        receipt_photo_names: photoNames,
+        receipt_drive_ids: receiptPhotoField.getDriveIds(),
+        image_url: (receiptPhotoField.getCloudUrls().filter(Boolean)[0]) || "",
+        no_receipt,
+        no_receipt_reason: no_receipt ? no_receipt_reason.trim() : "",
+        ...(extra || {}),
         ...(isTestMode() ? { is_test: true } : {}),
-      });
-    } else if (paid_by === "owner_bank") {
-      state.bank_ledger.push({
-        id: uuid(), date, amount: -total, supplier, ref: purch.id, type: "purchase_payment",
-        by: s.by, by_name: s.by_name, at: s.at, note: `Bank transfer to ${supplier}`,
-        ...(isTestMode() ? { is_test: true } : {}),
-      });
-    } else if (paid_by === "credit_card") {
-      state.bank_ledger.push({
-        id: uuid(), date, amount: -total, supplier, ref: purch.id, type: "purchase_credit_card",
-        by: s.by, by_name: s.by_name, at: s.at, note: `Credit card payment to ${supplier}`,
-        ...(isTestMode() ? { is_test: true } : {}),
-      });
+      };
+      state.purchases.push(purch);
+      const suffix = extra && extra.split_group ? ` (${branchName} ${extra.split_pct}% of shared cost)` : "";
+      // ledger side-effects — also tagged is_test so a test purchase never moves the real
+      // petty cash / bank balance (pettyCashBalance and the bank total both filter these out).
+      if (paid_by === "petty_cash") {
+        const bal = pettyCashBalance(branchName);
+        state.petty_cash.push({
+          id: uuid(), branch: branchName, date, type: "purchase", amount: -brTotal,
+          balance_after: bal - brTotal, ref: purch.id,
+          by: s.by, by_name: s.by_name, at: s.at, note: `Purchase from ${supplier}${suffix}`,
+          ...(isTestMode() ? { is_test: true } : {}),
+        });
+      } else if (paid_by === "owner_bank") {
+        state.bank_ledger.push({
+          id: uuid(), date, amount: -brTotal, supplier, ref: purch.id, type: "purchase_payment",
+          by: s.by, by_name: s.by_name, at: s.at, note: `Bank transfer to ${supplier}${suffix}`,
+          ...(isTestMode() ? { is_test: true } : {}),
+        });
+      } else if (paid_by === "credit_card") {
+        state.bank_ledger.push({
+          id: uuid(), date, amount: -brTotal, supplier, ref: purch.id, type: "purchase_credit_card",
+          by: s.by, by_name: s.by_name, at: s.at, note: `Credit card payment to ${supplier}${suffix}`,
+          ...(isTestMode() ? { is_test: true } : {}),
+        });
+      }
+    }
+
+    if (branch === "both") {
+      // Split the shared cost into two linked purchases whose totals sum exactly.
+      const zPct = Math.min(100, Math.max(0, Number(splitZawyaPct) || 0));
+      const groupId = uuid();
+      const parts = [{ br: "zawya", pct: zPct }, { br: "maadi", pct: 100 - zPct }];
+      for (let i = 0; i < parts.length; i++) {
+        const pt = parts[i];
+        const brLines = outLines.map(l => {
+          const zShare = Math.round((Number(l.line_total) || 0) * zPct / 100);
+          const share = pt.br === "zawya" ? zShare : (Number(l.line_total) || 0) - zShare;
+          return { kind: "other", description: l.description || "", amount: share, line_total: share, qty_canonical: 0, note: l.note || "" };
+        });
+        const brTotal = brLines.reduce((s2, l) => s2 + l.line_total, 0);
+        pushPurchaseFor(pt.br, brLines, brTotal, {
+          split_group: groupId, split_pct: pt.pct, split_with: parts[1 - i].br,
+        });
+      }
+    } else {
+      pushPurchaseFor(branch, outLines, total, null);
     }
     saveState();
     const rpNames = receiptPhotoField.getBlobs().map(f => f.name);
@@ -6758,7 +6841,9 @@ routes.purchase_new = function (u) {
         onDone: () => go("home"),
       });
     } else {
-      toast(T("Purchase saved","تم حفظ المشترى"));
+      toast(branch === "both"
+        ? T("Saved as 2 linked purchases (Maadi + Zawya)","حُفظ كمشتريين مرتبطين (معادي + زاوية)")
+        : T("Purchase saved","تم حفظ المشترى"));
       go("home");
     }
   }
@@ -6802,8 +6887,11 @@ routes.purchase_list = function (u) {
     const rowChildren = [
       el("div", { class: "grow", onClick: () => showPurchase(p) }, [
         el("div", { class: "title" }, [`${p.supplier} — ${money(p.total)}`, p.is_test ? testBadge() : null,
-          p.no_receipt ? el("span", { class: "pill", style: { background: "var(--warn)", color: "#fff", marginLeft: "6px" } }, T("No receipt","بدون فاتورة")) : null]),
-        el("div", { class: "sub" }, T(`${p.branch || "—"} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}`, `${p.branch || "—"} · ${p.date} · ${p.lines.length} بند · ${p.paid_by}`)),
+          p.no_receipt ? el("span", { class: "pill", style: { background: "var(--warn)", color: "#fff", marginLeft: "6px" } }, T("No receipt","بدون فاتورة")) : null,
+          p.split_group ? el("span", { class: "pill", style: { background: "var(--accent)", color: "#fff", marginLeft: "6px" } }, T(`Shared · ${p.split_pct}%`, `مشتركة · ${p.split_pct}%`)) : null]),
+        el("div", { class: "sub" }, T(
+          `${p.branch || "—"} · ${p.date} · ${p.lines.length} line(s) · ${p.paid_by}${p.split_group ? ` · split with ${p.split_with}` : ""}`,
+          `${p.branch || "—"} · ${p.date} · ${p.lines.length} بند · ${p.paid_by}${p.split_group ? ` · مقسومة مع ${p.split_with}` : ""}`)),
         el("div", { class: "sub" }, T(`by ${p.by_name} · ${fmtDate(p.at)}`, `بواسطة ${p.by_name} · ${fmtDate(p.at)}`)),
       ]),
       el("span", { class: "pill" }, p.paid_by.replace("_"," ")),
@@ -6836,6 +6924,15 @@ routes.purchase_list = function (u) {
         class: "btn ghost", style: { marginLeft: "6px", color: "var(--bad)", border: "1px solid var(--bad)" }, title: T("Delete","حذف"),
         onClick: (e) => {
           e.stopPropagation();
+          const sibling = p.split_group ? state.purchases.find(x => x.split_group === p.split_group && x.id !== p.id) : null;
+          if (sibling) {
+            if (!confirm(T(`This is one half of a both-branches cost (${p.supplier}). Delete BOTH halves (${money(p.total + sibling.total)} total)? Linked petty cash / bank entries are removed too. You can undo below.`, `هذا نصف تكلفة مقسومة على الفرعين (${p.supplier}). حذف النصفين (${money(p.total + sibling.total)} إجمالاً)؟ ستُحذف قيود الخزينة/البنك المرتبطة أيضاً. يمكنك التراجع أدناه.`))) return;
+            _deletePurchase(sibling);
+            _deletePurchase(p);
+            toast(T("Both halves deleted — scroll down to undo","حُذف النصفان — مرّر لأسفل للتراجع"));
+            render();
+            return;
+          }
           if (!confirm(T(`Delete purchase from ${p.supplier} (${money(p.total)})? Any linked petty cash / bank ledger entry is removed too. You can undo below.`, `حذف مشترى من ${p.supplier} (${money(p.total)})؟ سيُحذف أيضاً قيد الخزينة/البنك المرتبط. يمكنك التراجع أدناه.`))) return;
           _deletePurchase(p);
           toast(T("Purchase deleted — scroll down to undo","تم حذف المشترى — مرّر لأسفل للتراجع"));
@@ -6975,6 +7072,9 @@ async function showPurchase(p) {
   openSheet(el("div", {}, [
     el("h2", {}, T(`Purchase — ${p.supplier}`, `مشترى — ${p.supplier}`)),
     el("div", { class: "muted" }, `${p.branch} · ${p.date} · ${p.paid_by} · ${money(p.total)}`),
+    p.split_group ? el("div", { class: "card", style: { borderColor: "var(--accent)", marginTop: "6px" } },
+      T(`🔀 ${p.branch} ${p.split_pct}% share of a cost split across both branches (with ${p.split_with}). Same supplier & receipt; the other branch's share is a separate purchase.`,
+        `🔀 نصيب ${p.branch} ${p.split_pct}% من تكلفة مقسومة على الفرعين (مع ${p.split_with}). نفس المورد والفاتورة؛ نصيب الفرع الآخر مشترى منفصل.`)) : null,
     el("div", { class: "hr" }),
     ...p.lines.map(l => {
       // Backward compat: legacy purchase lines had no `kind` — treat them as inventory.
@@ -16555,6 +16655,7 @@ routes.app_guide = function (u) {
         "Select <strong>branch</strong>, <strong>supplier</strong>, and how it was <strong>paid</strong>: Petty Cash, Owner's Bank, Credit Card, or Unpaid/Credit.",
         "Add each item bought: purchase unit (e.g. bottle, carton), pack size (how many inventory units are in one purchase unit — e.g. 850 ml per bottle), quantity, and unit price. The app converts this automatically into inventory units and cost per unit, and remembers your last conversion for that item next time.",
         "For non-inventory costs (delivery fee, packaging, card charges) add an <strong>Other</strong> line with just a cost — it won't touch stock.",
+        "<strong>Both branches:</strong> for a shared cost like marketing or an agency retainer, pick the <strong>Both</strong> tab. Enter one amount and a Zawya/Maadi split (default 50/50). It saves as two linked purchases — one per branch — so each branch's P&L carries its share and each float/ledger is charged its part. Only Other lines are allowed here. Deleting one half offers to delete both.",
         "Attach a photo of the receipt.",
         "Tap <strong>Save</strong>. Two things happen automatically: every item line adds to that branch's stock, and the money moves out of wherever you said it came from — Petty Cash balance drops by the total, or a matching negative entry appears in the Bank Ledger (bank/credit card). Unpaid purchases only affect stock, not any ledger.",
         "The purchase list shows your full history — tap any purchase to see the receipt and line items.",
@@ -16564,6 +16665,7 @@ routes.app_guide = function (u) {
         "اختر <strong>الفرع</strong> و<strong>المورد</strong> وطريقة <strong>الدفع</strong>: نثرية، بنك المالك، بطاقة ائتمان، أو آجل/دون دفع.",
         "أضف كل صنف تم شراؤه: وحدة الشراء (مثل زجاجة، كرتونة)، حجم العبوة (كم وحدة مخزون في وحدة الشراء الواحدة — مثلاً 850 مل لكل زجاجة)، الكمية، وسعر الوحدة. يحوّل التطبيق هذا تلقائياً إلى وحدات المخزون وتكلفة الوحدة، ويتذكر آخر تحويل استخدمته لهذا الصنف.",
         "للتكاليف غير المخزونية (نقل، تغليف، رسوم بطاقة) أضف بنداً <strong>أخرى</strong> بتكلفة فقط — لن يؤثر على المخزون.",
+        "<strong>الفرعان معاً:</strong> لتكلفة مشتركة مثل التسويق أو وكالة، اختر تبويب <strong>Both</strong>. أدخل مبلغاً واحداً ونسبة تقسيم بين زاوية والمعادي (افتراضياً 50/50). يُحفظ كمشتريين مرتبطين — واحد لكل فرع — بحيث يتحمّل كل فرع نصيبه في الأرباح والخسائر وتُخصم حصته من العهدة/سجل البنك. يُسمح ببنود أخرى فقط. حذف أحد النصفين يعرض حذف كليهما.",
         "أرفق صورة الفاتورة.",
         "اضغط <strong>حفظ</strong>. يحدث أمران تلقائياً: كل بند صنف يُضاف لمخزون الفرع، والمبلغ يُخصم من مصدر الدفع الذي حددته — رصيد النثرية ينقص بالإجمالي، أو يظهر قيد سالب مطابق في سجل البنك (بنك/بطاقة). المشتريات الآجلة تؤثر على المخزون فقط دون أي قيد مالي.",
         "قائمة المشتريات تعرض السجل الكامل — اضغط على أي مشترى لعرض الفاتورة والبنود.",
