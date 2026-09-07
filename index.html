@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260906-647 -->
+<!-- CB_BUILD:20260907-856 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260906-647";
+  var BUILD = "20260907-856";
   (function() {
     function checkFresh() {
       try {
@@ -3328,6 +3328,80 @@ function scanCashDepositPenalties() {
   );
 }
 
+// ── Petty cash: fresh start every month ───────────────────────────────────────
+// Petty cash is meant to reset to zero on the 1st of each month. When a new month
+// begins and cash is still sitting in either branch's float, the head barista
+// (Budget & Inventory Manager) is notified once to bank it, and a banner appears
+// on the Petty Cash screen with a "Deposit & start fresh" button. If nothing is
+// left over, the new month is simply marked as started — no action needed.
+function scanPettyCashMonthReset() {
+  const s = state.settings;
+  const month = new Date().toISOString().slice(0, 7);
+  // First run after this feature ships: adopt the current month, fire nothing.
+  if (!s.petty_cash_last_reset_month) { s.petty_cash_last_reset_month = month; saveState(); return; }
+  if (s.petty_cash_last_reset_month >= month) return; // already fresh this month
+
+  const maadiBal = pettyCashBalance("maadi");
+  const zawyaBal = pettyCashBalance("zawya");
+  const combined = maadiBal + zawyaBal;
+
+  if (combined <= 0) {
+    // Nothing carried over — start the new month clean, silently.
+    s.petty_cash_last_reset_month = month;
+    delete s.petty_cash_deposit_notified_month;
+    saveState();
+    return;
+  }
+
+  // Money left over — notify the head barista once for this month.
+  if (s.petty_cash_deposit_notified_month !== month) {
+    notifyLeadershipRole("budget_inventory",
+      "Petty cash — bank last month's balance",
+      `${money(combined)} left in petty cash (Zawya ${money(zawyaBal)} · Maadi ${money(maadiBal)}). Deposit it at the bank and log it on the Petty Cash screen so ${month} starts at zero.`);
+    s.petty_cash_deposit_notified_month = month;
+    saveState();
+  }
+}
+
+// Move one branch's whole petty-cash float to the bank: a matching negative petty
+// cash entry (balance → 0) plus a positive bank_ledger deposit. Shared by the
+// per-branch "Bank balance" button and the month-reset flow.
+function _bankPettyCashBranch(branch, s, date, note) {
+  const bal = pettyCashBalance(branch);
+  if (bal <= 0) return 0;
+  const d = date || new Date().toISOString().slice(0, 10);
+  state.petty_cash.push({
+    id: uuid(), branch, date: d,
+    type: "month_end_deposit", amount: -bal, balance_after: 0, ref: "bank_reset",
+    by: s.by, by_name: s.by_name, at: s.at,
+    note: note || `Banked to bank account`,
+  });
+  state.bank_ledger.push({
+    id: uuid(), date: d, amount: bal,
+    supplier: `Petty cash deposit (${branch})`, type: "cash_deposit",
+    by: s.by, by_name: s.by_name, at: s.at,
+    note: note || `Remaining ${branch} petty cash banked`,
+  });
+  return bal;
+}
+
+// Bank whatever is left in BOTH branches and mark this month as started fresh.
+function pettyCashMonthReset(date, note) {
+  const month = new Date().toISOString().slice(0, 7);
+  const s = stamp();
+  const n = note || `Month-end deposit — start ${month} fresh`;
+  const done = [];
+  for (const b of ["zawya", "maadi"]) {
+    const moved = _bankPettyCashBranch(b, s, date, n);
+    if (moved > 0) done.push(`${b[0].toUpperCase() + b.slice(1)} ${money(moved)}`);
+  }
+  state.settings.petty_cash_last_reset_month = month;
+  delete state.settings.petty_cash_deposit_notified_month;
+  saveState();
+  toast(done.length ? `Banked & reset: ${done.join(" · ")}` : `Petty cash already at zero — ${month} marked fresh`);
+  render();
+}
+
 // ==============================================================
 // INVENTORY INTELLIGENCE ENGINE
 // ==============================================================
@@ -3915,6 +3989,34 @@ function pettyCashBalance(branch) {
     .sort((a,b) => a.at.localeCompare(b.at));
   const last = rows[rows.length - 1];
   return last ? Number(last.balance_after) || 0 : 0;
+}
+
+// ----- petty cash monthly budget & 60/40 auto-split -----
+// Estimated monthly petty cash across both branches (default 20,000 EGP) and the
+// Zawya share of any auto-split top-up (default 60% Zawya / 40% Maadi). Both are
+// editable in Settings → "Petty cash monthly budget & split".
+function pettyCashBudget() { return Number(state.settings.petty_cash_monthly_budget) || 20000; }
+function pettyCashZawyaPct() {
+  const z = state.settings.petty_cash_zawya_pct;
+  return z == null ? 60 : Math.min(100, Math.max(0, Number(z) || 0));
+}
+function pettyCashSplitPct(branch) {
+  const z = pettyCashZawyaPct();
+  return branch === "zawya" ? z : 100 - z;
+}
+// Split a total top-up amount into { zawya, maadi } whole-pound shares that sum exactly.
+function pettyCashSplitAmount(total) {
+  const t = Math.max(0, Number(total) || 0);
+  const zawya = Math.round(t * pettyCashZawyaPct() / 100);
+  return { zawya, maadi: t - zawya };
+}
+// Total top-ups logged for a branch (or "combined") in a YYYY-MM month.
+function pettyCashToppedUp(scope, month) {
+  return state.petty_cash
+    .filter(p => notTest(p) && p.type === "topup"
+      && (p.date || "").slice(0, 7) === month
+      && (scope === "combined" || p.branch === scope))
+    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 }
 
 // ----- router -----
@@ -4711,6 +4813,7 @@ routes.home = function (u) {
   try { scanReorderFollowUps(); } catch (e) { console.warn(e); }
   try { scanCashDepositReminders(); } catch (e) { console.warn(e); }
   try { scanCashDepositPenalties(); } catch (e) { console.warn(e); }
+  try { scanPettyCashMonthReset(); } catch (e) { console.warn(e); }
   try { runEngineAlertScan(); } catch (e) { console.warn(e); }
   const lowBoth = [
     ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
@@ -7027,6 +7130,27 @@ routes.petty_cash = function (u) {
   // Salaries & penalties live in their own routes — not visible here.
   const canSeeAll = (u.role === "owner" || u.role === "accountant");
 
+  // ---------- New-month reset banner ----------
+  // Petty cash starts each month at zero. If a new month has begun and cash is
+  // still in the floats, show the owner / head barista a prompt to bank it.
+  const _pcMonth      = new Date().toISOString().slice(0, 7);
+  const _pcLastReset  = state.settings.petty_cash_last_reset_month || _pcMonth;
+  const _pcCombined   = pettyCashBalance("maadi") + pettyCashBalance("zawya");
+  const _pcResetDue   = _pcLastReset < _pcMonth && _pcCombined > 0;
+  if (_pcResetDue && ["owner","accountant","head_barista"].includes(u.role)) {
+    const rb = el("div", { class: "card", style: { borderColor: "var(--bad)", background: "rgba(220,53,69,0.06)" } });
+    rb.appendChild(el("div", { style: { color: "var(--bad)", fontWeight: "800", marginBottom: "4px" } },
+      T(`🏦 New month — ${money(_pcCombined)} still in petty cash`, `🏦 شهر جديد — ${money(_pcCombined)} ما زالت في العهدة`)));
+    rb.appendChild(el("div", { class: "muted small" },
+      T(`Zawya ${money(pettyCashBalance("zawya"))} · Maadi ${money(pettyCashBalance("maadi"))}. Deposit last month's leftover cash at the bank, then reset so ${_pcMonth} starts at zero.`,
+        `زاوية ${money(pettyCashBalance("zawya"))} · معادي ${money(pettyCashBalance("maadi"))}. أودِع نقدية الشهر الماضي المتبقية في البنك ثم صفّر الرصيد ليبدأ ${_pcMonth} من الصفر.`)));
+    if (u.role === "owner" || u.role === "head_barista") {
+      rb.appendChild(el("button", { class: "btn", style: { marginTop: "10px" }, onClick: () => promptMonthReset() },
+        T("🏦 Deposit & start fresh","🏦 إيداع وبدء جديد")));
+    }
+    wrap.appendChild(rb);
+  }
+
   // ---------- Combined view ----------
   if (canSeeAll) {
     const combinedBal = pettyCashBalance("maadi") + pettyCashBalance("zawya");
@@ -7034,6 +7158,27 @@ routes.petty_cash = function (u) {
     combinedCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, T("Combined (Maadi + Zawya)","الإجمالي (معادي + زاوية)")));
     combinedCard.appendChild(el("div", { style: { fontSize: "30px", fontWeight: "700", color: combinedBal < PETTY_CASH_ALERT ? "var(--bad)" : "var(--ink)" } }, money(combinedBal)));
     combinedCard.appendChild(el("div", { class: "muted small" }, T(`Weekly outflow: ${money(weeklyExpenditure("combined"))}`, `المصروف الأسبوعي: ${money(weeklyExpenditure("combined"))}`)));
+    // Monthly budget + this month's top-ups
+    const _cbBudget = pettyCashBudget();
+    const _cbSplit  = pettyCashSplitAmount(_cbBudget);
+    const _cbTopped = pettyCashToppedUp("combined", _pcMonth);
+    combinedCard.appendChild(el("div", { class: "muted small" }, T(
+      `Monthly budget ${money(_cbBudget)} — Zawya ${money(_cbSplit.zawya)} (${pettyCashZawyaPct()}%) · Maadi ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`,
+      `الميزانية الشهرية ${money(_cbBudget)} — زاوية ${money(_cbSplit.zawya)} (${pettyCashZawyaPct()}%) · معادي ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`)));
+    combinedCard.appendChild(el("div", { class: "muted small" }, T(
+      `Topped up in ${_pcMonth}: ${money(_cbTopped)}`, `شُحن في ${_pcMonth}: ${money(_cbTopped)}`)));
+    // Owner actions: auto-split top-up + bank-everything month reset
+    if (u.role === "owner") {
+      const cbBtns = el("div", { class: "btn-row", style: { flexWrap: "wrap", gap: "8px", marginTop: "10px" } }, [
+        el("button", { class: "btn secondary", onClick: () => addSplitTopup() },
+          T(`➕ Top-up (auto-split ${pettyCashZawyaPct()}/${100 - pettyCashZawyaPct()})`, `➕ شحن (تقسيم تلقائي ${pettyCashZawyaPct()}/${100 - pettyCashZawyaPct()})`)),
+      ]);
+      if (combinedBal > 0) {
+        cbBtns.appendChild(el("button", { class: "btn ghost", onClick: () => promptMonthReset() },
+          T("🏦 Bank all & start fresh","🏦 إيداع الكل وبدء جديد")));
+      }
+      combinedCard.appendChild(cbBtns);
+    }
     if (combinedBal < PETTY_CASH_ALERT) {
       combinedCard.appendChild(el("div", { class: "banner-arch", style: { borderColor: "var(--bad)", color: "var(--bad)", fontWeight: "700", marginTop: "8px" } },
         T(`⚠ Total cash under ${money(PETTY_CASH_ALERT)} — top-up required.`, `⚠ إجمالي النقدية أقل من ${money(PETTY_CASH_ALERT)} — الشحن مطلوب.`)));
@@ -7072,6 +7217,10 @@ routes.petty_cash = function (u) {
       // EXPENDITURE — HEAD BARISTA ONLY (for their branch)
       btns.appendChild(el("button", { class: "btn secondary", onClick: () => addExpense(b) }, T("🧾 Expenditure","🧾 مصروف")));
     }
+    // Bank this branch's whole float — head barista (own branch) or owner
+    if (bal > 0 && (u.role === "owner" || (u.role === "head_barista" && u.branches.includes(b)))) {
+      btns.appendChild(el("button", { class: "btn ghost", onClick: () => bankBranch(b) }, T("🏦 Bank balance","🏦 إيداع الرصيد")));
+    }
     if (btns.children.length > 0) card.appendChild(btns);
 
     // Recent ledger rows — exclude salary & penalty (those have their own sections)
@@ -7086,10 +7235,11 @@ routes.petty_cash = function (u) {
       for (const r of rows) {
         const label = r.type === "expense" ? T(`Expense — ${r.note || ""}`, `مصروف — ${r.note || ""}`)
                     : r.type === "topup" ? T(`Top-up — ${r.note || ""}`, `شحن — ${r.note || ""}`)
+                    : r.type === "month_end_deposit" ? T(`🏦 Banked to bank — ${r.note || ""}`, `🏦 أُودِع في البنك — ${r.note || ""}`)
                     : `${r.type} — ${r.note || ""}`;
-        card.appendChild(el("div", { class: "kv" }, [
+        card.appendChild(el("div", { class: "kv", style: r.is_test ? { opacity: "0.65" } : {} }, [
           el("div", { class: "k" }, [
-            el("div", {}, label),
+            el("div", {}, [label, r.is_test ? el("span", { style: { marginInlineStart: "6px" } }, testBadge()) : null]),
             el("div", { class: "muted small" }, T(`${fmtDate(r.at)} · by ${r.by_name || r.by || "—"}`, `${fmtDate(r.at)} · بواسطة ${r.by_name || r.by || "—"}`)),
           ]),
           el("div", { class: "v", style: { color: r.amount < 0 ? "var(--bad)" : "var(--ok)" } }, money(r.amount)),
@@ -7152,6 +7302,78 @@ routes.petty_cash = function (u) {
         if (amt <= 0) return toast(T("Enter a positive amount","أدخل مبلغاً موجباً"), "error");
         pushEntry(branch, "expense", -amt, vals.note, vals.date);
         saveState(); toast(T(`Remaining: ${money(pettyCashBalance(branch))}`, `المتبقي: ${money(pettyCashBalance(branch))}`)); render();
+      }
+    });
+  }
+
+  // Owner: one top-up, auto-split Zawya/Maadi by the configured percentage.
+  function addSplitTopup() {
+    const zPct = pettyCashZawyaPct();
+    openPrompt({
+      title: T(`Top-up petty cash — auto-split Zawya ${zPct}% / Maadi ${100 - zPct}%`,
+               `شحن العهدة — تقسيم تلقائي زاوية ${zPct}% / معادي ${100 - zPct}%`),
+      fields: [
+        { key: "amount", label: T("Total amount (EGP)","إجمالي المبلغ (جنيه)"), type: "number", value: 0 },
+        { key: "date", label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "note", label: T("Note","ملاحظة"), type: "text", value: "Monthly top-up from Haïdi" },
+      ],
+      onSubmit: (vals) => {
+        const amt = Number(vals.amount) || 0;
+        if (amt <= 0) return toast(T("Enter a positive amount","أدخل مبلغاً موجباً"), "error");
+        const split = pettyCashSplitAmount(amt);
+        const s = stamp();
+        for (const b of ["zawya", "maadi"]) {
+          const share = split[b];
+          if (share <= 0) continue;
+          pushEntry(b, "topup", share, `${vals.note || "Top-up"} (auto-split ${zPct}/${100 - zPct})`, vals.date);
+          state.bank_ledger.push({
+            id: uuid(), date: vals.date, amount: -share, supplier: `Petty cash (${b})`, type: "petty_cash_topup",
+            by: s.by, by_name: s.by_name, at: s.at, note: `Auto-split top-up to ${b} head barista`,
+          });
+        }
+        delete state.settings.alerted_combined;
+        saveState();
+        toast(T(`Split: Zawya ${money(split.zawya)} · Maadi ${money(split.maadi)}`,
+                `تقسيم: زاوية ${money(split.zawya)} · معادي ${money(split.maadi)}`));
+        render();
+      }
+    });
+  }
+
+  // Head barista / owner: move one branch's whole float to the bank.
+  function bankBranch(branch) {
+    const bal = pettyCashBalance(branch);
+    if (bal <= 0) return toast(T("Nothing to bank","لا يوجد رصيد للإيداع"), "error");
+    openPrompt({
+      title: T(`Bank ${branch} petty cash — ${money(bal)}`, `إيداع عهدة ${branch === "maadi" ? "معادي" : "زاوية"} — ${money(bal)}`),
+      fields: [
+        { key: "date", label: T("Deposit date","تاريخ الإيداع"), type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "note", label: T("Note / slip ref","ملاحظة / رقم الإيصال"), type: "text", value: "" },
+      ],
+      onSubmit: (vals) => {
+        const s = stamp();
+        const moved = _bankPettyCashBranch(branch, s, vals.date,
+          vals.note ? `Banked — ${vals.note}` : `Remaining ${branch} petty cash banked`);
+        saveState();
+        toast(T(`Banked ${money(moved)} — ${branch} now at zero`, `أُودِع ${money(moved)} — ${branch === "maadi" ? "معادي" : "زاوية"} الآن صفر`));
+        render();
+      }
+    });
+  }
+
+  // Owner / head barista: bank both branches and mark the month started fresh.
+  function promptMonthReset() {
+    const total = pettyCashBalance("maadi") + pettyCashBalance("zawya");
+    openPrompt({
+      title: T(`Deposit ${money(total)} & start ${_pcMonth} fresh`, `إيداع ${money(total)} وبدء ${_pcMonth} من جديد`),
+      fields: [
+        { key: "date", label: T("Deposit date","تاريخ الإيداع"), type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "note", label: T("Note / slip ref","ملاحظة / رقم الإيصال"), type: "text", value: "" },
+      ],
+      onSubmit: (vals) => {
+        pettyCashMonthReset(vals.date, vals.note
+          ? `Month-end deposit — start ${_pcMonth} fresh (${vals.note})`
+          : `Month-end deposit — start ${_pcMonth} fresh`);
       }
     });
   }
@@ -9341,6 +9563,7 @@ routes.bank = function (u) {
       purchase_credit_card: "Credit card",
       petty_cash_topup: "Petty cash top-up",
       maadi_deposit: "Maadi ATM deposit",
+      cash_deposit: "Cash deposit",
       manual: "Manual",
     }[r.type] || r.type;
     return el("div", { class: "row" }, [
@@ -12741,6 +12964,43 @@ routes.settings = function (u) {
     ]));
   }
   wrap.appendChild(pc);
+
+  // ── Petty cash monthly budget & auto-split ──
+  const pcb = el("div", { class: "card", style: { marginTop: "14px" } });
+  pcb.appendChild(el("h2", {}, "Petty cash monthly budget & split"));
+  pcb.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    "Estimated monthly petty cash across both branches, and the Zawya share used when the owner does an auto-split top-up. Petty cash starts each month at zero — any leftover is banked first from the Petty Cash screen."));
+  const pcbBudgetIn = el("input", { type: "number", value: pettyCashBudget(), style: { maxWidth: "160px" } });
+  const pcbZawyaIn  = el("input", { type: "number", min: "0", max: "100", value: pettyCashZawyaPct(), style: { maxWidth: "90px" } });
+  const pcbPreview  = el("div", { class: "muted small", style: { marginTop: "8px" } });
+  function pcbDraw() {
+    const b = Math.max(0, Number(pcbBudgetIn.value) || 0);
+    const z = Math.min(100, Math.max(0, Number(pcbZawyaIn.value) || 0));
+    const zAmt = Math.round(b * z / 100);
+    pcbPreview.textContent = `Zawya ${money(zAmt)} (${z}%) · Maadi ${money(b - zAmt)} (${100 - z}%)`;
+  }
+  pcbBudgetIn.addEventListener("input", pcbDraw);
+  pcbZawyaIn.addEventListener("input", pcbDraw);
+  pcbDraw();
+  pcb.appendChild(el("div", { class: "kv" }, [
+    el("div", { class: "k" }, "Monthly budget (EGP, both branches)"),
+    el("div", { class: "v" }, pcbBudgetIn),
+  ]));
+  pcb.appendChild(el("div", { class: "kv" }, [
+    el("div", { class: "k" }, "Zawya share (%) — Maadi gets the rest"),
+    el("div", { class: "v" }, pcbZawyaIn),
+  ]));
+  pcb.appendChild(pcbPreview);
+  pcb.appendChild(el("button", {
+    class: "btn secondary", style: { marginTop: "10px" },
+    onClick: () => {
+      state.settings.petty_cash_monthly_budget = Math.max(0, Number(pcbBudgetIn.value) || 20000);
+      state.settings.petty_cash_zawya_pct      = Math.min(100, Math.max(0, Number(pcbZawyaIn.value) || 60));
+      saveState({ immediate: true });
+      toast("Petty cash budget & split saved ✓");
+    },
+  }, "Save budget & split"));
+  wrap.appendChild(pcb);
 
   // ── External / Outsourced Team ──
   const extCard = el("div", { class: "card", style: { marginTop: "14px" } });
@@ -16316,15 +16576,17 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>Petty Cash</strong> to see the cash float kept at Maadi and Zawya for small day-to-day spending.",
         "Every entry (a purchase paid from petty cash, a top-up, or an expenditure) stores its own <strong>balance after</strong> — the number you see is simply the most recent entry's balance, not a live sum of everything.",
-        "<strong>Owner:</strong> tap <strong>➕ Top-up</strong> to add cash to a branch's float. This also logs a matching outflow in the Bank Ledger, since the cash came out of the bank.",
+        "<strong>Owner:</strong> tap <strong>➕ Top-up</strong> on a branch to add cash to that float, or <strong>➕ Top-up (auto-split)</strong> on the combined card to enter one amount that is divided automatically — by default 60% Zawya / 40% Maadi (editable in Settings, along with the 20,000 EGP monthly estimate). Either way a matching outflow is logged in the Bank Ledger.",
         "<strong>Head barista:</strong> tap <strong>🧾 Expenditure</strong> to log cash spent from your branch's float that isn't a formal purchase.",
+        "<strong>Fresh start every month:</strong> petty cash is meant to begin each month at zero. On the 1st, if cash is left over, the head barista is notified to bank it and a red banner appears with <strong>🏦 Deposit &amp; start fresh</strong> — this moves both floats to the Bank Ledger and resets the month. <strong>🏦 Bank balance</strong> on a single branch card does the same for just that branch.",
         "A red low-cash banner appears automatically once a branch's balance drops below 1,000 EGP.",
       ],
       ar_steps: [
         "اضغط على <strong>العهدة النثرية</strong> لعرض الكاش المخصص للمعادي وزاوية للمصاريف اليومية الصغيرة.",
         "كل قيد (مشترى مدفوع من النثرية، تعبئة، أو مصروف) يخزّن <strong>رصيده بعد القيد</strong> — الرقم الذي تراه هو رصيد آخر قيد فقط، وليس مجموعاً حياً لكل شيء.",
-        "<strong>المالك:</strong> اضغط <strong>➕ تعبئة</strong> لإضافة كاش لعهدة أحد الفروع. يُسجَّل تلقائياً قيد سالب مطابق في سجل البنك، لأن الكاش خرج من البنك.",
+        "<strong>المالك:</strong> اضغط <strong>➕ تعبئة</strong> على فرع لإضافة كاش لعهدته، أو <strong>➕ تعبئة (تقسيم تلقائي)</strong> على البطاقة المجمّعة لإدخال مبلغ واحد يُقسَّم تلقائياً — افتراضياً 60% زاوية / 40% معادي (قابل للتعديل في الإعدادات مع تقدير 20,000 جنيه الشهري). في الحالتين يُسجَّل قيد سالب مطابق في سجل البنك.",
         "<strong>رئيس البريستا:</strong> اضغط <strong>🧾 مصروف</strong> لتسجيل كاش أُنفق من عهدة فرعك وليس مشترى رسمي.",
+        "<strong>بداية جديدة كل شهر:</strong> يُفترض أن تبدأ العهدة كل شهر من الصفر. في اليوم الأول، إذا تبقّى كاش، يُنبَّه رئيس البريستا لإيداعه ويظهر شريط أحمر مع <strong>🏦 إيداع وبدء جديد</strong> — ينقل العهدتين إلى سجل البنك ويصفّر الشهر. زر <strong>🏦 إيداع الرصيد</strong> على بطاقة فرع واحد يفعل نفس الشيء لهذا الفرع فقط.",
         "يظهر شريط تحذير أحمر تلقائياً عندما يقل رصيد أي فرع عن 1,000 جنيه.",
       ],
     },
