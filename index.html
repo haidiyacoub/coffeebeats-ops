@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260908-314 -->
+<!-- CB_BUILD:20260908-629 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260908-314";
+  var BUILD = "20260908-629";
   (function() {
     function checkFresh() {
       try {
@@ -1087,6 +1087,7 @@ function defaultState() {
       { id: uuid(), branch: "zawya", date: "2026-04-01", type: "topup", amount: 0, balance_after: 0, ref: "opening", by: "seed", at: "2026-04-01T00:00:00Z", note: "Opening balance — set in Settings" },
     ],
     bank_ledger: [],
+    equipment: [],            // fixed-asset register
     sales: [],
     shifts: [],
     photo_log: [],            // { id, url, name, context, at, form, branch }
@@ -1206,6 +1207,7 @@ function migrateState(s) {
   s.overhead_custom_cats    = s.overhead_custom_cats    || []; // [{value,label,updated_at,updated_by,deleted}] — owner-added recurring line items
   s.overhead_cat_overrides  = s.overhead_cat_overrides  || {}; // built-in category value → { label?, hidden?, updated_at }
   s.maintenance_config      = s.maintenance_config      || {}; // engineers + schedule anchors for equipment maintenance
+  s.equipment               = s.equipment               || []; // fixed-asset register — [{id,name,category,branch,purchase_date,cost,supplier,model_serial,useful_life_years,status,paid_from,note,by,by_name,at,updated_at}]
   s.salary_snapshots        = s.salary_snapshots        || {}; // userId → {month → amount}
   s.purchase_units         = s.purchase_units         || {}; // inv_item_id → { unit_label, pack_size_canonical }
   s.inventory_alerts = s.inventory_alerts || {}; // inv_item_id → { reorder_threshold_days }
@@ -1541,6 +1543,7 @@ const STATE_CHUNKS = {
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves", "deleted_salary_loans", "deleted_sick_leave_deductions", "deleted_leaves", "deleted_salaries"],
   hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "overhead_custom_cats", "overhead_cat_overrides", "maintenance_config", "loan_payments"],
+  equipment:     ["equipment"],   // fixed-asset register — small/bounded, generic merge-by-id + tombstones. Its paid-from side-effects write into petty_cash / bank_ledger, which sync via the "purchases" chunk.
   media:         ["photo_log", "assets"],
   kpi:           ["kpi_manual", "kpi_logs", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications", "deleted_customer_feedback"],
   tombstones:    ["deleted_ids"],   // ids deleted on any device — unioned, applied on every merge/pull
@@ -2875,6 +2878,7 @@ async function pullFromFirestore() {
     startLogShardSyncListener(); // covers shift-close, cleaning log, sign-in stamp, inventory snapshot
     startConfigSyncListener();   // salary_config, hb_incentive_config, settings
     startHrMetaSyncListener();   // barista dates, salary snapshots, ID uploads
+    startEquipmentSyncListener(); // fixed-asset register
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -3026,6 +3030,7 @@ const startHrMetaSyncListener      = _makeLiveListener("hr_meta", "hr_meta (date
 // log_shard_index is updated whenever a shift-close, cleaning log, sign-in stamp,
 // or inventory snapshot is added — one listener covers all four month-sharded arrays.
 const startLogShardSyncListener    = _makeLiveListener("log_shard_index", "logs (shift-close/cleaning/signin/snapshot)");
+const startEquipmentSyncListener   = _makeLiveListener("equipment", "equipment (fixed-asset register)");
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
@@ -4202,6 +4207,7 @@ const ROLE_ACCESS = {
   // Per Haïdi: head barista = all barista + salaries + penalties + Maadi deposits + petty cash + roster (edit)
   head_barista: ["home","shifts","snapshot_new","waste_new","waste_list","purchase_new","purchase_list",
                  "petty_cash","bank","salaries","penalties","maadi_deposits","roster",
+                 "overhead_log_new",
                  "shift_close_new","shift_close_list","cleaning_log_new","cleaning_log_list",
                  "signin_stamp_new","signin_stamp_list",
                  "leave_new","leave_list",
@@ -4817,6 +4823,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("📦", T("Inventory Count","جرد المخزون"), T("Monthly / adjust","شهري / تعديل"), () => go("snapshot_new")));
     tiles.appendChild(tile("🧾", T("Record Purchase","تسجيل مشترى"), T("Upload receipt","رفع الفاتورة"), () => go("purchase_new")));
     tiles.appendChild(tile("📑", T("Purchases Log","سجل المشتريات"), T("View receipts","عرض الفواتير"), () => go("purchase_list")));
+    tiles.appendChild(tile("🧾", T("Overheads & Maintenance","المصروفات والصيانة"), T("Log one-off costs · maintenance & pest-control schedule","تسجيل مصروفات لمرة واحدة · جدول الصيانة ومكافحة الحشرات"), () => go("overhead_log_new")));
     tiles.appendChild(tile("📋", T("My Shifts","شيفتاتي"), T("History","السجل"), () => go("shifts")));
     tiles.appendChild(tile("🔒", T("Shift Close","إغلاق الشيفت"), T("End-of-shift summary","ملخص نهاية الشيفت"), () => go("shift_close_new")));
     tiles.appendChild(tile("🧹", T("Cleaning Log","سجل النظافة"), T("Upload checklist photo","رفع صورة قائمة التحقق"), () => go("cleaning_log_new")));
@@ -4917,6 +4924,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🏧", "ATM Deposit", "Weekly cash → bank", () => go("maadi_deposits")));
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
+    tiles.appendChild(tile("🛠️", "Equipment Register", "Fixed assets · purchase date & value", () => go("equipment_register")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(sectionHeader("HR"));
@@ -8708,6 +8716,12 @@ const OVERHEAD_CATEGORIES = [
   { value: "gardener_salary",   label: "Gardener salary",    recurring: true  },
   { value: "loan_payment",      label: "Loan payment",       recurring: true  },
   { value: "marketing_fees",    label: "Marketing fees",     recurring: false },
+  { value: "sponsorship",       label: "Sponsorship",        recurring: false },
+  { value: "uniforms",          label: "Uniforms",           recurring: false },
+  { value: "software",          label: "Software / subscriptions", recurring: false },
+  { value: "agency_design",     label: "Agency / design",    recurring: false },
+  { value: "legal_fees",        label: "Legal fees",         recurring: false },
+  { value: "equipment_repair",  label: "Equipment repair",   recurring: false },
   { value: "misc",              label: "Miscellaneous (specify)", recurring: false },
   // Maintenance & pest control — logged through the dedicated Maintenance card
   // (see drawMaintenanceCard), never the generic "marketing/misc" prompt.
@@ -8798,6 +8812,299 @@ function maintenanceDueInMonth(planValue, month) {
 
 function presetKey(branch, category) { return `${branch}|${category}`; }
 function monthlyKey(branch, category, month) { return `${branch}|${category}|${month}`; }
+
+// ── Maintenance & pest-control card (module-level, shared) ─────────────
+// Used by the owner Overheads screen (Maintenance sub-tab) and by the
+// head-barista maintenance route. `redraw` runs after any log / delete /
+// engineer edit. `branches` limits which branch columns render.
+function renderMaintenanceCard(month, redraw, branches) {
+  const _branches = (branches && branches.length) ? branches.filter(b => b==="maadi"||b==="zawya") : ["maadi","zawya"];
+  redraw = (typeof redraw === "function") ? redraw : (()=>{});
+  function drawMaintenanceCard() {
+    const card = el("div", { class:"card", style:{ marginTop:"12px" } });
+    card.appendChild(el("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"6px", flexWrap:"wrap", gap:"6px" } }, [
+      el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700" } }, "🔧 Maintenance & pest control"),
+      el("button", { class:"btn ghost", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px" }, onClick: editMaintEngineers }, "✎ Engineers"),
+    ]));
+    card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px", fontSize:"12px" } },
+      "Equipment maintenance runs every 2 months (1 & 2 alternate → one per month). Pest control every 3 months. Logged amounts feed each branch's overheads."));
+
+    for (const plan of MAINTENANCE_PLANS) {
+      const due = maintenanceDueInMonth(plan.value, month);
+      const eng = maintEngineer(plan.value);
+      const cadence = `every ${plan.every_months} months`;
+
+      const row = el("div", { style:{ borderBottom:"1px solid var(--border)", paddingBottom:"10px", marginBottom:"10px" } });
+      row.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:"8px", flexWrap:"wrap" } }, [
+        el("div", { style:{ flex:"1 1 200px" } }, [
+          el("div", { style:{ fontWeight:"600", fontSize:"14px" } }, plan.label),
+          el("div", { class:"muted small", style:{ fontSize:"12px" } }, `${plan.desc} · ${cadence}`),
+          el("div", { class:"muted small", style:{ fontSize:"12px" } }, eng.name ? `👷 ${eng.name}${eng.phone ? " · " + eng.phone : ""}` : "👷 No engineer set"),
+        ]),
+        due
+          ? el("span", { style:{ background:"var(--warn)", color:"#fff", borderRadius:"6px", padding:"3px 8px", fontSize:"11px", fontWeight:"700", whiteSpace:"nowrap" } }, "Due this month")
+          : el("span", { class:"muted small", style:{ fontSize:"11px", whiteSpace:"nowrap" } }, "Not scheduled"),
+      ]));
+
+      // Per-branch status + log buttons
+      const branchRow = el("div", { style:{ display:"grid", gridTemplateColumns: _branches.length>1?"1fr 1fr":"1fr", gap:"8px", marginTop:"8px" } });
+      for (const br of _branches) {
+        const logged = state.overheads.filter(o =>
+          o.branch === br && o.category === plan.value &&
+          ((o.month || (o.date||"").slice(0,7)) === month));
+        const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
+        const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
+        cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
+        if (logged.length) {
+          cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--ok)", fontSize:"14px" } }, `✓ ${money(total)}`));
+          for (const o of logged) {
+            cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
+              el("div", { class:"muted small", style:{ flex:"1" } }, (o.paid_on || (o.date||"").slice(0,10)) + (o.equipment && o.equipment.length ? ` · ${o.equipment.length} item${o.equipment.length>1?"s":""}` : "")),
+              el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
+                if (!confirm("Delete this maintenance entry?")) return;
+                state.overheads = state.overheads.filter(x => x.id !== o.id);
+                saveState(); toast("Deleted"); redraw();
+              }}, "🗑"),
+            ]));
+          }
+        } else {
+          cell.appendChild(el("div", { class:"muted small", style:{ fontSize:"12px", marginBottom:"4px" } }, due ? "Not logged yet" : "—"));
+        }
+        cell.appendChild(el("button", { class:"btn secondary", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", width:"100%", marginTop:"6px" }, onClick:() => logMaintenance(br, plan.value) },
+          logged.length ? "➕ Add" : "➕ Log"));
+        branchRow.appendChild(cell);
+      }
+      row.appendChild(branchRow);
+      card.appendChild(row);
+    }
+
+    // ── Emergency maintenance — unscheduled repairs, logged any time ──
+    const emRow = el("div", { style:{ paddingBottom:"4px" } });
+    emRow.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:"8px", flexWrap:"wrap" } }, [
+      el("div", { style:{ flex:"1 1 200px" } }, [
+        el("div", { style:{ fontWeight:"600", fontSize:"14px" } }, "🚨 Emergency maintenance"),
+        el("div", { class:"muted small", style:{ fontSize:"12px" } }, "Unscheduled breakdowns & repairs — log any time, not tied to the cadence above."),
+      ]),
+    ]));
+    const emBranchRow = el("div", { style:{ display:"grid", gridTemplateColumns: _branches.length>1?"1fr 1fr":"1fr", gap:"8px", marginTop:"8px" } });
+    for (const br of _branches) {
+      const logged = state.overheads.filter(o =>
+        o.branch === br && o.category === "maintenance_emergency" &&
+        ((o.month || (o.date||"").slice(0,7)) === month));
+      const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
+      const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
+      cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
+      if (logged.length) {
+        cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--warn)", fontSize:"14px" } }, `✓ ${money(total)}`));
+        for (const o of logged) {
+          cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
+            el("div", { class:"muted small", style:{ flex:"1" } }, `${o.paid_on || (o.date||"").slice(0,10)}${o.label ? " · " + o.label : ""}`),
+            el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
+              if (!confirm("Delete this maintenance entry?")) return;
+              state.overheads = state.overheads.filter(x => x.id !== o.id);
+              saveState(); toast("Deleted"); redraw();
+            }}, "🗑"),
+          ]));
+        }
+      } else {
+        cell.appendChild(el("div", { class:"muted small", style:{ fontSize:"12px", marginBottom:"4px" } }, "—"));
+      }
+      cell.appendChild(el("button", { class:"btn secondary", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", width:"100%", marginTop:"6px" }, onClick:() => logEmergencyMaintenance(br) },
+        logged.length ? "➕ Add" : "🚨 Log emergency repair"));
+      emBranchRow.appendChild(cell);
+    }
+    emRow.appendChild(emBranchRow);
+    card.appendChild(emRow);
+
+    return card;
+  }
+
+  function logEmergencyMaintenance(br) {
+    const today = new Date().toISOString().slice(0,10);
+
+    const body = el("div", {}, [ el("h2", {}, `🚨 Emergency maintenance — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
+    body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `Unscheduled breakdown or repair · ${month}`));
+
+    body.appendChild(el("label", {}, "What broke / what was fixed (required)"));
+    const issueInp = el("input", { type:"text", value:"", placeholder:"e.g. coffee machine leak, fridge stopped cooling" });
+    body.appendChild(issueInp);
+
+    // Equipment checkboxes (optional — flag which equipment was involved)
+    const checks = [];
+    body.appendChild(el("label", {}, "Equipment involved (optional)"));
+    const eqWrap = el("div", { style:{ display:"grid", gap:"6px", marginBottom:"6px" } });
+    for (const ev of MAINTENANCE_EQUIPMENT) {
+      const lbl = el("label", { style:{ display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", fontSize:"14px" } });
+      const cb = el("input", { type:"checkbox" });
+      cb.checked = false;
+      cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--warn)";
+      cb.dataset.equip = ev.value;
+      checks.push(cb);
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(ev.label));
+      eqWrap.appendChild(lbl);
+    }
+    body.appendChild(eqWrap);
+
+    body.appendChild(el("label", {}, "Engineer name"));
+    const engName = el("input", { type:"text", value:"" });
+    body.appendChild(engName);
+    body.appendChild(el("label", {}, "Engineer phone"));
+    const engPhone = el("input", { type:"tel", value:"" });
+    body.appendChild(engPhone);
+
+    body.appendChild(el("label", {}, "Amount (EGP)"));
+    const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
+    body.appendChild(amountInp);
+    body.appendChild(el("label", {}, "Date"));
+    const dateInp = el("input", { type:"date", value: today });
+    body.appendChild(dateInp);
+    body.appendChild(el("label", {}, "Note"));
+    const noteInp = el("input", { type:"text", value:"" });
+    body.appendChild(noteInp);
+
+    const actions = el("div", { class:"sticky-actions" });
+    actions.appendChild(el("button", { class:"btn", onClick:() => {
+      const issue = (issueInp.value || "").trim();
+      if (!issue) return toast("Describe what broke / was fixed", "error");
+      const amt = Number(amountInp.value) || 0;
+      if (amt <= 0) return toast("Enter a positive amount", "error");
+      const equipment = checks.filter(c => c.checked).map(c => c.dataset.equip);
+      const s = stamp();
+      const engN = (engName.value || "").trim();
+      state.overheads.push({
+        id: uuid(),
+        branch: br, category: "maintenance_emergency",
+        label: issue,
+        equipment,
+        engineer: engN,
+        engineer_phone: (engPhone.value || "").trim(),
+        amount: amt,
+        month,
+        date: dateInp.value || today,
+        paid: true,
+        paid_on: dateInp.value || today,
+        note: (noteInp.value || "").trim(),
+        by: s.by, by_name: s.by_name, at: s.at,
+      });
+      $("#modal-root").innerHTML = "";
+      saveState(); toast("Emergency maintenance logged"); redraw();
+    } }, "Save"));
+    body.appendChild(actions);
+    openSheet(body);
+  }
+
+  function logMaintenance(br, planValue) {
+    const plan = maintPlan(planValue) || {};
+    const eng = maintEngineer(planValue);
+    const today = new Date().toISOString().slice(0,10);
+
+    const body = el("div", {}, [ el("h2", {}, `${plan.label} — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
+    body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `${plan.desc} · ${month}`));
+
+    // Engineer
+    body.appendChild(el("label", {}, "Engineer name"));
+    const engName = el("input", { type:"text", value: eng.name });
+    body.appendChild(engName);
+    body.appendChild(el("label", {}, "Engineer phone"));
+    const engPhone = el("input", { type:"tel", value: eng.phone });
+    body.appendChild(engPhone);
+
+    // Equipment checkboxes (skip for pest control, which has none)
+    const checks = [];
+    if (plan.equipment && plan.equipment.length) {
+      body.appendChild(el("label", {}, "Equipment maintained"));
+      const eqWrap = el("div", { style:{ display:"grid", gap:"6px", marginBottom:"6px" } });
+      for (const ev of plan.equipment) {
+        const lbl = el("label", { style:{ display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", fontSize:"14px" } });
+        const cb = el("input", { type:"checkbox" });
+        cb.checked = true;
+        cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--ok)";
+        cb.dataset.equip = ev;
+        checks.push(cb);
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(equipLabel(ev)));
+        eqWrap.appendChild(lbl);
+      }
+      body.appendChild(eqWrap);
+    }
+
+    body.appendChild(el("label", {}, "Amount (EGP)"));
+    const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
+    body.appendChild(amountInp);
+    body.appendChild(el("label", {}, "Date"));
+    const dateInp = el("input", { type:"date", value: today });
+    body.appendChild(dateInp);
+    body.appendChild(el("label", {}, "Note"));
+    const noteInp = el("input", { type:"text", value:"" });
+    body.appendChild(noteInp);
+
+    const actions = el("div", { class:"sticky-actions" });
+    actions.appendChild(el("button", { class:"btn", onClick:() => {
+      const amt = Number(amountInp.value) || 0;
+      if (amt <= 0) return toast("Enter a positive amount", "error");
+      const equipment = checks.filter(c => c.checked).map(c => c.dataset.equip);
+      if (plan.equipment && plan.equipment.length && equipment.length === 0) {
+        return toast("Select at least one piece of equipment", "error");
+      }
+      const s = stamp();
+      const engN = (engName.value || "").trim();
+      state.overheads.push({
+        id: uuid(),
+        branch: br, category: planValue,
+        label: engN,
+        equipment,
+        engineer: engN,
+        engineer_phone: (engPhone.value || "").trim(),
+        amount: amt,
+        month,
+        date: dateInp.value || today,
+        paid: true,
+        paid_on: dateInp.value || today,
+        note: (noteInp.value || "").trim(),
+        by: s.by, by_name: s.by_name, at: s.at,
+      });
+      // Persist any engineer edits as the new default for this plan.
+      state.maintenance_config = state.maintenance_config || {};
+      state.maintenance_config.engineers = state.maintenance_config.engineers || {};
+      state.maintenance_config.engineers[planValue] = { name: engN, phone: (engPhone.value || "").trim() };
+      $("#modal-root").innerHTML = "";
+      saveState(); toast(`${plan.label} logged`); redraw();
+    } }, "Save"));
+    body.appendChild(actions);
+    openSheet(body);
+  }
+
+  function editMaintEngineers() {
+    openPrompt({
+      title: "Maintenance engineers & schedule",
+      fields: [
+        { key: "m1_name",  label: "Maintenance 1 (Cooling) — engineer", type: "text", value: maintEngineer("maintenance_1").name },
+        { key: "m1_phone", label: "Maintenance 1 — phone", type: "tel", value: maintEngineer("maintenance_1").phone },
+        { key: "m2_name",  label: "Maintenance 2 (Machines) — engineer", type: "text", value: maintEngineer("maintenance_2").name },
+        { key: "m2_phone", label: "Maintenance 2 — phone", type: "tel", value: maintEngineer("maintenance_2").phone },
+        { key: "ic_name",  label: "Insect / pest control — engineer", type: "text", value: maintEngineer("insect_control").name },
+        { key: "ic_phone", label: "Insect / pest control — phone", type: "tel", value: maintEngineer("insect_control").phone },
+        { key: "anchor",   label: "Maintenance 1 due-month anchor (YYYY-MM)", type: "month", value: (state.maintenance_config||{}).anchor_month || "2026-06" },
+        { key: "ianchor",  label: "Pest control due-month anchor (YYYY-MM)", type: "month", value: (state.maintenance_config||{}).insect_anchor_month || (state.maintenance_config||{}).anchor_month || "2026-06" },
+      ],
+      onSubmit: (vals) => {
+        state.maintenance_config = state.maintenance_config || {};
+        state.maintenance_config.engineers = {
+          maintenance_1:  { name: (vals.m1_name||"").trim(), phone: (vals.m1_phone||"").trim() },
+          maintenance_2:  { name: (vals.m2_name||"").trim(), phone: (vals.m2_phone||"").trim() },
+          insect_control: { name: (vals.ic_name||"").trim(), phone: (vals.ic_phone||"").trim() },
+        };
+        if (vals.anchor)  state.maintenance_config.anchor_month = vals.anchor;
+        if (vals.ianchor) state.maintenance_config.insect_anchor_month = vals.ianchor;
+        saveState(); toast("Maintenance settings saved"); redraw();
+      }
+    });
+  }
+
+  return drawMaintenanceCard();
+}
+
 
 function wasActiveInMonth(uid, month) {
   const events = ((state.barista_dates || {})[uid] || [])
@@ -9342,7 +9649,7 @@ routes.overheads = function (u) {
     for (const br of ["maadi","zawya"]) twoCols.appendChild(drawBranchPanel(br));
     secMonthly.appendChild(twoCols);
     secSalary.innerHTML = ""; secSalary.appendChild(drawSalaryCard());
-    secMaint.innerHTML  = ""; secMaint.appendChild(drawMaintenanceCard());
+    secMaint.innerHTML  = ""; secMaint.appendChild(renderMaintenanceCard(month, draw));
     secLoan.innerHTML   = ""; secLoan.appendChild(drawLoanCard());
     secTotals.innerHTML = ""; secTotals.appendChild(drawTotalsCard());
   }
@@ -9406,15 +9713,28 @@ routes.overheads = function (u) {
       !isRecurringOverheadCat(o.category)
     ).sort((a,b) => (b.at||"").localeCompare(a.at||""));
     if (varRows.length > 0) {
-      panel.appendChild(el("div", { class:"muted small", style:{ marginBottom:"4px", fontWeight:"600" } }, "Variable"));
+      // Header names the section by what's in it: "Marketing" when every line is a
+      // marketing entry (the common case), otherwise the neutral "Variable".
+      const varHeader = varRows.every(o => o.category === "marketing_fees") ? "Marketing" : "Variable";
+      panel.appendChild(el("div", { class:"muted small", style:{ marginBottom:"4px", fontWeight:"600" } }, varHeader));
       for (const r of varRows) {
         const catLabel = overheadCatLabel(r.category);
+        const shared = !!r.link_id;   // one half of a "Both branches" split
         panel.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"12px", marginBottom:"4px" } }, [
-          el("div", { style:{ flex:"1" } }, `${catLabel}${r.label ? " — "+r.label : ""}`),
+          el("div", { style:{ flex:"1" } }, `${shared ? "🔀 " : ""}${catLabel}${r.label ? " — "+r.label : ""}`),
           el("div", { style:{ fontWeight:"700", marginRight:"6px" } }, money(r.amount)),
           el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"2px 6px", minHeight:"22px" }, onClick:() => {
-            if (!confirm("Delete this entry?")) return;
-            state.overheads = state.overheads.filter(x => x.id !== r.id);
+            if (shared) {
+              if (!confirm("This is one half of a shared cost split across both branches. Delete both linked entries (and any petty-cash / bank record)?")) return;
+            } else {
+              if (!confirm("Delete this entry (and any petty-cash / bank record)?")) return;
+            }
+            const gone = new Set(
+              shared ? state.overheads.filter(x => x.link_id === r.link_id).map(x => x.id) : [r.id]
+            );
+            state.overheads   = state.overheads.filter(x => !gone.has(x.id));
+            state.petty_cash  = state.petty_cash.filter(x => !(x.ref && gone.has(x.ref)));
+            state.bank_ledger = state.bank_ledger.filter(x => !(x.ref && gone.has(x.ref)));
             saveState(); toast("Deleted"); draw();
           }}, "🗑"),
         ]));
@@ -9587,104 +9907,6 @@ routes.overheads = function (u) {
     return card;
   }
 
-  function drawMaintenanceCard() {
-    const card = el("div", { class:"card", style:{ marginTop:"12px" } });
-    card.appendChild(el("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"6px", flexWrap:"wrap", gap:"6px" } }, [
-      el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700" } }, "🔧 Maintenance & pest control"),
-      el("button", { class:"btn ghost", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px" }, onClick: editMaintEngineers }, "✎ Engineers"),
-    ]));
-    card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px", fontSize:"12px" } },
-      "Equipment maintenance runs every 2 months (1 & 2 alternate → one per month). Pest control every 3 months. Logged amounts feed each branch's overheads."));
-
-    for (const plan of MAINTENANCE_PLANS) {
-      const due = maintenanceDueInMonth(plan.value, month);
-      const eng = maintEngineer(plan.value);
-      const cadence = `every ${plan.every_months} months`;
-
-      const row = el("div", { style:{ borderBottom:"1px solid var(--border)", paddingBottom:"10px", marginBottom:"10px" } });
-      row.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:"8px", flexWrap:"wrap" } }, [
-        el("div", { style:{ flex:"1 1 200px" } }, [
-          el("div", { style:{ fontWeight:"600", fontSize:"14px" } }, plan.label),
-          el("div", { class:"muted small", style:{ fontSize:"12px" } }, `${plan.desc} · ${cadence}`),
-          el("div", { class:"muted small", style:{ fontSize:"12px" } }, eng.name ? `👷 ${eng.name}${eng.phone ? " · " + eng.phone : ""}` : "👷 No engineer set"),
-        ]),
-        due
-          ? el("span", { style:{ background:"var(--warn)", color:"#fff", borderRadius:"6px", padding:"3px 8px", fontSize:"11px", fontWeight:"700", whiteSpace:"nowrap" } }, "Due this month")
-          : el("span", { class:"muted small", style:{ fontSize:"11px", whiteSpace:"nowrap" } }, "Not scheduled"),
-      ]));
-
-      // Per-branch status + log buttons
-      const branchRow = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px", marginTop:"8px" } });
-      for (const br of ["maadi","zawya"]) {
-        const logged = state.overheads.filter(o =>
-          o.branch === br && o.category === plan.value &&
-          ((o.month || (o.date||"").slice(0,7)) === month));
-        const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
-        const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
-        cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
-        if (logged.length) {
-          cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--ok)", fontSize:"14px" } }, `✓ ${money(total)}`));
-          for (const o of logged) {
-            cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
-              el("div", { class:"muted small", style:{ flex:"1" } }, (o.paid_on || (o.date||"").slice(0,10)) + (o.equipment && o.equipment.length ? ` · ${o.equipment.length} item${o.equipment.length>1?"s":""}` : "")),
-              el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
-                if (!confirm("Delete this maintenance entry?")) return;
-                state.overheads = state.overheads.filter(x => x.id !== o.id);
-                saveState(); toast("Deleted"); draw();
-              }}, "🗑"),
-            ]));
-          }
-        } else {
-          cell.appendChild(el("div", { class:"muted small", style:{ fontSize:"12px", marginBottom:"4px" } }, due ? "Not logged yet" : "—"));
-        }
-        cell.appendChild(el("button", { class:"btn secondary", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", width:"100%", marginTop:"6px" }, onClick:() => logMaintenance(br, plan.value) },
-          logged.length ? "➕ Add" : "➕ Log"));
-        branchRow.appendChild(cell);
-      }
-      row.appendChild(branchRow);
-      card.appendChild(row);
-    }
-
-    // ── Emergency maintenance — unscheduled repairs, logged any time ──
-    const emRow = el("div", { style:{ paddingBottom:"4px" } });
-    emRow.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:"8px", flexWrap:"wrap" } }, [
-      el("div", { style:{ flex:"1 1 200px" } }, [
-        el("div", { style:{ fontWeight:"600", fontSize:"14px" } }, "🚨 Emergency maintenance"),
-        el("div", { class:"muted small", style:{ fontSize:"12px" } }, "Unscheduled breakdowns & repairs — log any time, not tied to the cadence above."),
-      ]),
-    ]));
-    const emBranchRow = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px", marginTop:"8px" } });
-    for (const br of ["maadi","zawya"]) {
-      const logged = state.overheads.filter(o =>
-        o.branch === br && o.category === "maintenance_emergency" &&
-        ((o.month || (o.date||"").slice(0,7)) === month));
-      const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
-      const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
-      cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
-      if (logged.length) {
-        cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--warn)", fontSize:"14px" } }, `✓ ${money(total)}`));
-        for (const o of logged) {
-          cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
-            el("div", { class:"muted small", style:{ flex:"1" } }, `${o.paid_on || (o.date||"").slice(0,10)}${o.label ? " · " + o.label : ""}`),
-            el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
-              if (!confirm("Delete this maintenance entry?")) return;
-              state.overheads = state.overheads.filter(x => x.id !== o.id);
-              saveState(); toast("Deleted"); draw();
-            }}, "🗑"),
-          ]));
-        }
-      } else {
-        cell.appendChild(el("div", { class:"muted small", style:{ fontSize:"12px", marginBottom:"4px" } }, "—"));
-      }
-      cell.appendChild(el("button", { class:"btn secondary", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", width:"100%", marginTop:"6px" }, onClick:() => logEmergencyMaintenance(br) },
-        logged.length ? "➕ Add" : "🚨 Log emergency repair"));
-      emBranchRow.appendChild(cell);
-    }
-    emRow.appendChild(emBranchRow);
-    card.appendChild(emRow);
-
-    return card;
-  }
 
   // Company loan — quarterly payment tracker. Tick each quarter as it's paid. Ticking a
   // quarter is what makes its interest (12,500 ÷ 3 = 4,166.67/month) appear on the
@@ -9771,188 +9993,6 @@ routes.overheads = function (u) {
     return card;
   }
 
-  function logEmergencyMaintenance(br) {
-    const today = new Date().toISOString().slice(0,10);
-
-    const body = el("div", {}, [ el("h2", {}, `🚨 Emergency maintenance — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
-    body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `Unscheduled breakdown or repair · ${month}`));
-
-    body.appendChild(el("label", {}, "What broke / what was fixed (required)"));
-    const issueInp = el("input", { type:"text", value:"", placeholder:"e.g. coffee machine leak, fridge stopped cooling" });
-    body.appendChild(issueInp);
-
-    // Equipment checkboxes (optional — flag which equipment was involved)
-    const checks = [];
-    body.appendChild(el("label", {}, "Equipment involved (optional)"));
-    const eqWrap = el("div", { style:{ display:"grid", gap:"6px", marginBottom:"6px" } });
-    for (const ev of MAINTENANCE_EQUIPMENT) {
-      const lbl = el("label", { style:{ display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", fontSize:"14px" } });
-      const cb = el("input", { type:"checkbox" });
-      cb.checked = false;
-      cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--warn)";
-      cb.dataset.equip = ev.value;
-      checks.push(cb);
-      lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(ev.label));
-      eqWrap.appendChild(lbl);
-    }
-    body.appendChild(eqWrap);
-
-    body.appendChild(el("label", {}, "Engineer name"));
-    const engName = el("input", { type:"text", value:"" });
-    body.appendChild(engName);
-    body.appendChild(el("label", {}, "Engineer phone"));
-    const engPhone = el("input", { type:"tel", value:"" });
-    body.appendChild(engPhone);
-
-    body.appendChild(el("label", {}, "Amount (EGP)"));
-    const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
-    body.appendChild(amountInp);
-    body.appendChild(el("label", {}, "Date"));
-    const dateInp = el("input", { type:"date", value: today });
-    body.appendChild(dateInp);
-    body.appendChild(el("label", {}, "Note"));
-    const noteInp = el("input", { type:"text", value:"" });
-    body.appendChild(noteInp);
-
-    const actions = el("div", { class:"sticky-actions" });
-    actions.appendChild(el("button", { class:"btn", onClick:() => {
-      const issue = (issueInp.value || "").trim();
-      if (!issue) return toast("Describe what broke / was fixed", "error");
-      const amt = Number(amountInp.value) || 0;
-      if (amt <= 0) return toast("Enter a positive amount", "error");
-      const equipment = checks.filter(c => c.checked).map(c => c.dataset.equip);
-      const s = stamp();
-      const engN = (engName.value || "").trim();
-      state.overheads.push({
-        id: uuid(),
-        branch: br, category: "maintenance_emergency",
-        label: issue,
-        equipment,
-        engineer: engN,
-        engineer_phone: (engPhone.value || "").trim(),
-        amount: amt,
-        month,
-        date: dateInp.value || today,
-        paid: true,
-        paid_on: dateInp.value || today,
-        note: (noteInp.value || "").trim(),
-        by: s.by, by_name: s.by_name, at: s.at,
-      });
-      $("#modal-root").innerHTML = "";
-      saveState(); toast("Emergency maintenance logged"); draw();
-    } }, "Save"));
-    body.appendChild(actions);
-    openSheet(body);
-  }
-
-  function logMaintenance(br, planValue) {
-    const plan = maintPlan(planValue) || {};
-    const eng = maintEngineer(planValue);
-    const today = new Date().toISOString().slice(0,10);
-
-    const body = el("div", {}, [ el("h2", {}, `${plan.label} — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
-    body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `${plan.desc} · ${month}`));
-
-    // Engineer
-    body.appendChild(el("label", {}, "Engineer name"));
-    const engName = el("input", { type:"text", value: eng.name });
-    body.appendChild(engName);
-    body.appendChild(el("label", {}, "Engineer phone"));
-    const engPhone = el("input", { type:"tel", value: eng.phone });
-    body.appendChild(engPhone);
-
-    // Equipment checkboxes (skip for pest control, which has none)
-    const checks = [];
-    if (plan.equipment && plan.equipment.length) {
-      body.appendChild(el("label", {}, "Equipment maintained"));
-      const eqWrap = el("div", { style:{ display:"grid", gap:"6px", marginBottom:"6px" } });
-      for (const ev of plan.equipment) {
-        const lbl = el("label", { style:{ display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", fontSize:"14px" } });
-        const cb = el("input", { type:"checkbox" });
-        cb.checked = true;
-        cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--ok)";
-        cb.dataset.equip = ev;
-        checks.push(cb);
-        lbl.appendChild(cb);
-        lbl.appendChild(document.createTextNode(equipLabel(ev)));
-        eqWrap.appendChild(lbl);
-      }
-      body.appendChild(eqWrap);
-    }
-
-    body.appendChild(el("label", {}, "Amount (EGP)"));
-    const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
-    body.appendChild(amountInp);
-    body.appendChild(el("label", {}, "Date"));
-    const dateInp = el("input", { type:"date", value: today });
-    body.appendChild(dateInp);
-    body.appendChild(el("label", {}, "Note"));
-    const noteInp = el("input", { type:"text", value:"" });
-    body.appendChild(noteInp);
-
-    const actions = el("div", { class:"sticky-actions" });
-    actions.appendChild(el("button", { class:"btn", onClick:() => {
-      const amt = Number(amountInp.value) || 0;
-      if (amt <= 0) return toast("Enter a positive amount", "error");
-      const equipment = checks.filter(c => c.checked).map(c => c.dataset.equip);
-      if (plan.equipment && plan.equipment.length && equipment.length === 0) {
-        return toast("Select at least one piece of equipment", "error");
-      }
-      const s = stamp();
-      const engN = (engName.value || "").trim();
-      state.overheads.push({
-        id: uuid(),
-        branch: br, category: planValue,
-        label: engN,
-        equipment,
-        engineer: engN,
-        engineer_phone: (engPhone.value || "").trim(),
-        amount: amt,
-        month,
-        date: dateInp.value || today,
-        paid: true,
-        paid_on: dateInp.value || today,
-        note: (noteInp.value || "").trim(),
-        by: s.by, by_name: s.by_name, at: s.at,
-      });
-      // Persist any engineer edits as the new default for this plan.
-      state.maintenance_config = state.maintenance_config || {};
-      state.maintenance_config.engineers = state.maintenance_config.engineers || {};
-      state.maintenance_config.engineers[planValue] = { name: engN, phone: (engPhone.value || "").trim() };
-      $("#modal-root").innerHTML = "";
-      saveState(); toast(`${plan.label} logged`); draw();
-    } }, "Save"));
-    body.appendChild(actions);
-    openSheet(body);
-  }
-
-  function editMaintEngineers() {
-    openPrompt({
-      title: "Maintenance engineers & schedule",
-      fields: [
-        { key: "m1_name",  label: "Maintenance 1 (Cooling) — engineer", type: "text", value: maintEngineer("maintenance_1").name },
-        { key: "m1_phone", label: "Maintenance 1 — phone", type: "tel", value: maintEngineer("maintenance_1").phone },
-        { key: "m2_name",  label: "Maintenance 2 (Machines) — engineer", type: "text", value: maintEngineer("maintenance_2").name },
-        { key: "m2_phone", label: "Maintenance 2 — phone", type: "tel", value: maintEngineer("maintenance_2").phone },
-        { key: "ic_name",  label: "Insect / pest control — engineer", type: "text", value: maintEngineer("insect_control").name },
-        { key: "ic_phone", label: "Insect / pest control — phone", type: "tel", value: maintEngineer("insect_control").phone },
-        { key: "anchor",   label: "Maintenance 1 due-month anchor (YYYY-MM)", type: "month", value: (state.maintenance_config||{}).anchor_month || "2026-06" },
-        { key: "ianchor",  label: "Pest control due-month anchor (YYYY-MM)", type: "month", value: (state.maintenance_config||{}).insect_anchor_month || (state.maintenance_config||{}).anchor_month || "2026-06" },
-      ],
-      onSubmit: (vals) => {
-        state.maintenance_config = state.maintenance_config || {};
-        state.maintenance_config.engineers = {
-          maintenance_1:  { name: (vals.m1_name||"").trim(), phone: (vals.m1_phone||"").trim() },
-          maintenance_2:  { name: (vals.m2_name||"").trim(), phone: (vals.m2_phone||"").trim() },
-          insect_control: { name: (vals.ic_name||"").trim(), phone: (vals.ic_phone||"").trim() },
-        };
-        if (vals.anchor)  state.maintenance_config.anchor_month = vals.anchor;
-        if (vals.ianchor) state.maintenance_config.insect_anchor_month = vals.ianchor;
-        saveState(); toast("Maintenance settings saved"); draw();
-      }
-    });
-  }
 
   function editMonthlyAmount(br, cat, current, mk) {
     openPrompt({
@@ -10027,14 +10067,26 @@ routes.overheads = function (u) {
   function addOverhead(defaultCat, defaultBranch) {
     const catOptions = OVERHEAD_CATEGORIES.filter(c => !c.recurring && !c.maintenance)
       .map(c => ({ label: c.label, value: c.value }));
-    const branchOptions = [{ label: "🏠 Maadi", value: "maadi" }, { label: "🏢 Zawya", value: "zawya" }];
+    const branchOptions = [
+      { label: "🏠 Maadi", value: "maadi" },
+      { label: "🏢 Zawya", value: "zawya" },
+      { label: "🔀 Both branches — enter one amount, auto-split", value: "both" },
+    ];
+    const paidFromOptions = [
+      { label: "— not tracked (P&L only) —", value: "" },
+      { label: "💵 Petty cash", value: "petty_cash" },
+      { label: "🏦 Owner's bank", value: "owner_bank" },
+      { label: "💳 Credit card", value: "credit_card" },
+    ];
     openPrompt({
       title: "Log variable overhead",
       fields: [
         { key: "branch",   label: "Branch", type: "select", options: branchOptions, value: defaultBranch || "maadi" },
         { key: "category", label: "Category", type: "select", options: catOptions, value: defaultCat || "marketing_fees" },
         { key: "label",    label: "Describe (required for Miscellaneous)", type: "text", value: "" },
-        { key: "amount",   label: "Amount (EGP)", type: "number", value: 0 },
+        { key: "amount",   label: "Amount (EGP) — total; if 'Both', it's split across the two branches", type: "number", value: 0 },
+        { key: "split_zawya_pct", label: "'Both' only — Zawya's share % (Maadi gets the rest)", type: "number", value: 50 },
+        { key: "paid_from", label: "Paid from — draws the matching petty cash / bank record automatically", type: "select", options: paidFromOptions, value: "" },
         { key: "date",     label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
         { key: "note",     label: "Note", type: "text", value: "" },
       ],
@@ -10045,21 +10097,490 @@ routes.overheads = function (u) {
           return toast("Please describe the miscellaneous item", "error");
         }
         const s = stamp();
-        state.overheads.push({
+        const label = (vals.label || "").trim();
+        const paidFrom = vals.paid_from || "";
+        const mkEntry = (branch, amount, extra) => ({
           id: uuid(),
-          branch: vals.branch, category: vals.category,
-          label: (vals.label || "").trim(),
-          amount: amt,
+          branch, category: vals.category,
+          label,
+          amount,
           month,
           date: vals.date,
           paid: true,
           paid_on: vals.date,
+          paid_from: paidFrom,
           note: vals.note || "",
           by: s.by, by_name: s.by_name, at: s.at,
+          ...(extra || {}),
         });
-        saveState(); toast("Entry saved"); draw();
+        // Mirror the spend into petty cash / bank ledger, keyed by ref = overhead id
+        // so the paired row is found and removed when the overhead is deleted. The
+        // overhead line itself is the expense in the P&L; this row is only the
+        // "cash left the drawer / account" movement (neither ledger feeds net profit).
+        const mkLedger = (entry) => {
+          if (!paidFrom) return;
+          const a = Number(entry.amount) || 0;
+          if (a <= 0) return;
+          const desc = overheadCatLabel(entry.category) + (entry.label ? " — " + entry.label : "");
+          if (paidFrom === "petty_cash") {
+            const bal = pettyCashBalance(entry.branch);
+            state.petty_cash.push({
+              id: uuid(), branch: entry.branch, date: entry.date, type: "expense", amount: -a,
+              balance_after: bal - a, ref: entry.id,
+              by: s.by, by_name: s.by_name, at: s.at, note: `Overhead — ${desc}`,
+              ...(isTestMode() ? { is_test: true } : {}),
+            });
+          } else {
+            state.bank_ledger.push({
+              id: uuid(), date: entry.date, amount: -a, supplier: desc, ref: entry.id,
+              type: paidFrom === "credit_card" ? "overhead_credit_card" : "overhead_payment",
+              by: s.by, by_name: s.by_name, at: s.at, note: `Overhead (${entry.branch})`,
+              ...(isTestMode() ? { is_test: true } : {}),
+            });
+          }
+        };
+        if (vals.branch === "both") {
+          // One shared cost → two linked entries, one per branch, so each branch's
+          // P&L carries its share (mirrors the Purchase Log "Both" tab).
+          const zPct = Math.min(100, Math.max(0, Number(vals.split_zawya_pct) || 0));
+          const zAmt = Math.round(amt * zPct / 100);
+          const mAmt = amt - zAmt;
+          const link = uuid();
+          const zEntry = mkEntry("zawya", zAmt, { link_id: link });
+          const mEntry = mkEntry("maadi", mAmt, { link_id: link });
+          state.overheads.push(zEntry, mEntry);
+          mkLedger(zEntry); mkLedger(mEntry);
+          saveState();
+          toast(`Split · Zawya ${money(zAmt)} · Maadi ${money(mAmt)}`);
+          draw();
+          return;
+        }
+        const entry = mkEntry(vals.branch, amt);
+        state.overheads.push(entry);
+        mkLedger(entry);
+        saveState(); toast(paidFrom ? "Entry saved + payment recorded" : "Entry saved"); draw();
       }
     });
+  }
+
+  return wrap;
+};
+
+// ==============================================================
+// OVERHEAD QUICK-LOG (head barista)
+// ---
+// A stripped-down "log a one-off overhead" screen for the head barista.
+// It ONLY writes variable, non-stock, non-recurring overhead lines
+// (marketing, sponsorship, uniforms, software, agency/design, legal
+// fees, equipment repair, misc). It deliberately does NOT expose the
+// recurring bill presets, salaries, the loan card, or the maintenance
+// schedule — those stay in routes.overheads (owner / accountant).
+// Entries land in state.overheads exactly like the owner's
+// "Log variable overhead" prompt, so the dashboard / P&L pick them up
+// with no extra wiring. Corrections go through Data Management.
+// ==============================================================
+routes.overhead_log_new = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header(
+    T("Log an overhead","تسجيل مصروف ثابت"),
+    T("One-off, non-stock costs: marketing, uniforms, software, repairs, legal, misc. Stock purchases go in the Purchase Log.",
+      "مصروفات لمرة واحدة مش مخزون: دعاية، يونيفورم، سوفت وير، إصلاحات، قانوني، نثريات. مشتريات المخزون تتسجل في سجل المشتريات.")));
+
+  if (!["owner","accountant","head_barista"].includes(u.role)) {
+    wrap.appendChild(el("div", { class: "card" }, T("Access restricted.","الوصول مقيّد.")));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  state.overheads = state.overheads || [];
+
+  const month = new Date().toISOString().slice(0, 7);
+  // Branches this user may log against.
+  const myBranches = (u.role === "head_barista")
+    ? (u.branches || []).filter(b => b === "maadi" || b === "zawya")
+    : ["maadi","zawya"];
+
+  wrap.appendChild(el("button", { class: "btn secondary", onClick: addOverheadLine },
+    T("➕ Log an overhead","➕ تسجيل مصروف")));
+
+  // ── This month's variable overhead, visible to this user ──
+  const mine = state.overheads
+    .filter(o => ((o.month || (o.date || "").slice(0, 7)) === month) && !isRecurringOverheadCat(o.category))
+    .filter(o => u.role !== "head_barista" || myBranches.includes(o.branch))
+    .slice()
+    .sort((a, b) => (b.at || b.date || "").localeCompare(a.at || a.date || ""));
+
+  const total = mine.reduce((s, o) => s + (Number(o.amount) || 0), 0);
+  wrap.appendChild(el("div", { class: "card", style: { marginTop: "12px" } }, [
+    el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } },
+      T("Logged this month","المسجّل هذا الشهر")),
+    el("div", { style: { fontSize: "26px", fontWeight: "700" } }, money(total)),
+  ]));
+
+  const list = el("div", { class: "card", style: { marginTop: "12px" } });
+  if (mine.length === 0) {
+    list.appendChild(el("div", { class: "muted small" },
+      T("Nothing logged this month yet.","لا يوجد شيء مسجّل هذا الشهر بعد.")));
+  } else {
+    for (const o of mine) {
+      const brLabel = o.branch === "maadi" ? T("🏠 Maadi","🏠 المعادي")
+                    : o.branch === "zawya" ? T("🏢 Zawya","🏢 زاوية") : o.branch;
+      list.appendChild(el("div", { class: "kv" }, [
+        el("div", { class: "k" }, [
+          el("div", {}, `${overheadCatLabel(o.category)}${o.label ? " — " + o.label : ""}`),
+          el("div", { class: "muted small" },
+            `${brLabel} · ${o.date || (o.at || "").slice(0,10)} · ${T("by","بواسطة")} ${o.by_name || o.by || "—"}${o.note ? " · " + o.note : ""}`),
+        ]),
+        el("div", { class: "v" }, money(o.amount)),
+      ]));
+    }
+  }
+  wrap.appendChild(list);
+  wrap.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
+    T("Made a mistake? Ask the owner, or fix it in Data Management.",
+      "غلط في إدخال؟ كلّم المالك، أو صحّحه من إدارة البيانات.")));
+
+  // ── Maintenance & pest-control schedule ──
+  wrap.appendChild(el("div", { style: { marginTop: "18px", marginBottom: "4px", fontWeight: "700", fontSize: "13px", textTransform: "uppercase", letterSpacing: "1px", color: "var(--ink-dim)" } },
+    T("🔧 Maintenance & pest control","🔧 الصيانة ومكافحة الحشرات")));
+  wrap.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px", fontSize: "12px" } },
+    T("Scheduled equipment maintenance, pest control, and emergency repairs. Logged amounts feed the branch's overheads.",
+      "الصيانة الدورية للمعدات، مكافحة الحشرات، وإصلاحات الطوارئ. المبالغ المسجّلة تُحتسب ضمن مصروفات الفرع.")));
+  wrap.appendChild(renderMaintenanceCard(month, () => go("overhead_log_new"), myBranches));
+
+  wrap.appendChild(btnBack());
+
+  function addOverheadLine() {
+    const catOptions = OVERHEAD_CATEGORIES
+      .filter(c => !c.recurring && !c.maintenance)
+      .map(c => ({ label: c.label, value: c.value }));
+    const branchOptions = [
+      ...(myBranches.includes("maadi") ? [{ label: "🏠 Maadi", value: "maadi" }] : []),
+      ...(myBranches.includes("zawya") ? [{ label: "🏢 Zawya", value: "zawya" }] : []),
+      ...(myBranches.length > 1
+        ? [{ label: "🔀 Both branches — enter one amount, auto-split", value: "both" }] : []),
+    ];
+    const paidFromOptions = [
+      { label: "— not tracked (P&L only) —", value: "" },
+      { label: "💵 Petty cash", value: "petty_cash" },
+      { label: "💳 Credit card", value: "credit_card" },
+    ];
+    openPrompt({
+      title: T("Log an overhead","تسجيل مصروف ثابت"),
+      fields: [
+        { key: "branch",   label: T("Branch","الفرع"), type: "select", options: branchOptions, value: branchOptions[0] && branchOptions[0].value },
+        { key: "category", label: T("Category","التصنيف"), type: "select", options: catOptions, value: "marketing_fees" },
+        { key: "label",    label: T("Describe (required for Miscellaneous)","الوصف (مطلوب للنثريات)"), type: "text", value: "" },
+        { key: "amount",   label: T("Amount (EGP) — total; if 'Both', it's split across the two branches","المبلغ (ج.م) — الإجمالي؛ لو 'الاثنين' يتقسم على الفرعين"), type: "number", value: 0 },
+        { key: "split_zawya_pct", label: T("'Both' only — Zawya's share % (Maadi gets the rest)","'الاثنين' فقط — نسبة زاوية % (الباقي للمعادي)"), type: "number", value: 50 },
+        { key: "paid_from", label: T("Paid from — draws the matching petty cash record automatically","مدفوع من — يسجّل حركة العهدة تلقائياً"), type: "select", options: paidFromOptions, value: "" },
+        { key: "date",     label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0, 10) },
+        { key: "note",     label: T("Note","ملاحظة"), type: "text", value: "" },
+      ],
+      onSubmit: (vals) => {
+        const amt = Number(vals.amount) || 0;
+        if (amt <= 0) return toast(T("Enter a positive amount","أدخل مبلغاً موجباً"), "error");
+        if (!vals.branch) return toast(T("Pick a branch","اختر فرعاً"), "error");
+        if (vals.category === "misc" && !(vals.label || "").trim()) {
+          return toast(T("Please describe the miscellaneous item","اكتب وصفاً للبند النثري"), "error");
+        }
+        const s = stamp();
+        const label = (vals.label || "").trim();
+        const paidFrom = vals.paid_from || "";
+        const mkEntry = (branch, amount, extra) => ({
+          id: uuid(),
+          branch, category: vals.category,
+          label,
+          amount,
+          month,
+          date: vals.date,
+          paid: true,
+          paid_on: vals.date,
+          paid_from: paidFrom,
+          note: vals.note || "",
+          by: s.by, by_name: s.by_name, at: s.at,
+          ...(extra || {}),
+        });
+        const mkLedger = (entry) => {
+          if (paidFrom !== "petty_cash") return;
+          const a = Number(entry.amount) || 0;
+          if (a <= 0) return;
+          const desc = overheadCatLabel(entry.category) + (entry.label ? " — " + entry.label : "");
+          const bal = pettyCashBalance(entry.branch);
+          state.petty_cash = state.petty_cash || [];
+          state.petty_cash.push({
+            id: uuid(), branch: entry.branch, date: entry.date, type: "expense", amount: -a,
+            balance_after: bal - a, ref: entry.id,
+            by: s.by, by_name: s.by_name, at: s.at, note: `Overhead — ${desc}`,
+            ...(isTestMode() ? { is_test: true } : {}),
+          });
+        };
+        if (vals.branch === "both") {
+          const zPct = Math.min(100, Math.max(0, Number(vals.split_zawya_pct) || 0));
+          const zAmt = Math.round(amt * zPct / 100);
+          const mAmt = amt - zAmt;
+          const link = uuid();
+          const zEntry = mkEntry("zawya", zAmt, { link_id: link });
+          const mEntry = mkEntry("maadi", mAmt, { link_id: link });
+          state.overheads.push(zEntry, mEntry);
+          mkLedger(zEntry); mkLedger(mEntry);
+          saveState();
+          toast(T(`Split · Zawya ${money(zAmt)} · Maadi ${money(mAmt)}`, `تقسيم · زاوية ${money(zAmt)} · المعادي ${money(mAmt)}`));
+          go("overhead_log_new");
+          return;
+        }
+        const entry = mkEntry(vals.branch, amt);
+        state.overheads.push(entry);
+        mkLedger(entry);
+        saveState();
+        toast(paidFrom ? T("Saved + petty cash recorded","تم الحفظ + تسجيل العهدة") : T("Saved","تم الحفظ"));
+        go("overhead_log_new");
+      }
+    });
+  }
+
+  return wrap;
+};
+
+// ==============================================================
+// FIXED-ASSET / EQUIPMENT REGISTER (owner / accountant)
+// ---
+// Capital items bought for the business, with purchase date and cost.
+// Capitalised here — NOT expensed in the monthly P&L. Straight-line
+// depreciation is shown for reference only; it is not posted to the dashboard.
+// "Paid from" mirrors the overhead form: it writes the matching petty-cash /
+// bank-ledger drawdown (ref = asset id) so the cash movement is tracked, and
+// that paired row is removed if the asset is deleted.
+// ==============================================================
+const ASSET_CATEGORIES = [
+  { value: "machines",     label: "Machines",             life: 7  },
+  { value: "refrigeration",label: "Refrigeration",        life: 7  },
+  { value: "furniture",    label: "Furniture & fixtures", life: 10 },
+  { value: "fitout",       label: "Fit-out & renovation", life: 10 },
+  { value: "electronics",  label: "Electronics & IT",     life: 4  },
+  { value: "smallwares",   label: "Smallwares & tools",   life: 3  },
+  { value: "other",        label: "Other",                life: 5  },
+];
+const ASSET_STATUS = [
+  { value: "in_use",     label: "In use" },
+  { value: "in_storage", label: "In storage" },
+  { value: "retired",    label: "Retired / scrapped" },
+  { value: "sold",       label: "Sold" },
+];
+function assetCatLabel(v)    { return (ASSET_CATEGORIES.find(c => c.value === v) || {}).label || v || "—"; }
+function assetStatusLabel(v) { return (ASSET_STATUS.find(c => c.value === v) || {}).label || v || "In use"; }
+function assetLife(a) {
+  return Number(a.useful_life_years) > 0
+    ? Number(a.useful_life_years)
+    : ((ASSET_CATEGORIES.find(c => c.value === a.category) || {}).life || 5);
+}
+function assetYears(a, asOf) {
+  if (!a.purchase_date) return 0;
+  const start = new Date(a.purchase_date + "T00:00:00");
+  const end = asOf ? new Date(asOf) : new Date();
+  return Math.max(0, (end - start) / (365.25 * 24 * 3600 * 1000));
+}
+// Straight-line depreciation to zero over the useful life. Reference only.
+function assetBookValue(a, asOf) {
+  const cost = Number(a.cost) || 0;
+  if (a.status === "sold" || a.status === "retired") return 0;
+  if (!cost || !a.purchase_date) return cost;
+  const dep = Math.min(1, assetYears(a, asOf) / assetLife(a));
+  return Math.max(0, Math.round(cost * (1 - dep)));
+}
+function assetAgeText(a) {
+  if (!a.purchase_date) return "—";
+  const y = assetYears(a);
+  return y < 1 ? `${Math.round(y * 12)} mo` : `${Math.round(y * 10) / 10} yr`;
+}
+
+routes.equipment_register = function (u) {
+  const canManage = u.role === "owner" || u.role === "accountant";
+  const wrap = el("div", {});
+  wrap.appendChild(header("Equipment & Asset Register",
+    "Capital items with purchase date & cost. Capitalised here — not expensed in the monthly P&L."));
+
+  const BRANCHES = [
+    { value: "maadi",  label: "🏠 Maadi" },
+    { value: "zawya",  label: "🏢 Zawya" },
+    { value: "shared", label: "🔀 Shared / both" },
+  ];
+  const branchLabel = (v) => (BRANCHES.find(b => b.value === v) || {}).label || v || "—";
+
+  const list = (state.equipment || []).slice().sort((a, b) =>
+    (b.purchase_date || "").localeCompare(a.purchase_date || "") || (b.at || "").localeCompare(a.at || ""));
+
+  // ── Summary ───────────────────────────────────────────────
+  const live = list.filter(a => a.status !== "sold" && a.status !== "retired");
+  const totalCost = live.reduce((s, a) => s + (Number(a.cost) || 0), 0);
+  const totalBook = live.reduce((s, a) => s + assetBookValue(a), 0);
+  const byBranch = (bk) => live.filter(a => a.branch === bk).reduce((s, a) => s + (Number(a.cost) || 0), 0);
+  const sumCard = el("div", { class: "card", style: { marginBottom: "12px" } });
+  sumCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px", fontWeight: "700" } }, "Register summary"));
+  sumCard.appendChild(el("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } }, [
+    el("div", {}, [el("div", { class: "muted small" }, "Active assets"), el("div", { style: { fontSize: "20px", fontWeight: "700" } }, String(live.length))]),
+    el("div", {}, [el("div", { class: "muted small" }, "Original cost"), el("div", { style: { fontSize: "20px", fontWeight: "700" } }, money(totalCost))]),
+    el("div", {}, [el("div", { class: "muted small" }, "Book value now"), el("div", { style: { fontSize: "20px", fontWeight: "700", color: "var(--accent)" } }, money(totalBook))]),
+  ]));
+  sumCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
+    `Maadi ${money(byBranch("maadi"))} · Zawya ${money(byBranch("zawya"))} · Shared ${money(byBranch("shared"))} (at cost)`));
+  wrap.appendChild(sumCard);
+
+  if (canManage) {
+    wrap.appendChild(el("button", { class: "btn", style: { marginBottom: "12px" }, onClick: () => openAssetForm(null) }, "➕ Add equipment / asset"));
+  }
+
+  // ── List ──────────────────────────────────────────────────
+  if (!list.length) {
+    wrap.appendChild(el("div", { class: "card", style: { textAlign: "center", padding: "28px 14px" } }, [
+      el("div", { style: { fontSize: "38px", marginBottom: "8px" } }, "🛠️"),
+      el("div", { style: { fontWeight: "600", marginBottom: "4px" } }, "No assets logged yet"),
+      el("div", { class: "muted small" }, "Add the first piece of equipment with the button above."),
+    ]));
+    wrap.appendChild(btnBack());
+    return wrap;
+  }
+
+  const listEl = el("div", { class: "list" });
+  for (const a of list) {
+    const retired = a.status === "sold" || a.status === "retired";
+    const row = el("div", { class: "card", style: { marginBottom: "8px", opacity: retired ? "0.6" : "1" } });
+    row.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "flex-start" } }, [
+      el("div", { style: { flex: "1", minWidth: "0" } }, [
+        el("div", { style: { fontWeight: "700", fontSize: "14px" } }, a.name || "Untitled asset"),
+        el("div", { class: "muted small", style: { marginTop: "2px" } },
+          `${assetCatLabel(a.category)} · ${branchLabel(a.branch)} · ${assetStatusLabel(a.status)}`),
+        el("div", { class: "muted small", style: { marginTop: "2px" } },
+          `Bought ${a.purchase_date || "—"}${a.supplier ? " · " + a.supplier : ""}${a.model_serial ? " · " + a.model_serial : ""}`),
+        a.note ? el("div", { class: "muted small", style: { marginTop: "2px", fontStyle: "italic" } }, a.note) : null,
+        el("div", { class: "muted small", style: { marginTop: "2px" } },
+          `by ${a.by_name || "—"}${a.paid_from ? " · paid from " + ({ petty_cash: "petty cash", owner_bank: "owner bank", credit_card: "credit card" }[a.paid_from] || a.paid_from) : ""}`),
+      ]),
+      el("div", { style: { textAlign: "right", flexShrink: "0" } }, [
+        el("div", { style: { fontWeight: "700" } }, money(Number(a.cost) || 0)),
+        el("div", { class: "muted small" }, retired ? "book 0" : `book ${money(assetBookValue(a))}`),
+        el("div", { class: "muted small" }, `age ${assetAgeText(a)}`),
+      ]),
+    ]));
+    if (canManage) {
+      row.appendChild(el("div", { style: { display: "flex", gap: "6px", marginTop: "8px" } }, [
+        el("button", { class: "btn ghost", style: { fontSize: "12px", padding: "4px 10px", minHeight: "30px" }, onClick: () => openAssetForm(a) }, "✎ Edit"),
+        el("button", { class: "btn ghost", style: { fontSize: "12px", padding: "4px 10px", minHeight: "30px", color: "var(--bad)" }, onClick: () => deleteAsset(a) }, "🗑 Delete"),
+      ]));
+    }
+    listEl.appendChild(row);
+  }
+  wrap.appendChild(listEl);
+  wrap.appendChild(btnBack());
+
+  // ── Handlers ──────────────────────────────────────────────
+  function openAssetForm(existing) {
+    const isEdit = !!existing;
+    const e = existing || {};
+    const catOptions = ASSET_CATEGORIES.map(c => ({ label: `${c.label} (≈${c.life}y life)`, value: c.value }));
+    const fields = [
+      { key: "name",             label: "Name / description *", type: "text", value: e.name || "" },
+      { key: "category",         label: "Category", type: "select", options: catOptions, value: e.category || "machines" },
+      { key: "branch",           label: "Branch", type: "select", options: BRANCHES, value: e.branch || "maadi" },
+      { key: "purchase_date",    label: "Purchase date", type: "date", value: e.purchase_date || new Date().toISOString().slice(0, 10) },
+      { key: "cost",             label: "Cost (EGP)", type: "number", value: e.cost != null ? e.cost : 0 },
+      { key: "supplier",         label: "Supplier (optional)", type: "text", value: e.supplier || "" },
+      { key: "model_serial",     label: "Model / serial no. (optional)", type: "text", value: e.model_serial || "" },
+      { key: "useful_life_years",label: "Useful life in years (blank = category default)", type: "number", value: e.useful_life_years != null ? e.useful_life_years : "" },
+      { key: "status",           label: "Status", type: "select", options: ASSET_STATUS, value: e.status || "in_use" },
+      { key: "note",             label: "Note (optional)", type: "text", value: e.note || "" },
+    ];
+    if (!isEdit) {
+      fields.push({
+        key: "paid_from", label: "Paid from — writes the matching petty cash / bank record", type: "select",
+        options: [
+          { label: "— not tracked —", value: "" },
+          { label: "💵 Petty cash", value: "petty_cash" },
+          { label: "🏦 Owner's bank", value: "owner_bank" },
+          { label: "💳 Credit card", value: "credit_card" },
+        ], value: "",
+      });
+    }
+    openPrompt({
+      title: isEdit ? "Edit asset" : "Add equipment / asset",
+      fields,
+      onSubmit: (vals) => {
+        const name = (vals.name || "").trim();
+        if (!name) return toast("Enter a name", "error");
+        const cost = Number(vals.cost) || 0;
+        if (cost < 0) return toast("Cost can't be negative", "error");
+        const life = (vals.useful_life_years === "" || vals.useful_life_years == null)
+          ? null : Math.max(0, Number(vals.useful_life_years) || 0);
+        const s = stamp();
+        const common = {
+          name, category: vals.category, branch: vals.branch,
+          purchase_date: vals.purchase_date, cost,
+          supplier: (vals.supplier || "").trim(), model_serial: (vals.model_serial || "").trim(),
+          useful_life_years: life, status: vals.status, note: (vals.note || "").trim(),
+        };
+        if (isEdit) {
+          const idx = state.equipment.findIndex(x => x.id === existing.id);
+          if (idx < 0) return;
+          state.equipment[idx] = {
+            ...state.equipment[idx], ...common,
+            updated_at: s.at, updated_by: s.by, updated_by_name: s.by_name,
+          };
+          saveState(); toast("Asset updated"); render();
+          return;
+        }
+        const asset = {
+          id: uuid(), ...common,
+          paid_from: vals.paid_from || "",
+          by: s.by, by_name: s.by_name, at: s.at, updated_at: s.at,
+          ...(isTestMode() ? { is_test: true } : {}),
+        };
+        state.equipment.unshift(asset);
+        _assetLedger(asset, s);
+        saveState();
+        toast(asset.paid_from ? "Asset saved + payment recorded" : "Asset saved");
+        render();
+      },
+    });
+  }
+
+  // Mirror the spend into petty cash / bank ledger, keyed by ref = asset id, so the
+  // paired row is found and removed on delete. The register does not feed the P&L —
+  // this only records that the cash left the drawer / account.
+  function _assetLedger(asset, s) {
+    const pf = asset.paid_from;
+    const amt = Number(asset.cost) || 0;
+    if (!pf || amt <= 0) return;
+    const desc = `${asset.name} (${assetCatLabel(asset.category)})`;
+    if (pf === "petty_cash") {
+      const targets = asset.branch === "shared"
+        ? [["maadi", Math.round(amt / 2)], ["zawya", amt - Math.round(amt / 2)]]
+        : [[asset.branch, amt]];
+      for (const [br, part] of targets) {
+        const bal = pettyCashBalance(br);
+        state.petty_cash.push({
+          id: uuid(), branch: br, date: asset.purchase_date, type: "expense", amount: -part,
+          balance_after: bal - part, ref: asset.id,
+          by: s.by, by_name: s.by_name, at: s.at, note: `Equipment — ${desc}`,
+          ...(isTestMode() ? { is_test: true } : {}),
+        });
+      }
+    } else {
+      state.bank_ledger.push({
+        id: uuid(), date: asset.purchase_date, amount: -amt, supplier: desc, ref: asset.id,
+        type: pf === "credit_card" ? "asset_credit_card" : "asset_payment",
+        by: s.by, by_name: s.by_name, at: s.at, note: `Equipment (${asset.branch})`,
+        ...(isTestMode() ? { is_test: true } : {}),
+      });
+    }
+  }
+
+  function deleteAsset(a) {
+    const hasLedger = state.petty_cash.some(x => x.ref === a.id) || state.bank_ledger.some(x => x.ref === a.id);
+    if (!confirm(`Delete "${a.name}"?${hasLedger ? " Its linked petty-cash / bank record will be removed too." : ""}`)) return;
+    state.equipment   = state.equipment.filter(x => x.id !== a.id);
+    state.petty_cash  = state.petty_cash.filter(x => x.ref !== a.id);
+    state.bank_ledger = state.bank_ledger.filter(x => x.ref !== a.id);
+    saveState(); toast("Deleted"); render();
   }
 
   return wrap;
@@ -10126,6 +10647,10 @@ routes.bank = function (u) {
     const typeLabel = {
       purchase_payment: "Bank transfer",
       purchase_credit_card: "Credit card",
+      overhead_payment: "Bank transfer (overhead)",
+      overhead_credit_card: "Credit card (overhead)",
+      asset_payment: "Bank transfer (equipment)",
+      asset_credit_card: "Credit card (equipment)",
       petty_cash_topup: "Petty cash top-up",
       maadi_deposit: "Maadi ATM deposit",
       cash_deposit: "Cash deposit",
@@ -16806,6 +17331,14 @@ const ROUTE_EXPORTS = {
   signin_stamp_list:   () => ({ rows: (state.signin_stamps || []).filter(notTest), name: "signin-stamps" }),
   leave_list:          () => ({ rows: state.leaves || [], name: "leaves" }),
   assets_list:         () => ({ rows: state.assets || [], name: "assets" }),
+  equipment_register:  () => ({
+    rows: (state.equipment || []).filter(notTest).map(a => ({
+      name: a.name, category: a.category, branch: a.branch, purchase_date: a.purchase_date,
+      cost: a.cost, book_value_now: assetBookValue(a), useful_life_years: assetLife(a),
+      status: a.status, supplier: a.supplier || "", model_serial: a.model_serial || "",
+      paid_from: a.paid_from || "", note: a.note || "", logged_by: a.by_name || "",
+    })),
+    name: "equipment-register" }),
   users:               () => ({
     rows: staffDir.all().map(({ uid, name, role, branches, active }) =>
       ({ uid, name, role, active, branches: (branches || []).join("|") })),
@@ -17420,14 +17953,37 @@ routes.app_guide = function (u) {
       en_steps: [
         "Owner/accountant screen for tracking recurring monthly bills: electricity, internet, cleaner salary, accountant salary, POS fees, gardener salary, and loan payment — each with a preset amount per branch.",
         "Each month, tick a bill as <strong>paid</strong> and enter the actual amount and date. This creates a record for that month only — editing the preset amount affects the current and future months, but never rewrites a past month's history.",
-        "One-off costs (marketing, maintenance, pest control, miscellaneous) are logged manually with <strong>➕</strong> whenever they happen, instead of monthly.",
+        "One-off costs (marketing, sponsorships, uniforms, maintenance, pest control, miscellaneous) are logged manually with <strong>➕</strong> whenever they happen, instead of monthly. Anything that adds to <strong>stock</strong> goes in Record Purchase instead — not here.",
+        "<strong>Both branches:</strong> for a shared cost, pick <strong>🔀 Both branches</strong>, enter one total and Zawya's share % — it saves as two linked entries, one per branch, so each branch's P&L carries its part. Deleting one removes both.",
+        "<strong>Paid from:</strong> choose Petty cash, Owner's bank, or Credit card and the app writes the matching drawdown automatically (petty-cash expense or bank-ledger entry). Leave it on <em>not tracked</em> if the cash movement is recorded elsewhere. The overhead line is always the expense in the P&L — the payment record is not double-counted.",
         "The page totals paid vs unpaid per branch — this total feeds directly into the Dashboard's profit calculation for that month.",
       ],
       ar_steps: [
         "شاشة للمالك والمحاسب لمتابعة الفواتير الشهرية المتكررة: كهرباء، إنترنت، راتب العاملة، راتب المحاسب، رسوم نقاط البيع، راتب البستاني، وقسط القرض — لكل منها مبلغ مبدئي لكل فرع.",
         "كل شهر، حدد الفاتورة كـ <strong>مدفوعة</strong> وأدخل المبلغ الفعلي والتاريخ. هذا يُنشئ سجلاً لذلك الشهر فقط — تعديل المبلغ المبدئي يؤثر على الشهر الحالي والمقبل فقط، ولا يغيّر تاريخ الأشهر السابقة أبداً.",
-        "التكاليف لمرة واحدة (تسويق، صيانة، مكافحة حشرات، متفرقات) تُسجَّل يدوياً بزر <strong>➕</strong> عند حدوثها، وليست شهرية.",
+        "التكاليف لمرة واحدة (تسويق، رعاية، يونيفورم، صيانة، مكافحة حشرات، متفرقات) تُسجَّل يدوياً بزر <strong>➕</strong> عند حدوثها. أي شيء يُضاف إلى <strong>المخزون</strong> يُسجَّل في تسجيل مشترى وليس هنا.",
+        "<strong>الفرعان معاً:</strong> للتكلفة المشتركة اختر <strong>🔀 الفرعان معاً</strong>، أدخل إجمالياً واحداً ونسبة زاوية — يُحفظ كقيدين مرتبطين، واحد لكل فرع، فيتحمّل كل فرع نصيبه. حذف أحدهما يحذف كليهما.",
+        "<strong>مدفوع من:</strong> اختر النثرية أو بنك المالك أو بطاقة الائتمان فيسجّل التطبيق الخصم المقابل تلقائياً (مصروف نثرية أو قيد بنكي). اتركه على <em>غير متتبَّع</em> إذا كانت حركة الكاش مسجلة في مكان آخر. قيد المصروف الثابت هو دائماً المصروف في الأرباح والخسائر — سجل الدفع لا يُحتسب مرتين.",
         "الصفحة تجمع المدفوع مقابل غير المدفوع لكل فرع — هذا الإجمالي يُستخدم مباشرةً في حساب الربح على لوحة التقارير لذلك الشهر.",
+      ],
+    },
+    {
+      icon: "🛠️",
+      en_title: "Equipment & Asset Register",
+      ar_title: "سجل المعدات والأصول",
+      en_steps: [
+        "Owner/accountant screen for tracking capital items — coffee machines, fridges, furniture, fit-out, IT — with the <strong>purchase date</strong>, cost, supplier, model/serial, and status (in use / in storage / retired / sold).",
+        "Tap <strong>➕ Add equipment / asset</strong>. Pick a category (each carries a default useful life you can override), the branch it belongs to (or <strong>Shared</strong>), the purchase date and cost.",
+        "The register shows <strong>original cost</strong> and a reference <strong>book value</strong> — straight-line depreciation to zero over the useful life — plus the asset's age. This is capitalised, <strong>not</strong> expensed in the monthly P&L, and depreciation is not posted to the Dashboard.",
+        "<strong>Paid from:</strong> choose Petty cash, Owner's bank, or Credit card and the app writes the matching drawdown automatically (petty-cash expense — split 50/50 for a Shared asset — or a bank-ledger entry). Leave it on <em>not tracked</em> if recorded elsewhere.",
+        "Edit or delete any row. Deleting an asset also removes its linked petty-cash / bank record. Export the whole register to CSV from the back bar.",
+      ],
+      ar_steps: [
+        "شاشة للمالك والمحاسب لتتبّع الأصول الرأسمالية — ماكينات القهوة، الثلاجات، الأثاث، التشطيبات، أجهزة الكمبيوتر — مع <strong>تاريخ الشراء</strong> والتكلفة والمورد والموديل/الرقم التسلسلي والحالة (قيد الاستخدام / في المخزن / خارج الخدمة / مُباع).",
+        "اضغط <strong>➕ إضافة معدة / أصل</strong>. اختر الفئة (لكل فئة عُمر افتراضي يمكن تعديله)، والفرع التابع له (أو <strong>مشترك</strong>)، وتاريخ الشراء والتكلفة.",
+        "يعرض السجل <strong>التكلفة الأصلية</strong> و<strong>القيمة الدفترية</strong> الاسترشادية — إهلاك بالقسط الثابت حتى الصفر على مدى العمر الإنتاجي — وعمر الأصل. هذا يُرسمَل ولا يُحتسب مصروفاً في الأرباح والخسائر الشهرية، والإهلاك لا يُدرَج في لوحة التقارير.",
+        "<strong>مدفوع من:</strong> اختر النثرية أو بنك المالك أو بطاقة الائتمان فيسجّل التطبيق الخصم المقابل تلقائياً (مصروف نثرية — يُقسَّم 50/50 للأصل المشترك — أو قيد بنكي). اتركه على <em>غير متتبَّع</em> إذا كان مسجلاً في مكان آخر.",
+        "يمكن تعديل أو حذف أي بند. حذف الأصل يحذف أيضاً قيد النثرية/البنك المرتبط به. يمكن تصدير السجل كاملاً إلى CSV من شريط الرجوع.",
       ],
     },
     {
