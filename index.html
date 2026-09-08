@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260907-896 -->
+<!-- CB_BUILD:20260908-314 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260907-896";
+  var BUILD = "20260908-314";
   (function() {
     function checkFresh() {
       try {
@@ -850,6 +850,9 @@ const fmtDay = (iso) => {
   const d = new Date(iso);
   return d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
 };
+// "2025-06" -> "Jun 2025"
+const MONTH_NAMES_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtYm = (ym) => { const [y,m] = String(ym||"").split("-").map(Number); return m ? `${MONTH_NAMES_SHORT[m-1]} ${y}` : String(ym||""); };
 const money = (n) => (n == null ? "—" : (Math.round(n*100)/100).toLocaleString("en-EG", { style: "currency", currency: "EGP", minimumFractionDigits: 0 }));
 const fmtQty = (n, unit) => {
   if (n == null) return "—";
@@ -1131,6 +1134,17 @@ function migrateState(s) {
   s.barista_dates           = s.barista_dates           || {}; // uid → [{type:"joined"|"left", date, note}]
   s.salary_config           = s.salary_config           || {};
   s.salary_loans            = s.salary_loans            || [];
+
+  // Company loan — quarterly payment tracker (see const LOAN). One-time seed: Q1–Q6
+  // were already paid before this tracker existed (owner-confirmed Sep 2026); Q7+ start
+  // unpaid. paid_on is left null for the seeded ones (exact dates weren't recorded).
+  s.loan_payments = s.loan_payments || {};
+  if (!s._loan_payments_seeded) {
+    for (let q = 1; q <= 6; q++) {
+      if (!s.loan_payments[q]) s.loan_payments[q] = { paid: true, paid_on: null, seeded: true };
+    }
+    s._loan_payments_seeded = true;
+  }
   s.hb_incentive_config     = s.hb_incentive_config     || {
     maadi_target:        80000,
     zawya_target:        130000,
@@ -1189,6 +1203,8 @@ function migrateState(s) {
   s.overhead_presets        = s.overhead_presets        || {}; // category → default amount
   s.overhead_monthly_amts   = s.overhead_monthly_amts   || {}; // branch|category|month → amount override
   s.overhead_preset_history = s.overhead_preset_history || {}; // pk → [{from_month, amount}]
+  s.overhead_custom_cats    = s.overhead_custom_cats    || []; // [{value,label,updated_at,updated_by,deleted}] — owner-added recurring line items
+  s.overhead_cat_overrides  = s.overhead_cat_overrides  || {}; // built-in category value → { label?, hidden?, updated_at }
   s.maintenance_config      = s.maintenance_config      || {}; // engineers + schedule anchors for equipment maintenance
   s.salary_snapshots        = s.salary_snapshots        || {}; // userId → {month → amount}
   s.purchase_units         = s.purchase_units         || {}; // inv_item_id → { unit_label, pack_size_canonical }
@@ -1301,6 +1317,30 @@ function migrateState(s) {
   // Audit trail of edits made through the Data Management panel (owner + head barista).
   // See _dmApplyEdit / STATE_CHUNKS.audit.
   s.edit_log                = s.edit_log                || [];
+
+  // One-time (Sep 2026): Test Mode became owner-only. Entries logged in Test Mode from
+  // 1 Sep 2026 onward were real work done while the toggle was mistakenly left on for
+  // non-owner staff — promote them to real data by clearing the is_test flag. Covers
+  // every collection that carries the flag, including the petty-cash / bank ledger
+  // side-effects of test purchases. last_edited_at is bumped so a stale device that
+  // still holds the tagged copy can't merge the flag back on.
+  if (!s._test_entries_sept2026_promoted) {
+    const _tmCutoff = "2026-09-01";
+    const _tmDay = (r) => String((r && (r.at || r.date)) || "").slice(0, 10);
+    const _tmPromote = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (const r of arr) {
+        if (r && r.is_test && _tmDay(r) >= _tmCutoff) {
+          delete r.is_test;
+          r.last_edited_at = new Date().toISOString();
+        }
+      }
+    };
+    [s.waste, s.shift_closes, s.purchases, s.petty_cash, s.bank_ledger,
+     s.cleaning_logs, s.signin_stamps].forEach(_tmPromote);
+    s._test_entries_sept2026_promoted = true;
+  }
+
   if (Object.keys(s.inv_engine.thresholds).length === 0 && Array.isArray(s.items) && s.items.length > 0) {
     _seedInvEngineThresholds(s);
   }
@@ -1313,6 +1353,16 @@ function migrateState(s) {
   s.menu  = (s.menu  || []).filter(m => !isDead(m.name));
   if (Array.isArray(s.items)) {
     for (const it of s.items) { if (isDead(it.name)) it.active = false; }
+  }
+
+  // Collapse duplicate menu rows on every load/pull. The id-union menu_data sync never
+  // deletes a remote row, so historical menu-sheet re-uploads (which minted fresh ids
+  // each time) piled up 4-5 dupes per item; this keeps the local menu clean and the
+  // doSync right after a pull writes the deduped set back. See dedupeMenuRows.
+  if (Array.isArray(s.menu)) {
+    const _mBefore = s.menu.length;
+    s.menu = dedupeMenuRows(s.menu);
+    if (s.menu.length !== _mBefore) console.log(`[migration] menu deduped ${_mBefore} → ${s.menu.length}`);
   }
 
   // One-time migration: add new inventory items that were missing from the original seed.
@@ -1490,11 +1540,11 @@ const STATE_CHUNKS = {
   roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves", "deleted_salary_loans", "deleted_sick_leave_deductions", "deleted_leaves", "deleted_salaries"],
   hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
-  overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "maintenance_config"],
+  overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "overhead_custom_cats", "overhead_cat_overrides", "maintenance_config", "loan_payments"],
   media:         ["photo_log", "assets"],
   kpi:           ["kpi_manual", "kpi_logs", "customer_feedback", "alert_log", "kpi_settings", "reorder_actions", "leadership_assignments", "leadership_notifications", "deleted_customer_feedback"],
   tombstones:    ["deleted_ids"],   // ids deleted on any device — unioned, applied on every merge/pull
-  meta:          ["_migration_signature_drinks", "version", "created_at", "branch_opening_times", "sales_meta"],
+  meta:          ["_migration_signature_drinks", "_loan_payments_seeded", "version", "created_at", "branch_opening_times", "sales_meta"],
   inv_engine:        ["inv_engine"],
   inv_engine_alerts: ["inv_engine_alerts"],   // split out — grows continuously, was pushing inv_engine toward the 1 MB limit
   inv_engine_sales:  ["inv_engine_sales_data"],
@@ -1748,10 +1798,55 @@ async function _syncMonthShards() {
   for (const [sigKey, rows] of dirty) _snapshotMonth(sigKey, rows);
 }
 
+// Collapse menu rows that share a normalized name down to a single "richest" row.
+// menu_data syncs by id-union and never deletes a remote row, so every historical
+// menu-sheet re-upload (which used to mint a fresh id per row) left its rows behind —
+// 4-5 duplicate rows per item. This runs on every pull/load (via migrateState) and
+// every push (via _menuMergeDoc) so duplicates can't pile up again. Same name
+// normalization as the P&L cost matcher and the manual "Merge duplicates" button:
+// case/accent-insensitive, "(...)" stripped. Keeper = highest cost_egp, then highest
+// price_egp, then a stable seed id (menu_0123), then longest pos_sku; a blank field on
+// the keeper is backfilled from a dropped sibling.
+function dedupeMenuRows(rows) {
+  if (!Array.isArray(rows)) return rows;
+  const nk = (x) => String(x||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
+  const stable = (id) => /^menu_\d+$/.test(String(id||"")) ? 1 : 0;
+  const byName = new Map();
+  const keyless = [];
+  for (const m of rows) {
+    if (!m || typeof m !== "object") { keyless.push(m); continue; }
+    const k = nk(m.name);
+    if (!k) { keyless.push(m); continue; }
+    const cur = byName.get(k);
+    if (!cur) { byName.set(k, m); continue; }
+    const cmp =
+      ((Number(m.cost_egp)||0)  - (Number(cur.cost_egp)||0))  ||
+      ((Number(m.price_egp)||0) - (Number(cur.price_egp)||0)) ||
+      (stable(m.id)             - stable(cur.id))              ||
+      (String(m.pos_sku||"").length - String(cur.pos_sku||"").length);
+    const mWins = cmp > 0;
+    const keep = mWins ? m : cur;
+    const drop = mWins ? cur : m;
+    if (!keep.cost_egp  && drop.cost_egp)  keep.cost_egp  = drop.cost_egp;
+    if (!keep.price_egp && drop.price_egp) keep.price_egp = drop.price_egp;
+    if (!keep.category  && drop.category)  keep.category  = drop.category;
+    if (!keep.pos_sku   && drop.pos_sku)   keep.pos_sku   = drop.pos_sku;
+    // Prefer the cleaner display name: no parenthetical, shorter, trimmed.
+    const clean = (s) => String(s||"").replace(/\s+/g," ").trim();
+    const better = [keep.name, drop.name].map(clean)
+      .sort((a,b) => (/\(/.test(a)?1:0) - (/\(/.test(b)?1:0) || a.length - b.length)[0];
+    if (better) keep.name = better;
+    byName.set(k, keep);
+  }
+  return [...byName.values(), ...keyless];
+}
+
 // Build the menu_data doc by MERGING local menu with the remote menu by item id, so a
 // device carrying a stale/seed menu (cost_egp all null) can't overwrite the costed menu
 // on the server — the cause of "menu costs missing from margins". Local edits win, but a
-// blank local cost/price never clobbers a known remote value.
+// blank local cost/price never clobbers a known remote value. The union is then deduped
+// by name (see dedupeMenuRows) so a stale device re-uploading the menu can't reinflate
+// it. Returns null when the result already equals remote, so the caller skips the write.
 async function _menuMergeDoc() {
   // A failed read must ABORT (throw), never fall back to local-only — writing a stale/empty
   // local menu over a populated remote is how costs/items get wiped.
@@ -1766,7 +1861,11 @@ async function _menuMergeDoc() {
     if (!lm.price_egp && rm.price_egp) merged.price_egp = rm.price_egp;  // don't null out a known price
     byId.set(lm.id, merged);
   }
-  return _sanitizeForFirestore({ menu: [...byId.values()] });
+  const mergedMenu = dedupeMenuRows([...byId.values()]);
+  const sig = (arr) => JSON.stringify(arr.map(m => m && m.id).sort()) + "|" + arr.length;
+  if (snap.exists && sig(mergedMenu) === sig(remoteMenu)
+      && JSON.stringify(mergedMenu) === JSON.stringify(remoteMenu)) return null;
+  return _sanitizeForFirestore({ menu: mergedMenu });
 }
 
 // Build the overhead chunk by MERGING local with remote instead of blind-overwriting,
@@ -1802,11 +1901,28 @@ async function _overheadMergeDoc() {
   }
   const mergeMap = (k) => ({ ...(remote[k] && typeof remote[k] === "object" ? remote[k] : {}), ...(state[k] || {}) });
 
+  // overhead_custom_cats[]: union by value, newest updated_at wins so a rename or a
+  // delete (deleted:true) from another device isn't dropped by a stale local copy.
+  const catByVal = new Map((Array.isArray(remote.overhead_custom_cats) ? remote.overhead_custom_cats : []).map(c => [c.value, c]));
+  for (const lc of (state.overhead_custom_cats || [])) {
+    if (!lc || !lc.value) continue;
+    const rc = catByVal.get(lc.value);
+    catByVal.set(lc.value, (!rc || (lc.updated_at || "") >= (rc.updated_at || "")) ? lc : rc);
+  }
+  // overhead_cat_overrides{}: per built-in category, keep the newer {label,hidden}.
+  const catOv = { ...(remote.overhead_cat_overrides || {}) };
+  for (const [k, v] of Object.entries(state.overhead_cat_overrides || {})) {
+    const rv = catOv[k];
+    catOv[k] = (!rv || (v.updated_at || "") >= (rv.updated_at || "")) ? v : rv;
+  }
+
   return _sanitizeForFirestore({
     overheads: [...byId.values()],
     overhead_presets: presets,
     overhead_monthly_amts: mergeMap("overhead_monthly_amts"),
     overhead_preset_history: mergeMap("overhead_preset_history"),
+    overhead_custom_cats: [...catByVal.values()],
+    overhead_cat_overrides: catOv,
     maintenance_config: mergeMap("maintenance_config"),
   });
 }
@@ -2347,12 +2463,16 @@ async function doSync() {
     _collectDeletions();
     const writes = Object.entries(STATE_CHUNKS).map(([chunk, keys]) => {
       // menu_data is merged (not overwritten) to protect item costs — see _menuMergeDoc.
+      // Always run the merge (not gated on _chunkChanged): it also collapses duplicate
+      // rows a stale device may have pushed, and it returns null — skipping the write —
+      // when the deduped result already matches remote, so the extra read is cheap.
       if (chunk === "menu_data") {
-        if (!_chunkChanged(chunk, keys)) return Promise.resolve();
-        return _menuMergeDoc().then(doc =>
-          db.collection("state").doc(chunk).set(doc)
+        return _menuMergeDoc().then(doc => {
+          if (!doc) { _snapshotChunk(chunk, keys); return; }
+          return db.collection("state").doc(chunk).set(doc)
             .then(() => _snapshotChunk(chunk, keys))
-            .catch(err => { err._chunk = chunk; throw err; }));
+            .catch(err => { err._chunk = chunk; throw err; });
+        });
       }
       // inv_engine_alerts is merged then collapsed so the doc can actually shrink back
       // under Firestore's 1 MB limit — see _invAlertsMergeDoc.
@@ -2812,6 +2932,9 @@ function _overheadSig(d) {
     mapSig(d.overhead_presets),
     mapSig(d.overhead_monthly_amts),
     mapSig(d.overhead_preset_history),
+    (Array.isArray(d.overhead_custom_cats) ? d.overhead_custom_cats : [])
+      .map(c => `${c.value}:${c.label || ""}:${c.updated_at || ""}:${c.deleted ? 1 : 0}`).sort(),
+    mapSig(d.overhead_cat_overrides),
   ]);
 }
 function startOverheadSyncListener() {
@@ -4052,7 +4175,12 @@ function T(en, ar) { return uiLang === "ar" ? ar : en; }
 const TEST_MODE_KEY = "cb_test_mode";
 let testMode = false;
 try { testMode = localStorage.getItem(TEST_MODE_KEY) === "1"; } catch(e) {}
-function isTestMode() { return testMode; }
+// Test Mode is owner-only (per Haïdi, Sep 2026). Even if a non-owner device still has
+// the old localStorage flag set, it has no effect — their entries always count as real.
+function isTestMode() {
+  if (!testMode) return false;
+  try { const u = currentUser(); return !!(u && u.role === "owner"); } catch(e) { return false; }
+}
 function setTestMode(on) {
   testMode = !!on;
   try { localStorage.setItem(TEST_MODE_KEY, testMode ? "1" : "0"); } catch(e) {}
@@ -4167,19 +4295,21 @@ function topbar(u) {
       title: "Switch language / تبديل اللغة",
     }, uiLang === "ar" ? "EN 🇬🇧" : "AR 🇪🇬"));
   }
-  children.push(el("button", {
-    class: "chip",
-    style: testMode
-      ? { fontWeight: "800", background: "#f59e0b", color: "#1a1a1a", border: "1px solid #b45309" }
-      : { fontWeight: "600" },
-    onClick: () => setTestMode(!testMode),
-    title: T("New Shift Close / Waste entries won't count toward real data while this is on.",
-             "لن تُحتسب سجلات إغلاق الشيفت/الهدر الجديدة كبيانات حقيقية أثناء التفعيل."),
-  }, testMode ? T("🧪 Test Mode: ON", "🧪 وضع التجربة: مفعّل") : T("🧪 Test Mode", "🧪 وضع التجربة")));
+  if (u.role === "owner") {
+    children.push(el("button", {
+      class: "chip",
+      style: testMode
+        ? { fontWeight: "800", background: "#f59e0b", color: "#1a1a1a", border: "1px solid #b45309" }
+        : { fontWeight: "600" },
+      onClick: () => setTestMode(!testMode),
+      title: T("New Shift Close / Waste entries won't count toward real data while this is on.",
+               "لن تُحتسب سجلات إغلاق الشيفت/الهدر الجديدة كبيانات حقيقية أثناء التفعيل."),
+    }, testMode ? T("🧪 Test Mode: ON", "🧪 وضع التجربة: مفعّل") : T("🧪 Test Mode", "🧪 وضع التجربة")));
+  }
   children.push(el("span", { class: "chip" }, roleLabel));
   children.push(el("button", { class: "chip", onClick: () => { if (confirm("Sign out?")) auth.signOut(); } }, "Logout"));
   const t = el("div", { class: "topbar" }, children);
-  if (testMode) {
+  if (u.role === "owner" && testMode) {
     t.style.flexWrap = "wrap";
     t.appendChild(el("div", {
       style: {
@@ -8507,6 +8637,61 @@ routes.maadi_deposits = function (u) {
 };
 
 // ==============================================================
+// COMPANY LOAN  (never feeds any overhead row or branch-margin calc)
+// ---
+// Originated Sep 2024. Borrowed 600,000 EGP, repaying 750,000 total in 12 equal
+// QUARTERLY payments of 62,500, first payment Dec 2024, last Sep 2027.
+// Linear (straight-line) interest: the 150,000 finance cost spreads evenly →
+// 12,500 interest + 50,000 principal per quarter (≈ 4,166.67 interest/month).
+// Only INTEREST is a P&L expense, and only for quarters that have been PAID
+// (marked in Monthly Overheads → drawLoanCard). Unpaid / late quarters accrue
+// nothing — no interest, no penalty — until ticked. Interest hits the Dashboards
+// P&L on Combined only; principal repayment never touches profit.
+// Payment status lives in state.loan_payments = { "<q>": { paid, paid_on } }.
+// ==============================================================
+const LOAN = {
+  originMonth: "2024-09",
+  firstPaymentMonth: "2024-12",
+  principal: 600000,
+  repayment: 750000,
+  termMonths: 36,
+  termQuarters: 12,
+  get interestTotal()       { return this.repayment - this.principal; },        // 150,000
+  get quarterlyPayment()    { return this.repayment / this.termQuarters; },     // 62,500
+  get quarterlyInterest()   { return this.interestTotal / this.termQuarters; }, // 12,500
+  get quarterlyPrincipal()  { return this.principal / this.termQuarters; },     // 50,000
+  get monthlyInterest()     { return this.interestTotal / this.termMonths; },   // 4,166.67 (P&L spread)
+  addMonths(ym, n) {
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(y, (m - 1) + n, 1);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  },
+  get endMonth() { return this.addMonths(this.firstPaymentMonth, this.termMonths - 1); }, // 2027-11
+  quarterDueMonth(q) { return this.addMonths(this.firstPaymentMonth, (q - 1) * 3); },
+  // The "YYYY-MM" quarter number a month falls in (each quarter = its due month + the 2
+  // following months), or null if the month is outside the repayment window.
+  quarterForMonth(month) {
+    for (let q = 1; q <= this.termQuarters; q++) {
+      const start = this.quarterDueMonth(q);
+      if (month >= start && month <= this.addMonths(start, 2)) return q;
+    }
+    return null;
+  },
+};
+
+// Has quarter q been marked paid? (state.loan_payments is seeded Q1–Q6 = paid.)
+function loanQuarterPaid(q) {
+  const rec = (state.loan_payments || {})[q];
+  return !!(rec && rec.paid);
+}
+// Interest charged to the P&L for a given "YYYY-MM": the monthly straight-line slice,
+// but only once that month's quarter has actually been paid. 0 otherwise.
+const loanInterestForMonth = (month) => {
+  const q = LOAN.quarterForMonth(month);
+  return (q && loanQuarterPaid(q)) ? LOAN.monthlyInterest : 0;
+};
+
+// ==============================================================
 // MONTHLY OVERHEADS
 // ---
 // Recurring bills have PRESET amounts stored once in state.overhead_presets
@@ -8521,6 +8706,7 @@ const OVERHEAD_CATEGORIES = [
   { value: "accountant_salary", label: "Accountant salary",  recurring: true  },
   { value: "pos_fees",          label: "POS fees",           recurring: true  },
   { value: "gardener_salary",   label: "Gardener salary",    recurring: true  },
+  { value: "loan_payment",      label: "Loan payment",       recurring: true  },
   { value: "marketing_fees",    label: "Marketing fees",     recurring: false },
   { value: "misc",              label: "Miscellaneous (specify)", recurring: false },
   // Maintenance & pest control — logged through the dedicated Maintenance card
@@ -8845,6 +9031,38 @@ function getPresetAmtForMonth(pk, month) {
   return Number((state.overhead_presets[pk] || {}).amount || 0);
 }
 
+// ── Editable recurring-overhead line items ─────────────────────────────
+// The "Fixed monthly amounts" list = built-in recurring categories (which the
+// owner may rename or hide via state.overhead_cat_overrides) + owner-added
+// custom categories (state.overhead_custom_cats). Everything downstream —
+// monthly tracking panels, totals, dashboard labels — reads this, never the
+// raw OVERHEAD_CATEGORIES const, so a renamed/added/removed line flows through.
+function recurringOverheadCats() {
+  const ov = state.overhead_cat_overrides || {};
+  const builtin = OVERHEAD_CATEGORIES
+    .filter(c => c.recurring && !(ov[c.value] || {}).hidden)
+    .map(c => ({ value: c.value, label: (ov[c.value] || {}).label || c.label, recurring: true, builtin: true }));
+  const custom = (state.overhead_custom_cats || [])
+    .filter(c => c && c.value && !c.deleted)
+    .map(c => ({ value: c.value, label: c.label || c.value, recurring: true, custom: true }));
+  return [...builtin, ...custom];
+}
+function isRecurringOverheadCat(value) {
+  return recurringOverheadCats().some(c => c.value === value);
+}
+function overheadCatLabel(value) {
+  const custom = (state.overhead_custom_cats || []).find(c => c && c.value === value);
+  if (custom) return custom.label || value;
+  const ovl = ((state.overhead_cat_overrides || {})[value] || {}).label;
+  if (ovl) return ovl;
+  const bi = OVERHEAD_CATEGORIES.find(c => c.value === value);
+  return bi ? bi.label : value;
+}
+function hiddenBuiltinOverheadCats() {
+  const ov = state.overhead_cat_overrides || {};
+  return OVERHEAD_CATEGORIES.filter(c => c.recurring && (ov[c.value] || {}).hidden);
+}
+
 routes.overheads = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Monthly overheads", "Edit fixed amounts for both branches, then track payments month by month."));
@@ -8858,6 +9076,8 @@ routes.overheads = function (u) {
   state.overheads              = state.overheads              || [];
   state.overhead_presets       = state.overhead_presets       || {};
   state.overhead_monthly_amts  = state.overhead_monthly_amts  || {};
+  state.overhead_custom_cats   = state.overhead_custom_cats   || [];
+  state.overhead_cat_overrides = state.overhead_cat_overrides || {};
 
   // ─── SECTION 0: per-barista salary → branch allocation ────────────────
   // Replaces the old blanket "salary split %" slider. Each barista's salary is
@@ -8870,32 +9090,120 @@ routes.overheads = function (u) {
   // Kept inside draw() so that typing a new amount re-renders all inputs from
   // state and the "Total overhead" card at the bottom stays in lockstep.
   const fixedWrap = el("div", {});
-  wrap.appendChild(fixedWrap);
+  // Placed into its own sub-tab further down (secFixed), not straight into wrap.
+
+  // Owner can add / rename / remove the recurring line items in this list.
+  const canEditList = u.role === "owner";
+  let editList = false;
+
+  function overheadCatsStamp() { saveState({ immediate: true }); }
+
+  function addOverheadLineItem() {
+    openPrompt({
+      title: "Add fixed monthly line item",
+      fields: [{ key: "label", label: "Line item name (e.g. Rent, Security)", type: "text", value: "" }],
+      onSubmit: (vals) => {
+        const label = (vals.label || "").trim();
+        if (!label) return toast("Enter a name", "error");
+        const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) || "item";
+        const value = `custom_${slug}_${uuid().slice(0, 6)}`;
+        const s = stamp();
+        state.overhead_custom_cats = state.overhead_custom_cats || [];
+        state.overhead_custom_cats.push({ value, label, updated_at: s.at, updated_by: s.by_name, deleted: false });
+        overheadCatsStamp();
+        toast(`Added "${label}"`, "ok");
+        draw();
+      }
+    });
+  }
+
+  function renameOverheadCat(cat, newLabel) {
+    const label = (newLabel || "").trim();
+    if (!label || label === cat.label) return;
+    const s = stamp();
+    if (cat.custom) {
+      const entry = (state.overhead_custom_cats || []).find(c => c.value === cat.value);
+      if (entry) { entry.label = label; entry.updated_at = s.at; entry.updated_by = s.by_name; }
+    } else {
+      const orig = (OVERHEAD_CATEGORIES.find(c => c.value === cat.value) || {}).label;
+      state.overhead_cat_overrides = state.overhead_cat_overrides || {};
+      const cur = state.overhead_cat_overrides[cat.value] || {};
+      if (label === orig) delete cur.label; else cur.label = label;
+      cur.updated_at = s.at;
+      if (cur.label == null && !cur.hidden) delete state.overhead_cat_overrides[cat.value];
+      else state.overhead_cat_overrides[cat.value] = cur;
+    }
+    overheadCatsStamp();
+    toast(`Renamed to "${label}"`, "ok");
+    draw();
+  }
+
+  function removeOverheadCat(cat) {
+    if (!confirm(`Remove "${cat.label}" from the fixed monthly list?\n\nMonths already recorded and paid keep their figures in the dashboard and reports — this only stops it appearing going forward.`)) return;
+    const s = stamp();
+    if (cat.custom) {
+      const entry = (state.overhead_custom_cats || []).find(c => c.value === cat.value);
+      if (entry) { entry.deleted = true; entry.updated_at = s.at; entry.updated_by = s.by_name; }
+    } else {
+      state.overhead_cat_overrides = state.overhead_cat_overrides || {};
+      state.overhead_cat_overrides[cat.value] = { ...(state.overhead_cat_overrides[cat.value] || {}), hidden: true, updated_at: s.at };
+    }
+    overheadCatsStamp();
+    toast(`Removed "${cat.label}"`, "ok");
+    draw();
+  }
+
+  function restoreBuiltinOverheadCat(value) {
+    const s = stamp();
+    const cur = state.overhead_cat_overrides[value] || {};
+    delete cur.hidden;
+    cur.updated_at = s.at;
+    if (cur.label == null) delete state.overhead_cat_overrides[value];
+    else state.overhead_cat_overrides[value] = cur;
+    overheadCatsStamp();
+    draw();
+  }
 
   function drawFixedCard() {
     fixedWrap.innerHTML = "";
     const fixedCard = el("div", { class: "card", style: { marginTop: "12px" } });
-    fixedCard.appendChild(el("div", { style: { display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"10px" } }, [
+    fixedCard.appendChild(el("div", { style: { display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"10px", gap:"8px", flexWrap:"wrap" } }, [
       el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700" } }, "Fixed monthly amounts"),
-      el("div", { class: "muted small" }, "Edit → press Enter or tap away to save · pushed to Google Sheet instantly"),
+      canEditList
+        ? el("button", { class:"btn ghost", style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px" },
+            onClick:() => { editList = !editList; drawFixedCard(); } }, editList ? "✓ Done editing list" : "✎ Edit list")
+        : el("div", { class: "muted small" }, "Edit → press Enter or tap away to save · pushed to Google Sheet instantly"),
     ]));
+    if (editList) fixedCard.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } },
+      "Rename or remove line items below. Amounts still save on Enter / tap-away."));
     const hdr = el("div", { style: {
-      display:"grid", gridTemplateColumns:"1fr 1fr 1fr",
+      display:"grid", gridTemplateColumns: editList ? "1fr 1fr 1fr auto" : "1fr 1fr 1fr",
       gap:"8px", marginBottom:"10px", fontSize:"12px", fontWeight:"700",
       textTransform:"uppercase", letterSpacing:"0.8px", color:"var(--ink-dim)"
     }});
     hdr.appendChild(el("div", {}, "Category"));
     hdr.appendChild(el("div", { style:{textAlign:"center"} }, "🏠 Maadi (EGP)"));
     hdr.appendChild(el("div", { style:{textAlign:"center"} }, "🏢 Zawya (EGP)"));
+    if (editList) hdr.appendChild(el("div", {}, ""));
     fixedCard.appendChild(hdr);
 
-    for (const cat of OVERHEAD_CATEGORIES.filter(c => c.recurring)) {
+    for (const cat of recurringOverheadCats()) {
       const row = el("div", { style: {
-        display:"grid", gridTemplateColumns:"1fr 1fr 1fr",
+        display:"grid", gridTemplateColumns: editList ? "1fr 1fr 1fr auto" : "1fr 1fr 1fr",
         gap:"8px", alignItems:"center", paddingBottom:"8px",
         borderBottom:"1px solid var(--border)", marginBottom:"8px"
       }});
-      row.appendChild(el("div", { style:{fontWeight:"500", fontSize:"14px"} }, cat.label));
+      if (editList) {
+        const nameInp = el("input", {
+          type:"text", value: cat.label,
+          style:{ padding:"7px 9px", fontSize:"14px", fontWeight:"500" }
+        });
+        nameInp.addEventListener("blur", () => renameOverheadCat(cat, nameInp.value));
+        nameInp.addEventListener("keydown", e => { if (e.key === "Enter") nameInp.blur(); });
+        row.appendChild(nameInp);
+      } else {
+        row.appendChild(el("div", { style:{fontWeight:"500", fontSize:"14px"} }, cat.label));
+      }
       for (const br of ["maadi","zawya"]) {
         const pk = presetKey(br, cat.value);
         const preset = state.overhead_presets[pk] || {};
@@ -8937,7 +9245,30 @@ routes.overheads = function (u) {
         inp.addEventListener("keydown", e => { if (e.key === "Enter") inp.blur(); });
         row.appendChild(inp);
       }
+      if (editList) {
+        row.appendChild(el("button", {
+          class:"btn ghost", title:"Remove line item",
+          style:{ fontSize:"13px", padding:"4px 8px", minHeight:"30px", color:"var(--warn)" },
+          onClick:() => removeOverheadCat(cat)
+        }, "✕"));
+      }
       fixedCard.appendChild(row);
+    }
+
+    if (editList) {
+      fixedCard.appendChild(el("button", {
+        class:"btn secondary", style:{ marginTop:"4px" }, onClick: addOverheadLineItem
+      }, "➕ Add line item"));
+      const hiddenCats = hiddenBuiltinOverheadCats();
+      if (hiddenCats.length) {
+        fixedCard.appendChild(el("div", { class:"muted small", style:{ marginTop:"10px", display:"flex", gap:"6px", flexWrap:"wrap", alignItems:"center" } }, [
+          el("span", {}, "Removed built-ins:"),
+          ...hiddenCats.map(c => el("button", {
+            class:"btn ghost", style:{ fontSize:"12px", padding:"3px 7px", minHeight:"26px" },
+            onClick:() => restoreBuiltinOverheadCat(c.value)
+          }, `↩ ${c.label}`)),
+        ]));
+      }
     }
     fixedWrap.appendChild(fixedCard);
   }
@@ -8951,6 +9282,9 @@ routes.overheads = function (u) {
   });
   monthInput.addEventListener("change", () => { month = monthInput.value; draw(); });
 
+  // Month picker + variable-entry shortcuts — kept above the sub-tabs and always
+  // visible, because Monthly / Salaries / Maintenance / Totals all key off the
+  // chosen month.
   wrap.appendChild(el("div", { class:"card", style:{ display:"flex", gap:"12px", alignItems:"center", flexWrap:"wrap", marginTop:"12px" } }, [
     el("span", { class:"muted small", style:{fontWeight:"600"} }, "Month"),
     monthInput,
@@ -8958,8 +9292,43 @@ routes.overheads = function (u) {
     el("button", { class:"btn secondary", onClick:()=>addOverhead("marketing_fees","zawya") }, "➕ Zawya marketing/misc"),
   ]));
 
-  const body = el("div", {});
-  wrap.appendChild(body);
+  // ─── Sub-tabs — each overheads area on its own tab instead of one long scroll ──
+  const secFixed   = el("div", {});
+  const secMonthly = el("div", {});
+  const secSalary  = el("div", {});
+  const secMaint   = el("div", {});
+  const secLoan    = el("div", {});
+  const secTotals  = el("div", {});
+  secFixed.appendChild(fixedWrap);
+
+  const SUBTABS = [
+    ["fixed",   "🧾 Fixed amounts",    secFixed],
+    ["monthly", "📅 Monthly tracking", secMonthly],
+    ["salary",  "👥 Salaries",         secSalary],
+    ["maint",   "🔧 Maintenance",      secMaint],
+    ["loan",    "🏦 Company loan",     secLoan],
+    ["totals",  "Σ Totals",            secTotals],
+  ];
+  let subTab = "fixed";
+  const subTabBar = el("div", { class:"tabs" });
+  function paintSubTabs() {
+    subTabBar.innerHTML = "";
+    SUBTABS.forEach(([key, label, sec]) => {
+      subTabBar.appendChild(el("button", {
+        class: "tab" + (subTab === key ? " on" : ""),
+        onClick: () => { subTab = key; paintSubTabs(); },
+      }, label));
+      sec.style.display = subTab === key ? "" : "none";
+    });
+  }
+  paintSubTabs();
+  wrap.appendChild(subTabBar);
+  wrap.appendChild(secFixed);
+  wrap.appendChild(secMonthly);
+  wrap.appendChild(secSalary);
+  wrap.appendChild(secMaint);
+  wrap.appendChild(secLoan);
+  wrap.appendChild(secTotals);
   draw();
   wrap.appendChild(btnBack());
 
@@ -8967,14 +9336,15 @@ routes.overheads = function (u) {
     // Re-render Section 1 (fixed preset inputs) so the amounts always reflect
     // the current state — critical when a pull from Sheets replaces preset values.
     drawFixedCard();
-    body.innerHTML = "";
-    // Two columns: Maadi | Zawya
+    // Monthly tracking — two columns: Maadi | Zawya
+    secMonthly.innerHTML = "";
     const twoCols = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"12px", marginTop:"12px" } });
     for (const br of ["maadi","zawya"]) twoCols.appendChild(drawBranchPanel(br));
-    body.appendChild(twoCols);
-    body.appendChild(drawSalaryCard());
-    body.appendChild(drawMaintenanceCard());
-    body.appendChild(drawTotalsCard());
+    secMonthly.appendChild(twoCols);
+    secSalary.innerHTML = ""; secSalary.appendChild(drawSalaryCard());
+    secMaint.innerHTML  = ""; secMaint.appendChild(drawMaintenanceCard());
+    secLoan.innerHTML   = ""; secLoan.appendChild(drawLoanCard());
+    secTotals.innerHTML = ""; secTotals.appendChild(drawTotalsCard());
   }
 
   function drawBranchPanel(br) {
@@ -8984,7 +9354,7 @@ routes.overheads = function (u) {
 
     let panelPaid = 0, panelUnpaid = 0;
 
-    for (const cat of OVERHEAD_CATEGORIES.filter(c => c.recurring)) {
+    for (const cat of recurringOverheadCats()) {
       const pk = presetKey(br, cat.value);
       // `preset` is passed to togglePaid for the default amount + note. It was never
       // defined here, so marking a recurring bill (electricity, internet…) as paid threw
@@ -9033,12 +9403,12 @@ routes.overheads = function (u) {
     const varRows = state.overheads.filter(o =>
       o.branch === br &&
       ((o.month || (o.date||"").slice(0,7)) === month) &&
-      !OVERHEAD_CATEGORIES.find(c => c.value === o.category && c.recurring)
+      !isRecurringOverheadCat(o.category)
     ).sort((a,b) => (b.at||"").localeCompare(a.at||""));
     if (varRows.length > 0) {
       panel.appendChild(el("div", { class:"muted small", style:{ marginBottom:"4px", fontWeight:"600" } }, "Variable"));
       for (const r of varRows) {
-        const catLabel = (OVERHEAD_CATEGORIES.find(c => c.value === r.category)||{}).label || r.category;
+        const catLabel = overheadCatLabel(r.category);
         panel.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"12px", marginBottom:"4px" } }, [
           el("div", { style:{ flex:"1" } }, `${catLabel}${r.label ? " — "+r.label : ""}`),
           el("div", { style:{ fontWeight:"700", marginRight:"6px" } }, money(r.amount)),
@@ -9147,28 +9517,47 @@ routes.overheads = function (u) {
     hdrRow.appendChild(el("div", { style:{textAlign:"right"} }, "🏢 Zawya"));
     card.appendChild(hdrRow);
 
+    card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"8px", fontSize:"12px" } },
+      "Only line items ticked as paid this month count toward the total. An unticked bill (e.g. cleaner salary while there's no cleaner) shows its expected amount in grey but is excluded until you mark it paid."));
+
+    // Per branch/category: `ref` is the expected amount (preset/override/logged),
+    // `paid` is what actually counts — 0 unless the bill is ticked paid this month.
+    function billCell(br, cat) {
+      const pk = presetKey(br, cat.value);
+      const mk = monthlyKey(br, cat.value, month);
+      const ov = state.overhead_monthly_amts[mk];
+      const existing = state.overheads.find(o =>
+        o.branch === br && o.category === cat.value &&
+        ((o.month || (o.date||"").slice(0,7)) === month));
+      const ref = existing ? Number(existing.amount)
+                : ov != null ? Number(ov)
+                : getPresetAmtForMonth(pk, month);
+      const isPaid = !!(existing && existing.paid);
+      return { ref: ref || 0, paid: isPaid ? (ref || 0) : 0, isPaid };
+    }
+    function amtCell(c) {
+      if (c.isPaid) return el("div", { style:{textAlign:"right"} }, money(c.paid));
+      if (c.ref > 0) return el("div", { style:{textAlign:"right", color:"var(--ink-dim)", textDecoration:"line-through" }, title:"Not ticked paid — excluded from total" }, money(c.ref));
+      return el("div", { style:{textAlign:"right", color:"var(--ink-dim)"} }, "—");
+    }
+
+    let maadiBills = 0, zawyaBills = 0, maadiOutstanding = 0, zawyaOutstanding = 0;
+
     // Recurring bills breakdown
-    for (const cat of OVERHEAD_CATEGORIES.filter(c => c.recurring)) {
-      const vals = ["maadi","zawya"].map(br => {
-        const pk = presetKey(br, cat.value);
-        const mk = monthlyKey(br, cat.value, month);
-        const monthlyOverride = state.overhead_monthly_amts[mk] != null ? state.overhead_monthly_amts[mk] : null;
-        const existing = state.overheads.find(o =>
-          o.branch === br && o.category === cat.value &&
-          ((o.month || (o.date||"").slice(0,7)) === month));
-        return existing ? Number(existing.amount)
-             : monthlyOverride != null ? Number(monthlyOverride)
-             : getPresetAmtForMonth(pk, month);
-      });
+    for (const cat of recurringOverheadCats()) {
+      const m = billCell("maadi", cat), z = billCell("zawya", cat);
+      maadiBills += m.paid; zawyaBills += z.paid;
+      if (!m.isPaid) maadiOutstanding += m.ref;
+      if (!z.isPaid) zawyaOutstanding += z.ref;
       card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"13px", paddingBottom:"4px" } }, [
         el("div", {}, cat.label),
-        el("div", { style:{textAlign:"right"} }, money(vals[0])),
-        el("div", { style:{textAlign:"right"} }, money(vals[1])),
+        amtCell(m),
+        amtCell(z),
       ]));
     }
-    // Variable
-    const varMaadi = state.overheads.filter(o => o.branch==="maadi" && ((o.month||(o.date||"").slice(0,7))===month) && !OVERHEAD_CATEGORIES.find(c=>c.value===o.category&&c.recurring)).reduce((s,o)=>s+(Number(o.amount)||0),0);
-    const varZawya = state.overheads.filter(o => o.branch==="zawya" && ((o.month||(o.date||"").slice(0,7))===month) && !OVERHEAD_CATEGORIES.find(c=>c.value===o.category&&c.recurring)).reduce((s,o)=>s+(Number(o.amount)||0),0);
+    // Variable — logged actuals, always counted
+    const varMaadi = state.overheads.filter(o => o.branch==="maadi" && ((o.month||(o.date||"").slice(0,7))===month) && !isRecurringOverheadCat(o.category)).reduce((s,o)=>s+(Number(o.amount)||0),0);
+    const varZawya = state.overheads.filter(o => o.branch==="zawya" && ((o.month||(o.date||"").slice(0,7))===month) && !isRecurringOverheadCat(o.category)).reduce((s,o)=>s+(Number(o.amount)||0),0);
     if (varMaadi || varZawya) {
       card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"13px", paddingBottom:"4px" } }, [
         el("div", { style:{color:"var(--ink-dim)"} }, "Variable"),
@@ -9176,34 +9565,25 @@ routes.overheads = function (u) {
         el("div", { style:{textAlign:"right"} }, money(varZawya)),
       ]));
     }
-    // Salary
+    // Salary — always counted
     card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"13px", paddingBottom:"4px", borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px" } }, [
       el("div", {}, "Staff salary"),
       el("div", { style:{textAlign:"right"} }, money(maadiSalary)),
       el("div", { style:{textAlign:"right"} }, money(zawyaSalary)),
     ]));
-    // Grand total
-    const maadiBills = ["maadi"].reduce((s, br) =>
-      s + OVERHEAD_CATEGORIES.filter(c=>c.recurring).reduce((ss, cat) => {
-        const mk = monthlyKey(br, cat.value, month);
-        const pk = presetKey(br, cat.value);
-        const ex = state.overheads.find(o=>o.branch===br&&o.category===cat.value&&((o.month||(o.date||"").slice(0,7))===month));
-        const ov = state.overhead_monthly_amts[mk];
-        return ss + (ex ? Number(ex.amount) : ov != null ? Number(ov) : getPresetAmtForMonth(pk, month));
-      }, 0), 0);
-    const zawyaBills = ["zawya"].reduce((s, br) =>
-      s + OVERHEAD_CATEGORIES.filter(c=>c.recurring).reduce((ss, cat) => {
-        const mk = monthlyKey(br, cat.value, month);
-        const pk = presetKey(br, cat.value);
-        const ex = state.overheads.find(o=>o.branch===br&&o.category===cat.value&&((o.month||(o.date||"").slice(0,7))===month));
-        const ov = state.overhead_monthly_amts[mk];
-        return ss + (ex ? Number(ex.amount) : ov != null ? Number(ov) : getPresetAmtForMonth(pk, month));
-      }, 0), 0);
+    // Grand total — paid recurring bills + variable + salary
     card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"14px", fontWeight:"700", borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px" } }, [
-      el("div", {}, "Total overhead"),
+      el("div", {}, "Total overhead (paid)"),
       el("div", { style:{textAlign:"right", color:"var(--ok)"} }, money(maadiBills + varMaadi + maadiSalary)),
       el("div", { style:{textAlign:"right", color:"var(--ok)"} }, money(zawyaBills + varZawya + zawyaSalary)),
     ]));
+    if (maadiOutstanding || zawyaOutstanding) {
+      card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"12px", marginTop:"3px" } }, [
+        el("div", { style:{color:"var(--warn)"} }, "Not ticked paid (excluded)"),
+        el("div", { style:{textAlign:"right", color:"var(--warn)"} }, maadiOutstanding ? money(maadiOutstanding) : "—"),
+        el("div", { style:{textAlign:"right", color:"var(--warn)"} }, zawyaOutstanding ? money(zawyaOutstanding) : "—"),
+      ]));
+    }
     return card;
   }
 
@@ -9303,6 +9683,91 @@ routes.overheads = function (u) {
     emRow.appendChild(emBranchRow);
     card.appendChild(emRow);
 
+    return card;
+  }
+
+  // Company loan — quarterly payment tracker. Tick each quarter as it's paid. Ticking a
+  // quarter is what makes its interest (12,500 ÷ 3 = 4,166.67/month) appear on the
+  // Dashboards P&L (Combined only). It creates NO overhead rows and never touches branch
+  // margins or the totals card. Principal repayment never hits profit.
+  function toggleLoanQuarter(q, paid) {
+    state.loan_payments = state.loan_payments || {};
+    const s = stamp();
+    state.loan_payments[q] = paid
+      ? { paid: true, paid_on: LOAN.quarterDueMonth(q) + "-01", by: s.by, by_name: s.by_name, at: s.at }
+      : { paid: false, by: s.by, by_name: s.by_name, at: s.at };
+    saveState();
+    toast(paid ? `Q${q} marked paid` : `Q${q} marked unpaid`, "ok");
+    draw();
+  }
+
+  function drawLoanCard() {
+    const m0 = (x) => money(Math.round(x));   // whole-EGP display — the term doesn't divide evenly
+    const canEdit = u.role === "owner";
+    const nowMonth = new Date().toISOString().slice(0, 7);
+    const card = el("div", { class:"card", style:{ marginTop:"12px" } });
+    card.appendChild(el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700", marginBottom:"6px" } }, "🏦 Company loan"));
+    card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px", fontSize:"12px" } },
+      "Not part of overheads or branch margins. Ticking a quarter as paid is what puts its interest onto the Dashboards P&L (12,500/quarter, Combined only). Principal repayment never hits profit. Record the actual cash payment in the Bank Ledger."));
+
+    const kv = (k, v, strong) => el("div", { style:{ display:"flex", justifyContent:"space-between", gap:"8px", padding:"4px 0", borderBottom:"1px solid var(--border)", fontSize:"13px" } }, [
+      el("div", { class: strong ? "" : "muted", style: strong ? { fontWeight:"700" } : {} }, k),
+      el("div", { style:{ fontWeight: strong ? "800" : "600", whiteSpace:"nowrap" } }, v),
+    ]);
+
+    card.appendChild(kv("Borrowed (principal)", m0(LOAN.principal)));
+    card.appendChild(kv("Total repayable", m0(LOAN.repayment)));
+    card.appendChild(kv("Finance cost (interest)", m0(LOAN.interestTotal)));
+    card.appendChild(kv("Originated", fmtYm(LOAN.originMonth)));
+    card.appendChild(kv("Repayment", `${LOAN.termQuarters} quarterly · ${fmtYm(LOAN.firstPaymentMonth)} → ${fmtYm(LOAN.quarterDueMonth(LOAN.termQuarters))}`));
+    card.appendChild(kv("Per quarter", m0(LOAN.quarterlyPayment)));
+    card.appendChild(el("div", { class:"muted small", style:{ fontSize:"12px", padding:"3px 0 8px" } },
+      `= ${m0(LOAN.quarterlyPrincipal)} principal + ${m0(LOAN.quarterlyInterest)} interest`));
+
+    // ── Quarterly schedule with paid ticks ──
+    card.appendChild(el("div", { style:{ marginTop:"8px", fontWeight:"700", fontSize:"13px", marginBottom:"4px" } }, "Quarterly payments"));
+    let paidCount = 0, lateList = [];
+    for (let q = 1; q <= LOAN.termQuarters; q++) {
+      const due = LOAN.quarterDueMonth(q);
+      const rec = (state.loan_payments || {})[q] || {};
+      const paid = !!rec.paid;
+      if (paid) paidCount++;
+      const late = !paid && due <= nowMonth;
+      if (late) lateList.push("Q" + q);
+
+      const row = el("div", { style:{ display:"flex", alignItems:"center", gap:"8px", padding:"5px 0", borderBottom:"1px solid var(--border)", fontSize:"13px" } });
+      const cb = el("input", { type:"checkbox" });
+      cb.checked = paid;
+      cb.disabled = !canEdit;
+      cb.style.cssText = "width:16px;height:16px;accent-color:var(--ok)" + (canEdit ? ";cursor:pointer" : "");
+      if (canEdit) cb.addEventListener("change", () => toggleLoanQuarter(q, cb.checked));
+
+      row.appendChild(cb);
+      row.appendChild(el("div", { style:{ flex:"1" } }, [
+        el("span", { style:{ fontWeight:"600" } }, `Q${q}`),
+        el("span", { class:"muted", style:{ marginLeft:"6px" } }, `due ${fmtYm(due)}`),
+        paid && rec.paid_on ? el("span", { class:"muted small", style:{ marginLeft:"6px" } }, `· paid ${rec.paid_on}`)
+          : (paid && rec.seeded ? el("span", { class:"muted small", style:{ marginLeft:"6px" } }, "· pre-tracker") : null),
+      ]));
+      if (late) row.appendChild(el("span", { style:{ background:"var(--warn)", color:"#fff", borderRadius:"6px", padding:"2px 7px", fontSize:"11px", fontWeight:"700", whiteSpace:"nowrap" } }, "Overdue"));
+      row.appendChild(el("div", { style:{ fontWeight:"600", whiteSpace:"nowrap" } }, m0(LOAN.quarterlyPayment)));
+      card.appendChild(row);
+    }
+
+    const paidToDate = paidCount * LOAN.quarterlyPayment;
+    const pct = Math.round((paidCount / LOAN.termQuarters) * 100);
+    card.appendChild(el("div", { style:{ height:"8px", borderRadius:"999px", background:"var(--border)", overflow:"hidden", margin:"10px 0" } },
+      el("div", { style:{ width: pct + "%", height:"100%", background:"var(--ok)" } })));
+    card.appendChild(kv("Quarters paid", `${paidCount} / ${LOAN.termQuarters}  (${pct}%)`));
+    card.appendChild(kv("Paid to date", m0(paidToDate)));
+    card.appendChild(kv("— principal repaid", m0(paidCount * LOAN.quarterlyPrincipal)));
+    card.appendChild(kv("— interest expensed", m0(paidCount * LOAN.quarterlyInterest)));
+    card.appendChild(kv("Balance remaining", m0(LOAN.repayment - paidToDate), true));
+    if (lateList.length) {
+      card.appendChild(el("div", { class:"muted small", style:{ marginTop:"8px", color:"var(--warn)", fontSize:"12px" } },
+        `${lateList.join(", ")} overdue — no late-payment interest or penalty is applied. Their interest only hits the P&L once ticked paid.`));
+    }
+    if (!canEdit) card.appendChild(el("div", { class:"muted small", style:{ marginTop:"6px", fontSize:"12px" } }, "Only the owner can change payment ticks."));
     return card;
   }
 
@@ -11472,27 +11937,42 @@ routes.menu = function (u) {
         });
       }
     }
-    // Sheet is authoritative — wipe existing menu and rebuild from itemRows.
+    // Sheet is authoritative — rebuild the menu from itemRows, but REUSE the existing
+    // item id whenever a row matches an item already in the menu by normalized name.
+    // Minting a fresh id on every upload is what let the id-union Firestore sync pile up
+    // 4-5 duplicate rows per item (see _menuMergeDoc). Same normalization as the P&L
+    // matcher and dedupeMenu(): case/accent-insensitive, ignores a trailing "(...)".
+    const nkMenu = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
+    const existingByName = new Map();
+    for (const m of (state.menu || [])) { const k = nkMenu(m.name); if (k && !existingByName.has(k)) existingByName.set(k, m); }
     const newMenu = [];
-    let added = 0, skipped = 0;
+    const usedIds = new Set();
+    let added = 0, skipped = 0, reused = 0;
     for (const { name, cost, price, category, sku } of itemRows) {
       if (!name) { skipped++; continue; }
       if (looksLikeSectionHeader(name, cost, price)) { skipped++; continue; }
       if (cost == null && price == null) { skipped++; continue; }
+      const prev = existingByName.get(nkMenu(name));
+      let id;
+      if (prev && !usedIds.has(prev.id)) { id = prev.id; reused++; }
+      else { id = "menu_" + uuid().slice(0,6); }
+      usedIds.add(id);
       newMenu.push({
-        id: "menu_" + uuid().slice(0,6),
+        id,
         name,
         price_egp: price ?? 0,
         cost_egp:  cost  ?? 0,
-        category,
-        pos_sku: sku || null,
-        branches: ["maadi","zawya"]
+        // The xlsx cost sheet carries no category / SKU columns — keep whatever the
+        // matched item already had rather than blanking it on every re-upload.
+        category: category || (prev && prev.category) || "",
+        pos_sku:  sku      || (prev && prev.pos_sku)  || null,
+        branches: (prev && Array.isArray(prev.branches) && prev.branches.length) ? prev.branches : ["maadi","zawya"]
       });
       added++;
     }
     state.menu = newMenu;
     saveState();
-    toast(`Menu replaced: ${added} items loaded${skipped ? `, ${skipped} skipped` : ""}`);
+    toast(`Menu replaced: ${added} items loaded${reused ? `, ${reused} matched to existing` : ""}${skipped ? `, ${skipped} skipped` : ""}`);
     render();
   });
 
@@ -12197,6 +12677,37 @@ routes.dashboard = function (u, params) {
   const wrap = el("div", {});
   wrap.appendChild(header("Dashboards", "Revenue, COGS, overheads, gross + net profit."));
 
+  // ── Sub-tabs — each dashboard view on its own tab instead of one long scroll ──
+  // secPnl   : monthly P&L trend + profit summary (company-wide, no branch filter)
+  // secCash  : cash reality check (company-wide)
+  // secBranch: branch/date drill-down — branch picker, range picker, diagnostic,
+  //            KPIs, profitability, P&L close, overheads, top items
+  const secPnl    = el("div", {});
+  const secCash   = el("div", {});
+  const secBranch = el("div", {});
+  const SUBTABS = [["branch", "Branch detail"], ["pnl", "P&L by month"], ["cash", "Cash check"]];
+  // Branch drill-down is the default view; a caller can still deep-link to another sub-tab.
+  let subTab = (params && params.subtab) || "branch";
+  if (!SUBTABS.some(([k]) => k === subTab)) subTab = "pnl";
+  const subTabBar = el("div", { class: "tabs" });
+  function paintSubTabs() {
+    subTabBar.innerHTML = "";
+    SUBTABS.forEach(([key, label]) => {
+      subTabBar.appendChild(el("button", {
+        class: "tab" + (subTab === key ? " on" : ""),
+        onClick: () => { subTab = key; paintSubTabs(); },
+      }, label));
+    });
+    secPnl.style.display    = subTab === "pnl"    ? "" : "none";
+    secCash.style.display   = subTab === "cash"   ? "" : "none";
+    secBranch.style.display = subTab === "branch" ? "" : "none";
+  }
+  paintSubTabs();
+  wrap.appendChild(subTabBar);
+  wrap.appendChild(secPnl);
+  wrap.appendChild(secCash);
+  wrap.appendChild(secBranch);
+
   // Normalize each sales row's branch to canonical maadi/zawya for reliable filtering.
   // (An imported row tagged "Zawya - Cairo" or similar still matches even if the stored
   // value wasn't normalized at import time.)
@@ -12242,13 +12753,20 @@ routes.dashboard = function (u, params) {
       && normalizeDate(s.date).slice(0,7) === month
       && !(bKey === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item)));
     const grossRevenue = monthSales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
-    // Neither branch keeps the full POS revenue. 14% VAT comes off the top at BOTH branches
-    // (Zawya deducts it per-sale; Maadi pays it as a year-end lump sum), and at Zawya the
-    // venue then takes a 10% share of what's left. Profitability is measured against what CB
-    // actually retains, not the gross rung up at the register — so Maadi and Zawya net profit
-    // and net% sit on the same retained-revenue basis and can be compared directly.
+    // 14% VAT comes off the top at BOTH branches (Zawya deducts it per-sale; Maadi pays it
+    // as a year-end lump sum). After-VAT sales is the revenue base every margin is measured
+    // against — the SAME base for both branches, so they compare directly to each other and
+    // to industry benchmarks.
     const afterVat = grossRevenue / 1.14;
-    const revenue = bKey === "zawya" ? afterVat * 0.90 : afterVat;
+    const revenue = afterVat;
+    // Location cost — an operating expense, NOT a cut to revenue, so both branches share one
+    // revenue line:
+    //  • Zawya: the venue takes 10% of after-VAT sales. A real, already-paid cost (deducted
+    //    per sale) — it sits inside operating profit + net profit below.
+    //  • Maadi: the deal is 10% of PROFIT, not revenue, and it has never been invoiced or
+    //    paid because monthly profit was never formally recorded. So it does NOT reduce
+    //    Maadi's profit here — it's surfaced separately as an accrued-but-unpaid memo.
+    const venueShare = bKey === "zawya" ? afterVat * 0.10 : 0;
 
     const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
@@ -12268,13 +12786,24 @@ routes.dashboard = function (u, params) {
       qtyByItem.set(k, (qtyByItem.get(k)||0) + (Number(i.qty)||1));
     }
     const hasOrderItems = qtyByItem.size > 0;
-    let cogs = 0;
+    // cogs = qty × recipe cost — feeds the EBITDA / operating / net waterfall.
+    // cogsAtItemPrice / salesAtItemPrice = item cost vs item MENU price, summed only over
+    // pairs that have BOTH a known cost and a known price. Their ratio is a VAT/share-neutral
+    // COGS% so Maadi and Zawya are directly comparable (same method as the branch card).
+    let cogs = 0, cogsAtItemPrice = 0, salesAtItemPrice = 0;
     for (const r of monthSales) {
       const key = normName(r.item);
       const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
       const m = menuLookup(r.item);
-      if (m && m.cost_egp) cogs += qty * (Number(m.cost_egp)||0);
+      if (m && m.cost_egp) {
+        cogs += qty * (Number(m.cost_egp)||0);
+        if (m.price_egp) {
+          cogsAtItemPrice += qty * (Number(m.cost_egp)||0);
+          salesAtItemPrice += qty * (Number(m.price_egp)||0);
+        }
+      }
     }
+    const cogsPct = salesAtItemPrice ? (cogsAtItemPrice / salesAtItemPrice) * 100 : null;
 
     const ohRows = state.overheads.filter(o => (o.branch ? branchKey(o.branch) === bKey : true) && (o.month || "") === month && (o.paid !== false));
     const overheadsTotal = ohRows.reduce((s,o) => s + (Number(o.amount)||0), 0);
@@ -12283,12 +12812,14 @@ routes.dashboard = function (u, params) {
     // Each barista's salary is charged to the branch they work at (rotating staff split 50/50)
     // — see branchSalaryForMonth / getStaffSalaryBranch. Set in Monthly Overheads → Staff salaries.
     const salariesTotal = branchSalaryForMonth(bKey, month, activeStaff);
-    const totalOpex = overheadsTotal + salariesTotal;
+    const totalOpex = overheadsTotal + salariesTotal + venueShare;
 
     const grossProfit = revenue - cogs;
     const netProfit = grossProfit - totalOpex;
     const npPct = revenue ? (netProfit / revenue) * 100 : null;
-    return { grossRevenue, revenue, cogs, overheadsTotal, salariesTotal, totalOpex, grossProfit, netProfit, npPct };
+    // Maadi's 10%-of-profit location fee — accrued for visibility, never deducted (see above).
+    const maadiProfitShareOwed = bKey === "maadi" ? Math.max(0, netProfit) * 0.10 : 0;
+    return { grossRevenue, afterVat, venueShare, maadiProfitShareOwed, revenue, cogs, cogsAtItemPrice, salesAtItemPrice, cogsPct, overheadsTotal, salariesTotal, totalOpex, grossProfit, netProfit, npPct };
   }
 
   const trendCard = el("div", { class: "card", style: { marginTop: "10px" } });
@@ -12300,73 +12831,227 @@ routes.dashboard = function (u, params) {
   if (!trendMonths.length) {
     trendCard.appendChild(el("div", { class: "muted small" }, "No sales uploaded yet."));
   } else {
+    // Severity colours: negative → red, positive-but-below-target → orange, healthy → green.
     const pctCell = (pct) => {
       if (pct == null) return el("td", { class: "num muted" }, "—");
-      const color = pct >= 20 ? "var(--ok)" : pct >= 10 ? "var(--warn)" : "var(--bad)";
+      const color = pct < 0 ? "var(--bad)" : pct < 20 ? "var(--warn)" : "var(--ok)";
       return el("td", { class: "num", style: { color, fontWeight: "700" } }, pct.toFixed(1) + "%");
     };
-    // Grouped by calendar year so a "Total" row can accumulate Jan → Dec (m1 → m12) —
-    // a running year-end total rather than a per-month figure. Total-row %s are
-    // revenue-weighted (Σ net profit ÷ Σ revenue for the year), not an average of
-    // the monthly %s, since averaging percentages across months of unequal size
-    // would misstate the true year-to-date margin.
+    // Money severity: below zero → red, thin → orange, comfortably positive → green.
+    const netCell = (v, revenue) => {
+      if (v == null) return el("td", { class: "num muted" }, "—");
+      const pct = revenue ? (v / revenue) * 100 : (v > 0 ? 100 : v < 0 ? -1 : 0);
+      const color = v < 0 ? "var(--bad)" : pct < 20 ? "var(--warn)" : "var(--ok)";
+      return el("td", { class: "num", style: { color, fontWeight: "700" } }, money(Math.round(v)));
+    };
+    // COGS% — lower is better, so the colour scale is inverted vs the margin rows.
+    // Thresholds mirror the branch Profitability card (>35 bad, >28 warn).
+    const cogsPctCell = (pct) => {
+      if (pct == null) return el("td", { class: "num muted" }, "—");
+      const color = pct > 35 ? "var(--bad)" : pct > 28 ? "var(--warn)" : "var(--ok)";
+      return el("td", { class: "num", style: { color, fontWeight: "700" } }, pct.toFixed(1) + "%");
+    };
+    const moneyCell = (v) => el("td", { class: "num" }, (v == null) ? "—" : money(v));
+
+    // ── Company loan ──────────────────────────────────────────────────────────
+    // See the module-level LOAN model + drawLoanCard() in Monthly Overheads. Only the
+    // interest (150,000 finance cost ÷ 36 = ~4,167/month, Dec 2024 → Nov 2027) is a P&L
+    // expense; principal repayment never touches profit. It's a company-level financing
+    // item, so the interest is charged ONLY against Combined net profit — never an
+    // individual branch, and never operating profit (operating profit is pre-financing).
+    const loanForMonth = (m) => loanInterestForMonth(m);
+
+    const gv = (p, k) => p ? (Number(p[k]) || 0) : 0;
+
+    // Render one month (or a year-to-date total) as a stacked mini-P&L: revenue (gross →
+    // after VAT), COGS %, Zawya's venue share, then margins, the loan, net profit, and a
+    // Maadi profit-share memo. Metrics down the rows, Maadi / Zawya / Combined across.
+    // Per branch, EBITDA = operating = net margin (no depreciation, interest or profit
+    // tax tracked, and the loan is Combined-only) — kept as separate rows so a D&A or
+    // branch-level financing split can be dropped in later without touching this layout.
+    const pushBlock = (label, maadiPnl, zawyaPnl, opts) => {
+      opts = opts || {};
+      const loan = Number(opts.loan) || 0;
+
+      const mGross = maadiPnl ? maadiPnl.grossRevenue : null;
+      const zGross = zawyaPnl ? zawyaPnl.grossRevenue : null;
+      const cGross = gv(maadiPnl, "grossRevenue") + gv(zawyaPnl, "grossRevenue");
+      const mAfterVat = maadiPnl ? maadiPnl.afterVat : null;
+      const zAfterVat = zawyaPnl ? zawyaPnl.afterVat : null;
+      const cAfterVat = gv(maadiPnl, "afterVat") + gv(zawyaPnl, "afterVat");
+      const mRev = maadiPnl ? maadiPnl.revenue : null;
+      const zRev = zawyaPnl ? zawyaPnl.revenue : null;
+      const cRev = gv(maadiPnl, "revenue") + gv(zawyaPnl, "revenue");
+
+      const mNet = maadiPnl ? maadiPnl.netProfit : null;
+      const zNet = zawyaPnl ? zawyaPnl.netProfit : null;
+      const cOperating = gv(maadiPnl, "netProfit") + gv(zawyaPnl, "netProfit"); // before the loan
+      const cNet = cOperating - loan;
+
+      // Location costs. Zawya's venue share is a real paid cost already inside the net
+      // profit above; Maadi's 10%-of-profit fee is accrued-but-never-paid (memo only).
+      const zVenue = zawyaPnl ? zawyaPnl.venueShare : null;
+      const cVenue = gv(maadiPnl, "venueShare") + gv(zawyaPnl, "venueShare");
+      const mShareOwed = maadiPnl ? maadiPnl.maadiProfitShareOwed : null;
+
+      // Per-branch margin = retained net profit ÷ retained revenue. Combined splits into
+      // an operating margin (before the loan) and a net margin (after it).
+      const mMargin = (maadiPnl && maadiPnl.revenue) ? (maadiPnl.netProfit / maadiPnl.revenue) * 100 : null;
+      const zMargin = (zawyaPnl && zawyaPnl.revenue) ? (zawyaPnl.netProfit / zawyaPnl.revenue) * 100 : null;
+      const cOpMargin  = cRev ? (cOperating / cRev) * 100 : null;
+      const cNetMargin = cRev ? (cNet / cRev) * 100 : null;
+
+      // Combined COGS% is cost-weighted: Σ item cost ÷ Σ item menu price across both branches.
+      const cCostBase  = gv(maadiPnl, "cogsAtItemPrice") + gv(zawyaPnl, "cogsAtItemPrice");
+      const cPriceBase = gv(maadiPnl, "salesAtItemPrice") + gv(zawyaPnl, "salesAtItemPrice");
+      const cCogsPct = cPriceBase ? (cCostBase / cPriceBase) * 100 : null;
+
+      const dash = () => el("td", { class: "num muted" }, "—");
+      const negCell = (v) => el("td", { class: "num" }, v ? "−" + money(Math.round(v)) : "—");
+
+      // Year-total blocks stay fully expanded; each month is a collapsible row that
+      // shows only its Net profit line until clicked open.
+      const collapsible = !opts.total;
+
+      // The detail rows hidden/shown by the toggle (everything between the header and
+      // the always-visible Net profit line, plus the Maadi profit-share memo after it).
+      const detailRows = [
+        el("tr", {}, [ el("td", {}, "Total revenue"), moneyCell(mGross), moneyCell(zGross), moneyCell(cGross || null) ]),
+        el("tr", {}, [ el("td", { class: "muted" }, "Revenue after 14% VAT"), moneyCell(mAfterVat), moneyCell(zAfterVat), moneyCell(cAfterVat || null) ]),
+        el("tr", {}, [ el("td", {}, "COGS %"), cogsPctCell(maadiPnl ? maadiPnl.cogsPct : null), cogsPctCell(zawyaPnl ? zawyaPnl.cogsPct : null), cogsPctCell(cCogsPct) ]),
+        el("tr", {}, [ el("td", { class: "muted" }, "Venue revenue share — Zawya 10%"), dash(), negCell(zVenue), negCell(cVenue || null) ]),
+        el("tr", {}, [ el("td", {}, "EBITDA margin %"), pctCell(mMargin), pctCell(zMargin), pctCell(cOpMargin) ]),
+        el("tr", {}, [ el("td", {}, "Operating margin %"), pctCell(mMargin), pctCell(zMargin), pctCell(cOpMargin) ]),
+        el("tr", {}, [ el("td", { class: "muted" }, "Loan interest"), dash(), dash(), negCell(loan) ]),
+        el("tr", {}, [ el("td", {}, "Net profit margin %"), pctCell(mMargin), pctCell(zMargin), pctCell(cNetMargin) ]),
+      ];
+      const memoRow = el("tr", { style: { fontStyle: "italic" } }, [
+        el("td", { class: "muted" }, "Maadi profit-share owed (10%, never paid)"),
+        negCell(mShareOwed), dash(), negCell(mShareOwed || null),
+      ]);
+
+      let open = !collapsible;
+      const caret = el("span", { style: { display: "inline-block", width: "1.1em", color: "var(--ink-dim)" } },
+        collapsible ? "▸" : "");
+      const hideable = [...detailRows, memoRow];
+      const applyOpen = () => {
+        caret.textContent = open ? "▾" : "▸";
+        hideable.forEach(r => { r.style.display = open ? "" : "none"; });
+      };
+      if (collapsible) applyOpen();
+
+      rows.push(el("tr", {
+        style: Object.assign(
+          opts.total
+            ? { fontWeight: "800", borderTop: "3px double var(--border)" }
+            : { fontWeight: "700", borderTop: "1px solid var(--border)" },
+          collapsible ? { cursor: "pointer" } : {}),
+        onClick: collapsible ? () => { open = !open; applyOpen(); } : undefined,
+      }, el("td", { colSpan: 4 }, collapsible ? [caret, " ", label] : label)));
+
+      rows.push(...detailRows);
+      rows.push(el("tr", { style: collapsible ? { fontWeight: "700" } : {} }, [ el("td", {}, "Net profit"), netCell(mNet, mRev), netCell(zNet, zRev), netCell((cOperating || loan) ? cNet : null, cRev) ]));
+      rows.push(memoRow);
+    };
+
+    // Grouped by calendar year so a "Total" block accumulates Jan → Dec year-to-date —
+    // a running year-end total, not a per-month figure. Total-block %s are revenue-weighted
+    // (Σ profit ÷ Σ revenue), never an average of the monthly %s.
     const years = [...new Set(trendMonths.map(m => m.slice(0,4)))].sort().reverse();
     const rows = [];
     for (const y of years) {
       const monthsInYear = trendMonths.filter(m => m.slice(0,4) === y);
-      let yMaadiGross = 0, yZawyaGross = 0, yMaadiRev = 0, yZawyaRev = 0, yMaadiNet = 0, yZawyaNet = 0, yCombNet = 0;
+      // Year accumulators shaped like a computeMonthPnL result so pushBlock treats the
+      // total block exactly like a month.
+      const mk = () => ({ grossRevenue: 0, afterVat: 0, revenue: 0, netProfit: 0, venueShare: 0, maadiProfitShareOwed: 0, cogsAtItemPrice: 0, salesAtItemPrice: 0, cogsPct: null });
+      const yMaadi = mk(); const yZawya = mk();
+      let yHasMaadi = false, yHasZawya = false, yLoan = 0;
       for (const m of monthsInYear) {
         const maadiPnl = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
         const zawyaPnl = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
-        // Both revenue columns show what CB actually retains — Maadi after its 14% VAT
-        // (year-end lump sum), Zawya after its 14% VAT and the venue's 10% share — so net%
-        // divides evenly out of the revenue shown and the branches are directly comparable.
-        const maadiGross = maadiPnl ? maadiPnl.revenue : 0;
-        const zawyaGross = zawyaPnl ? zawyaPnl.revenue : 0;
-        const combinedRevenue = (maadiPnl ? maadiPnl.revenue : 0) + (zawyaPnl ? zawyaPnl.revenue : 0);
-        const combinedNet     = (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0);
-        const combinedPct = combinedRevenue ? (combinedNet / combinedRevenue) * 100 : null;
-        combinedNetByMonth.set(m, combinedNet);
+        const loan = loanForMonth(m);
+        yLoan += loan;
+        combinedNetByMonth.set(m, (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0) - loan);
 
-        yMaadiGross += maadiGross; yZawyaGross += zawyaGross;
-        yMaadiRev += maadiPnl ? maadiPnl.revenue : 0; yZawyaRev += zawyaPnl ? zawyaPnl.revenue : 0;
-        yMaadiNet += maadiPnl ? maadiPnl.netProfit : 0; yZawyaNet += zawyaPnl ? zawyaPnl.netProfit : 0;
-        yCombNet += combinedNet;
-
-        rows.push(el("tr", {}, [
-          el("td", {}, m),
-          el("td", { class: "num" }, money(maadiGross)),
-          el("td", { class: "num" }, money(zawyaGross)),
-          el("td", { class: "num" }, money(maadiGross + zawyaGross)),
-          pctCell(maadiPnl ? maadiPnl.npPct : null),
-          pctCell(zawyaPnl ? zawyaPnl.npPct : null),
-          pctCell(combinedPct),
-          el("td", { class: "num" }, money(combinedNet)),
-        ]));
+        for (const [pnl, acc, flag] of [[maadiPnl, yMaadi, "M"], [zawyaPnl, yZawya, "Z"]]) {
+          if (!pnl) continue;
+          if (flag === "M") yHasMaadi = true; else yHasZawya = true;
+          acc.grossRevenue += pnl.grossRevenue; acc.afterVat += pnl.afterVat;
+          acc.revenue += pnl.revenue; acc.netProfit += pnl.netProfit;
+          acc.venueShare += pnl.venueShare; acc.maadiProfitShareOwed += pnl.maadiProfitShareOwed;
+          acc.cogsAtItemPrice += pnl.cogsAtItemPrice; acc.salesAtItemPrice += pnl.salesAtItemPrice;
+        }
+        pushBlock(m, maadiPnl, zawyaPnl, { loan });
       }
-      const yMaadiPct = yMaadiRev ? (yMaadiNet / yMaadiRev) * 100 : null;
-      const yZawyaPct = yZawyaRev ? (yZawyaNet / yZawyaRev) * 100 : null;
-      const yCombRevForPct = yMaadiRev + yZawyaRev;
-      const yCombPct = yCombRevForPct ? (yCombNet / yCombRevForPct) * 100 : null;
-      rows.push(el("tr", { style: { fontWeight: "700", borderTop: "2px solid var(--border)" } }, [
-        el("td", {}, `${y} total (Jan–Dec)`),
-        el("td", { class: "num" }, money(yMaadiGross)),
-        el("td", { class: "num" }, money(yZawyaGross)),
-        el("td", { class: "num" }, money(yMaadiGross + yZawyaGross)),
-        pctCell(yMaadiPct),
-        pctCell(yZawyaPct),
-        pctCell(yCombPct),
-        el("td", { class: "num" }, money(yCombNet)),
-      ]));
+      yMaadi.cogsPct = yMaadi.salesAtItemPrice ? (yMaadi.cogsAtItemPrice / yMaadi.salesAtItemPrice) * 100 : null;
+      yZawya.cogsPct = yZawya.salesAtItemPrice ? (yZawya.cogsAtItemPrice / yZawya.salesAtItemPrice) * 100 : null;
+      pushBlock(`${y} total (Jan–Dec)`, yHasMaadi ? yMaadi : null, yHasZawya ? yZawya : null, { total: true, loan: yLoan });
     }
     trendCard.appendChild(el("table", {}, [
-      el("thead", {}, el("tr", {}, ["Month","Maadi rev","Zawya rev","Combined rev","Maadi net%","Zawya net%","Combined net%","Combined net profit"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
+      el("thead", {}, el("tr", {}, ["", "Maadi", "Zawya", "Combined"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      `Revenue for both branches is what Coffee Beats actually keeps: Maadi is net of its 14% VAT (paid as a year-end lump sum, unlike Zawya's per-sale deduction), Zawya is net of its 14% VAT and then the venue's 10% share of the remainder. Net% = (Revenue − COGS − paid overheads − salary share) ÷ Revenue on that same retained-revenue basis for both branches, so it divides evenly out of the revenue column shown and Maadi vs Zawya is a like-for-like comparison. Salary is allocated per barista to the branch they work at (rotating staff split 50/50) — set in Monthly Overheads → Staff salaries. "Combined" sums both branches' retained revenue and net profit for that month. Each year's total row accumulates every month from January through December using year-to-date sums (revenue-weighted net%, not an average of the monthly %s). A branch shows — for a month with no sales uploaded yet — this updates automatically every time a new sales report is added.`));
+      `Each month is a mini P&L. Total revenue is POS net sales before any deduction; "Revenue after 14% VAT" divides it by 1.14 (both branches) — that is the single revenue base every margin below is measured against, so Maadi and Zawya compare directly to each other and to industry benchmarks. COGS % is item recipe cost ÷ item menu price (only items with both known) — a VAT-neutral ratio. "Venue revenue share — Zawya 10%" is Zawya's location cost: the venue takes 10% of its after-VAT sales. It's a real, already-paid operating expense (not a cut to the revenue line) and is inside every Zawya margin and its net profit below. EBITDA / operating / net margin per branch are (after-VAT revenue − COGS − paid overheads − per-barista salary share − Zawya venue share) ÷ after-VAT revenue and show the same figure (no depreciation, interest or profit tax tracked per branch). "Maadi profit-share owed (10%, never paid)" is a memo only — Maadi's deal is 10% of profit, but it has never been invoiced or paid because monthly profit was never formally recorded, so it does NOT reduce Maadi's net profit here; it just shows what would be owed. The company loan (borrowed 600K, repaying 750K in 12 quarterly payments) hits profit only as interest — 12,500/quarter ≈ 4,167/month — and only for quarters ticked paid in Monthly Overheads → Company loan. It's charged only to Combined, so Combined's net margin sits below its operating margin while the branches' don't. The principal half of each payment (50,000/quarter) never touches the P&L. Combined COGS % is cost-weighted; combined margin is Σ profit ÷ Σ after-VAT revenue — never an average of the two branch %s. Year total blocks accumulate Jan → Dec. Salaries are allocated per barista to the branch they work at (rotating staff split 50/50) — Monthly Overheads → Staff salaries.`));
   }
-  wrap.appendChild(trendCard);
+  secPnl.appendChild(trendCard);
+
+  // ---------- Simplified profit summary — gross revenue + operating/net margin by month ----------
+  const summaryCard = el("div", { class: "card", style: { marginTop: "10px" } });
+  summaryCard.appendChild(el("h2", {}, "Profit summary — gross revenue & margin by month"));
+  if (!trendMonths.length) {
+    summaryCard.appendChild(el("div", { class: "muted small" }, "No sales uploaded yet."));
+  } else {
+    // Loan interest only (Combined-only). See the module-level LOAN model.
+    const loanForMonthS = (m) => loanInterestForMonth(m);
+    const spct = (v) => {
+      if (v == null) return el("td", { class: "num muted" }, "—");
+      const c = v < 0 ? "var(--bad)" : v < 20 ? "var(--warn)" : "var(--ok)";
+      return el("td", { class: "num", style: { color: c, fontWeight: "700" } }, v.toFixed(1) + "%");
+    };
+    const sRows = [];
+    const years2 = [...new Set(trendMonths.map(m => m.slice(0,4)))].sort().reverse();
+    for (const y of years2) {
+      const monthsInYear = trendMonths.filter(m => m.slice(0,4) === y);
+      let aGross = 0, aMR = 0, aMN = 0, aZR = 0, aZN = 0, aLoan = 0;
+      for (const m of monthsInYear) {
+        const mp = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
+        const zp = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
+        const loan = loanForMonthS(m);
+        const gross = (mp ? mp.grossRevenue : 0) + (zp ? zp.grossRevenue : 0);
+        const mMar = (mp && mp.revenue) ? (mp.netProfit / mp.revenue) * 100 : null;
+        const zMar = (zp && zp.revenue) ? (zp.netProfit / zp.revenue) * 100 : null;
+        const cRevM = (mp ? mp.revenue : 0) + (zp ? zp.revenue : 0);
+        const cOp = (mp ? mp.netProfit : 0) + (zp ? zp.netProfit : 0);
+        const cOpMar  = cRevM ? (cOp / cRevM) * 100 : null;
+        const cNetMar = cRevM ? ((cOp - loan) / cRevM) * 100 : null;
+        aGross += gross; aLoan += loan;
+        if (mp) { aMR += mp.revenue; aMN += mp.netProfit; }
+        if (zp) { aZR += zp.revenue; aZN += zp.netProfit; }
+        sRows.push(el("tr", {}, [
+          el("td", {}, m), el("td", { class: "num" }, money(gross)),
+          spct(mMar), spct(mMar), spct(zMar), spct(zMar), spct(cOpMar), spct(cNetMar),
+        ]));
+      }
+      const yMMar = aMR ? (aMN / aMR) * 100 : null;
+      const yZMar = aZR ? (aZN / aZR) * 100 : null;
+      const yCRev = aMR + aZR, yCOp = aMN + aZN;
+      const yCOpMar  = yCRev ? (yCOp / yCRev) * 100 : null;
+      const yCNetMar = yCRev ? ((yCOp - aLoan) / yCRev) * 100 : null;
+      sRows.push(el("tr", { style: { fontWeight: "800", borderTop: "3px double var(--border)" } }, [
+        el("td", {}, `${y} total (Jan–Dec)`), el("td", { class: "num" }, money(aGross)),
+        spct(yMMar), spct(yMMar), spct(yZMar), spct(yZMar), spct(yCOpMar), spct(yCNetMar),
+      ]));
+    }
+    summaryCard.appendChild(el("table", {}, [
+      el("thead", {}, el("tr", {}, ["Month", "Gross rev", "Maadi op%", "Maadi net%", "Zawya op%", "Zawya net%", "Comb op%", "Comb net%"]
+        .map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
+      el("tbody", {}, sRows),
+    ]));
+    summaryCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
+      `Gross rev is total POS net sales before any deduction (VAT, COGS, overheads, Zawya's venue share). "op%" is operating margin — before loan interest; "net%" is after it. The company loan (600K borrowed, 750K repaid in 12 quarterly payments) hits profit only as interest: 12,500/quarter ≈ 4,167/month, and only for quarters ticked paid in Monthly Overheads → Company loan. It's charged only to Combined — so each branch's op% and net% are identical and only the Combined pair differs. All margins are measured against after-VAT revenue (gross ÷ 1.14) — the same base for both branches. Zawya's 10% venue share is treated as an operating cost, so it's already inside Zawya's op% / net% and its net profit. Maadi's 10%-of-profit fee has never been paid or recorded and is not deducted here (see the memo line in the table above). Year total rows accumulate Jan → Dec, revenue-weighted.`));
+  }
+  secPnl.appendChild(summaryCard);
 
   // ---------- Cash reality check — book profit vs actual logged cash, from Sep 2026 ----------
   // The net profit % above is a book P&L: COGS is theoretical (qty sold × recipe cost, not
@@ -12436,10 +13121,10 @@ routes.dashboard = function (u, params) {
     ]));
     cashCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
       "This is a partial reconciliation, not a full cash-flow statement — it only totals what's actually been logged in Purchases, Overheads (paid), ATM/Cash Deposits, and the Bank Ledger. " +
-      "Card/POS settlement deposits aren't tracked in the app, and salary payouts aren't logged as individual transactions yet (\"Book net profit\" uses a modeled salary-split estimate, not an actual payout) — so don't expect the columns to net out to the book number. " +
+      "Card/POS settlement deposits aren't tracked in the app, and salary payouts aren't logged as individual transactions yet (\"Book net profit\" uses a modeled salary-split estimate, not an actual payout, and is already net of loan interest for quarters ticked paid — ~4,167/month; the principal half of each loan payment, 50,000/quarter, leaves the bank but is not a cost and is not in the columns below). " +
       "The most common driver of a gap: \"Purchases paid\" is what actually left the till/bank for stock, while the book P&L uses a theoretical COGS (units sold × recipe cost) — if you bought more than you sold (stocking up, waste, spoilage), real cash cost runs higher than the book number shows."));
   }
-  wrap.appendChild(cashCard);
+  secCash.appendChild(cashCard);
 
   let branch = branchKey((params && params.branch) || (u.branches && u.branches[0]) || "maadi");
   // Multi-month range — default to latest available month (or current)
@@ -12448,7 +13133,7 @@ routes.dashboard = function (u, params) {
   let monthTo   = (params && params.month) || _defaultMonth;
 
   const nav = makeBranchPicker(["maadi","zawya","events"], () => branch, b => { branch = b; eventCard.style.display = b === "events" ? "" : "none"; draw(); });
-  wrap.appendChild(nav);
+  secBranch.appendChild(nav);
 
   // ---- Events config card (only visible when Events tab is active) ----
   const eventCard = el("div", { class: "card", style: { marginTop: "10px", display: branch === "events" ? "" : "none", borderColor: "var(--accent-2)" } });
@@ -12528,7 +13213,7 @@ routes.dashboard = function (u, params) {
   eventCard.appendChild(calSyncBtn);
   eventCard.appendChild(calSyncStatus);
   renderEvDates();
-  wrap.appendChild(eventCard);
+  secBranch.appendChild(eventCard);
 
   // ---- Date range picker ----
   const rangeCard = el("div", { class: "card", style: { marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "14px", alignItems: "flex-end" } });
@@ -12584,14 +13269,14 @@ routes.dashboard = function (u, params) {
     el("div", { style: { fontSize: "12px", color: "var(--ink-faint)", marginBottom: "4px" } }, "Quick select"),
     quickBtns,
   ]));
-  wrap.appendChild(rangeCard);
+  secBranch.appendChild(rangeCard);
 
   // ---------- DATA COVERAGE DIAGNOSTIC ----------
   const diag = el("div", { class: "card", style: { marginTop: "10px", borderColor: "var(--accent)" } });
-  wrap.appendChild(diag);
+  secBranch.appendChild(diag);
 
   const body = el("div", {});
-  wrap.appendChild(body);
+  secBranch.appendChild(body);
 
   // Helper: all months in [from, to] range
   function monthsInRange(from, to) {
@@ -12813,27 +13498,33 @@ routes.dashboard = function (u, params) {
     const _salaryBranch = branch === "events" ? "maadi" : branch;
     const salariesTotal = rangeMonths.reduce((total, m) =>
       total + branchSalaryForMonth(_salaryBranch, m, _activeStaff), 0);
-    const totalOpex = overheadsTotal + salariesTotal;
-
-    // ---------- Zawya revenue after deductions ----------
-    // At Zawya, Coffee Beats doesn't keep the full POS revenue: 14% VAT comes off the top,
-    // then Zawya takes a 10% share of what's left. plRevenue — what profitability (COGS%,
-    // gross margin%, net profit%, and the net profit EGP figure itself) is measured
-    // against — uses this net-of-share figure for Zawya; Maadi is unaffected.
-    const revenueAfterVat    = branch === "zawya" ? revenue / 1.14 : null;
-    const revenueAfterShares = revenueAfterVat   !== null ? revenueAfterVat * 0.90 : null;
-    const plRevenue = branch === "zawya" ? revenueAfterShares : revenue;
+    // ---------- Revenue base + location cost ----------
+    // Same model as Dashboards → P&L by month: 14% VAT comes off the top at BOTH branches,
+    // and after-VAT sales (plRevenue) is the single base every margin is measured against —
+    // so Maadi and Zawya compare directly and to industry benchmarks.
+    const revenueAfterVat = revenue / 1.14;
+    const plRevenue = revenueAfterVat;
+    // Location cost = an operating expense, not a cut to revenue.
+    //  • Zawya: venue takes 10% of after-VAT sales — a real, already-paid cost, in opex + net.
+    //  • Maadi: deal is 10% of PROFIT, never invoiced or paid (profit was never formally
+    //    recorded), so it is NOT deducted — shown as an accrued memo only.
+    const venueShare = branch === "zawya" ? revenueAfterVat * 0.10 : 0;
+    // What Coffee Beats actually keeps from Zawya after the venue's cut — kept as its own
+    // figure so it stays visible in the KPI cards even though it's not the margin base.
+    const revenueAfterShares = branch === "zawya" ? revenueAfterVat - venueShare : null;
+    const totalOpex = overheadsTotal + salariesTotal + venueShare;
 
     // ---------- KEY METRICS ----------
     const cogs = cogsSales; // sales-derived (use theoretical if you prefer — see note on P&L card)
     const grossProfit = plRevenue - cogs;
     const netProfit = grossProfit - totalOpex;
     // COGS% / gross margin%: item cost vs item price only — never revenue — so Zawya and
-    // Maadi are comparable. Net profit% keeps using plRevenue since it must reflect what
-    // Coffee Beats actually retains (net of Zawya's VAT/share cut).
+    // Maadi are comparable. Net profit% is measured against after-VAT revenue (both branches).
     const cogsPct = salesAtItemPrice ? (cogsAtItemPrice / salesAtItemPrice) * 100 : 0;
     const gmPct = salesAtItemPrice ? 100 - cogsPct : 0;
     const npPct = plRevenue ? (netProfit / plRevenue) * 100 : 0;
+    // Maadi's 10%-of-profit location fee — accrued for visibility, never deducted (see above).
+    const maadiProfitShareOwed = branch === "maadi" ? Math.max(0, netProfit) * 0.10 : 0;
 
     // CB Sales % — only meaningful for Zawya (third-party concessions exist at that venue)
     // Deduplicate sales_meta by branch+month, keeping the latest entry (by id insertion order)
@@ -12853,9 +13544,9 @@ routes.dashboard = function (u, params) {
     // ---------- top KPI cards ----------
     const topKpis = [
       kpi("Revenue (Net)", money(revenue), sales.length + " rows"),
+      kpi("After 14% VAT", money(revenueAfterVat), `÷ 1.14 — ${money(revenue - revenueAfterVat)} VAT · margin base`),
       ...(branch === "zawya" ? [
-        kpi("After 14% VAT", money(revenueAfterVat), `÷ 1.14 — ${money(revenue - revenueAfterVat)} VAT`),
-        kpi("After Zawya 10%", money(revenueAfterShares), `CB keeps 90% — ${money(revenueAfterVat - revenueAfterShares)} to Zawya`),
+        kpi("What CB gets from Zawya", money(revenueAfterShares), `after venue's 10% — ${money(revenueAfterVat - revenueAfterShares)} to Zawya`),
       ] : []),
       kpi("Discount", money(discount), (revenue + discount) ? ((discount/(revenue+discount))*100).toFixed(1)+"%" : "—"),
       kpi("Purchases", money(purchTotal), purch.length + " invoices"),
@@ -12888,8 +13579,8 @@ routes.dashboard = function (u, params) {
       ]),
       el("div", { class: "muted small", style: { marginTop: "8px" } },
         branch === "zawya"
-          ? `Revenue ${money(revenue)} → after 14% VAT & Zawya's 10% share = ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} = Net ${money(netProfit)}`
-          : `Revenue ${money(plRevenue)} − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} = Net ${money(netProfit)}`),
+          ? `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} − Zawya venue share ${money(venueShare)} = Net ${money(netProfit)}. CB keeps ${money(revenueAfterShares)} of Zawya's after-VAT sales; the 10% venue cut is treated as an operating cost, not a reduction to revenue, so it's inside this net and every margin.`
+          : `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} = Net ${money(netProfit)}. Maadi's deal is 10% of profit (${money(maadiProfitShareOwed)} for this period) — never invoiced or paid, so it is not deducted here.`),
     ]));
 
     // ---------- P&L reconciliation ----------
@@ -12903,12 +13594,12 @@ routes.dashboard = function (u, params) {
     ]));
 
     // ---------- Overheads breakdown ----------
-    if (ohRows.length || salariesTotal > 0) {
+    if (ohRows.length || salariesTotal > 0 || venueShare > 0) {
       const card = el("div", { class: "card", style: { marginTop: "14px" } });
       card.appendChild(el("h2", {}, `Overheads + salaries — ${rangeLabel}`));
       for (const o of ohRows) {
         card.appendChild(el("div", { class: "kv" }, [
-          el("div", { class: "k" }, `${(OVERHEAD_CATEGORIES.find(c=>c.value===o.category)||{}).label || o.category || "overhead"}${o.engineer ? " · " + o.engineer : ""}${o.note ? " — " + o.note : ""}`),
+          el("div", { class: "k" }, `${overheadCatLabel(o.category) || o.category || "overhead"}${o.engineer ? " · " + o.engineer : ""}${o.note ? " — " + o.note : ""}`),
           el("div", { class: "v" }, money(o.amount)),
         ]));
       }
@@ -12927,11 +13618,26 @@ routes.dashboard = function (u, params) {
           el("div", { class: "v" }, money(salariesTotal)),
         ]));
       }
+      if (venueShare > 0) {
+        card.appendChild(el("div", { class: "kv" }, [
+          el("div", { class: "k" }, [
+            el("span", {}, "Zawya venue revenue share — 10%"),
+            el("div", { class: "muted small" }, `10% of after-VAT sales ${money(revenueAfterVat)} · location cost`),
+          ]),
+          el("div", { class: "v" }, money(venueShare)),
+        ]));
+      }
       card.appendChild(el("div", { class: "hr" }));
       card.appendChild(el("div", { class: "kv" }, [
         el("div", { class: "k" }, el("b", {}, "Total operating expenses")),
         el("div", { class: "v" }, el("b", {}, money(totalOpex))),
       ]));
+      if (maadiProfitShareOwed > 0) {
+        card.appendChild(el("div", { class: "kv", style: { fontStyle: "italic" } }, [
+          el("div", { class: "k muted" }, "Maadi profit-share owed (10%, never paid — memo, not in total above)"),
+          el("div", { class: "v muted" }, money(maadiProfitShareOwed)),
+        ]));
+      }
       body.appendChild(card);
     }
 
@@ -16712,13 +17418,13 @@ routes.app_guide = function (u) {
       en_title: "Monthly Overheads",
       ar_title: "المصاريف الشهرية الثابتة",
       en_steps: [
-        "Owner/accountant screen for tracking recurring monthly bills: electricity, internet, cleaner salary, accountant salary, POS fees, and gardener salary — each with a preset amount per branch.",
+        "Owner/accountant screen for tracking recurring monthly bills: electricity, internet, cleaner salary, accountant salary, POS fees, gardener salary, and loan payment — each with a preset amount per branch.",
         "Each month, tick a bill as <strong>paid</strong> and enter the actual amount and date. This creates a record for that month only — editing the preset amount affects the current and future months, but never rewrites a past month's history.",
         "One-off costs (marketing, maintenance, pest control, miscellaneous) are logged manually with <strong>➕</strong> whenever they happen, instead of monthly.",
         "The page totals paid vs unpaid per branch — this total feeds directly into the Dashboard's profit calculation for that month.",
       ],
       ar_steps: [
-        "شاشة للمالك والمحاسب لمتابعة الفواتير الشهرية المتكررة: كهرباء، إنترنت، راتب العاملة، راتب المحاسب، رسوم نقاط البيع، وراتب البستاني — لكل منها مبلغ مبدئي لكل فرع.",
+        "شاشة للمالك والمحاسب لمتابعة الفواتير الشهرية المتكررة: كهرباء، إنترنت، راتب العاملة، راتب المحاسب، رسوم نقاط البيع، راتب البستاني، وقسط القرض — لكل منها مبلغ مبدئي لكل فرع.",
         "كل شهر، حدد الفاتورة كـ <strong>مدفوعة</strong> وأدخل المبلغ الفعلي والتاريخ. هذا يُنشئ سجلاً لذلك الشهر فقط — تعديل المبلغ المبدئي يؤثر على الشهر الحالي والمقبل فقط، ولا يغيّر تاريخ الأشهر السابقة أبداً.",
         "التكاليف لمرة واحدة (تسويق، صيانة، مكافحة حشرات، متفرقات) تُسجَّل يدوياً بزر <strong>➕</strong> عند حدوثها، وليست شهرية.",
         "الصفحة تجمع المدفوع مقابل غير المدفوع لكل فرع — هذا الإجمالي يُستخدم مباشرةً في حساب الربح على لوحة التقارير لذلك الشهر.",
@@ -16973,16 +17679,16 @@ routes.app_guide = function (u) {
       en_title: "Test Mode",
       ar_title: "وضع التجربة",
       en_steps: [
-        "A per-device switch in the top bar (🧪 Test Mode). Turn it on before practicing with the app — training a new hire, for example — so nothing you enter counts as real.",
-        "While it's on, new Waste, Shift Close, Purchase, Cleaning Log, and Sign-In entries are tagged <strong>TEST</strong> and excluded from stock calculations, KPI scores, dashboards, and CSV exports — but they still show up (with a yellow TEST badge) in their own lists so you can see what was practiced.",
-        "It's <strong>per-device and doesn't sync</strong> — turning it on on one phone doesn't turn it on anywhere else.",
-        "Always check the topbar banner before submitting real entries during a shift, to make sure Test Mode is off.",
+        "<strong>Owner-only</strong> switch in the top bar (🧪 Test Mode). Staff accounts no longer see it — their entries always count as real.",
+        "Turn it on before practicing with the app — demoing a screen or training a new hire — so nothing the owner enters counts as real.",
+        "While it's on, new Waste, Shift Close, Purchase, Cleaning Log, and Sign-In entries are tagged <strong>TEST</strong> and excluded from stock calculations, KPI scores, dashboards, and CSV exports — but they still show up (with a yellow TEST badge) in their own lists.",
+        "It's <strong>per-device and doesn't sync</strong>. A topbar banner shows while it's on — turn it off before logging real entries.",
       ],
       ar_steps: [
-        "مفتاح خاص بكل جهاز في الشريط العلوي (🧪 وضع التجربة). فعّله قبل التدريب على التطبيق — لتدريب موظف جديد مثلاً — حتى لا يُحتسب أي شيء تدخله كبيانات حقيقية.",
-        "أثناء التفعيل، تُعلَّم إدخالات الهدر وإغلاق الشيفت والمشتريات وسجل النظافة والحضور الجديدة بعلامة <strong>TEST</strong> وتُستبعد من حسابات المخزون وتقييم الأداء ولوحات التقارير وتصدير CSV — لكنها تظل ظاهرة (بشارة صفراء TEST) في قوائمها الخاصة حتى تراجع ما تم تدريبه.",
-        "الوضع <strong>خاص بكل جهاز ولا يُزامَن</strong> — تفعيله على هاتف لا يفعّله على أي جهاز آخر.",
-        "تأكد دائماً من شريط التنبيه العلوي قبل إرسال أي إدخال حقيقي أثناء الشيفت، للتأكد من أن وضع التجربة مطفأ.",
+        "مفتاح <strong>للمالك فقط</strong> في الشريط العلوي (🧪 وضع التجربة). لم يعد يظهر لحسابات الموظفين — إدخالاتهم تُحتسب دائماً كبيانات حقيقية.",
+        "فعّله قبل التدريب على التطبيق — لعرض شاشة أو تدريب موظف جديد — حتى لا يُحتسب أي شيء يدخله المالك كبيانات حقيقية.",
+        "أثناء التفعيل، تُعلَّم إدخالات الهدر وإغلاق الشيفت والمشتريات وسجل النظافة والحضور الجديدة بعلامة <strong>TEST</strong> وتُستبعد من حسابات المخزون وتقييم الأداء ولوحات التقارير وتصدير CSV — لكنها تظل ظاهرة (بشارة صفراء TEST) في قوائمها الخاصة.",
+        "الوضع <strong>خاص بكل جهاز ولا يُزامَن</strong>. يظهر شريط تنبيه علوي أثناء تفعيله — أطفئه قبل تسجيل أي إدخال حقيقي.",
       ],
     },
     {
@@ -17053,7 +17759,7 @@ routes.app_guide = function (u) {
   // ── Role-aware guide config ────────────────────────────────────────────────
   // Which "area" each section belongs to, for the grouped reference view.
   const GUIDE_AREA = {
-    "Signing In": "start", "Key Rules — Must Follow": "start", "Test Mode": "start",
+    "Signing In": "start", "Key Rules — Must Follow": "start", "Test Mode": "admin",
     "Sign-In Stamp (Clock In)": "shift", "Record Waste": "shift", "Shift Close": "shift",
     "Cleaning Log": "shift", "Weekly Schedule": "shift", "Barista Handbook": "shift",
     "Request Leave": "shift", "Restock Alerts & Supplier Orders": "shift",
@@ -17098,7 +17804,7 @@ routes.app_guide = function (u) {
         "Restock Alerts & Supplier Orders", "Shift Close", "Weekly Schedule", "Barista Handbook",
         "Request Leave", "Monthly Training Quiz", "KPI Scorecard", "My Job Description",
         "My HR", "My ID", "Notifications & Alerts", "Suggestions & Complaints", "Leaderboard",
-        "Test Mode", "Key Rules — Must Follow"],
+        "Key Rules — Must Follow"],
     },
     head_barista: {
       en: { who: "You are a Head Barista.", intro: "You do everything a barista does, plus branch money, inventory, roster and payroll oversight. If you're active this month you also hold both leadership roles automatically." },
@@ -17120,7 +17826,7 @@ routes.app_guide = function (u) {
         "Salaries & Payroll", "Penalties", "Staff HR Overview", "Leadership Roles",
         "Dashboards & Reports", "Training Quiz Dashboard", "Request Leave",
         "Monthly Training Quiz", "KPI Scorecard", "My Job Description", "My HR", "My ID",
-        "Notifications & Alerts", "Suggestions & Complaints", "Leaderboard", "Test Mode",
+        "Notifications & Alerts", "Suggestions & Complaints", "Leaderboard",
         "Key Rules — Must Follow"],
     },
     manager: {
