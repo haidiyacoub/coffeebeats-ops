@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260909-033 -->
+<!-- CB_BUILD:20260909-072 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260909-033";
+  var BUILD = "20260909-072";
   (function() {
     function checkFresh() {
       try {
@@ -7504,16 +7504,18 @@ routes.petty_cash = function (u) {
   function pushEntry(branch, type, amount, note, date) {
     const s = stamp();
     const bal = pettyCashBalance(branch);
-    state.petty_cash.push({
+    const entry = {
       id: uuid(), branch, date: date || new Date().toISOString().slice(0,10),
       type, amount, balance_after: bal + amount, ref: "manual",
       by: s.by, by_name: s.by_name, at: s.at, note: note || "",
-    });
+    };
+    state.petty_cash.push(entry);
     // Alert when combined total drops below threshold
     const total = pettyCashBalance("maadi") + pettyCashBalance("zawya");
     if (total < PETTY_CASH_ALERT) {
       notifyHaidi("Low petty cash — combined", `Total is ${money(total)} (under ${money(PETTY_CASH_ALERT)})`);
     }
+    return entry;
   }
 
   function addTopup(branch) {
@@ -7522,19 +7524,30 @@ routes.petty_cash = function (u) {
       fields: [
         { key: "amount", label: "Amount (EGP)", type: "number", value: 0 },
         { key: "date", label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "funded_from", label: "Funded from", type: "select", value: "owner_bank", options: [
+          { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
+          PERSONAL_PAID_FROM_OPT,
+        ] },
         { key: "note", label: "Note", type: "text", value: "Top-up from Haïdi" },
       ],
       onSubmit: (vals) => {
         const amt = Number(vals.amount) || 0;
         if (amt <= 0) return toast("Enter a positive amount", "error");
-        pushEntry(branch, "topup", amt, vals.note, vals.date);
+        const topup = pushEntry(branch, "topup", amt, vals.note, vals.date);
         const s = stamp();
-        state.bank_ledger.push({
-          id: uuid(), date: vals.date, amount: -amt, supplier: `Petty cash (${branch})`, type: "petty_cash_topup",
-          by: s.by, by_name: s.by_name, at: s.at, note: `Top-up to ${branch} head barista`,
-        });
+        if (vals.funded_from === "owner_personal") {
+          recordPersonalPayment({ amount: amt, date: vals.date, source: "petty_cash", ref: topup && topup.id, branch, label: `Petty cash top-up (${branch})` }, s);
+        } else {
+          state.bank_ledger.push({
+            id: uuid(), date: vals.date, amount: -amt, supplier: `Petty cash (${branch})`, type: "petty_cash_topup",
+            ref: topup && topup.id,
+            by: s.by, by_name: s.by_name, at: s.at, note: `Top-up to ${branch} head barista`,
+          });
+        }
         delete state.settings.alerted_combined;
-        saveState(); toast("Top-up recorded"); render();
+        saveState();
+        toast(vals.funded_from === "owner_personal" ? "Top-up recorded · added to what the company owes you" : "Top-up recorded");
+        render();
       }
     });
   }
@@ -7565,6 +7578,10 @@ routes.petty_cash = function (u) {
       fields: [
         { key: "amount", label: T("Total amount (EGP)","إجمالي المبلغ (جنيه)"), type: "number", value: 0 },
         { key: "date", label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "funded_from", label: T("Funded from","مموَّل من"), type: "select", value: "owner_bank", options: [
+          { label: T("🏦 Company bank / owner transfer","🏦 بنك الشركة / تحويل المالك"), value: "owner_bank" },
+          { label: T("🙋 Paid personally — reimburse me later","🙋 دفعت شخصياً — يُسدَّد لي لاحقاً"), value: "owner_personal" },
+        ] },
         { key: "note", label: T("Note","ملاحظة"), type: "text", value: "Monthly top-up from Haïdi" },
       ],
       onSubmit: (vals) => {
@@ -7572,19 +7589,28 @@ routes.petty_cash = function (u) {
         if (amt <= 0) return toast(T("Enter a positive amount","أدخل مبلغاً موجباً"), "error");
         const split = pettyCashSplitAmount(amt);
         const s = stamp();
+        const personal = vals.funded_from === "owner_personal";
         for (const b of ["zawya", "maadi"]) {
           const share = split[b];
           if (share <= 0) continue;
-          pushEntry(b, "topup", share, `${vals.note || "Top-up"} (auto-split ${zPct}/${100 - zPct})`, vals.date);
-          state.bank_ledger.push({
-            id: uuid(), date: vals.date, amount: -share, supplier: `Petty cash (${b})`, type: "petty_cash_topup",
-            by: s.by, by_name: s.by_name, at: s.at, note: `Auto-split top-up to ${b} head barista`,
-          });
+          const topup = pushEntry(b, "topup", share, `${vals.note || "Top-up"} (auto-split ${zPct}/${100 - zPct})`, vals.date);
+          if (personal) {
+            recordPersonalPayment({ amount: share, date: vals.date, source: "petty_cash", ref: topup && topup.id, branch: b, label: `Petty cash top-up (${b})` }, s);
+          } else {
+            state.bank_ledger.push({
+              id: uuid(), date: vals.date, amount: -share, supplier: `Petty cash (${b})`, type: "petty_cash_topup",
+              ref: topup && topup.id,
+              by: s.by, by_name: s.by_name, at: s.at, note: `Auto-split top-up to ${b} head barista`,
+            });
+          }
         }
         delete state.settings.alerted_combined;
         saveState();
-        toast(T(`Split: Zawya ${money(split.zawya)} · Maadi ${money(split.maadi)}`,
-                `تقسيم: زاوية ${money(split.zawya)} · معادي ${money(split.maadi)}`));
+        toast(personal
+          ? T(`Split: Zawya ${money(split.zawya)} · Maadi ${money(split.maadi)} · added to what the company owes you`,
+              `تقسيم: زاوية ${money(split.zawya)} · معادي ${money(split.maadi)} · أُضيف لما تدين به الشركة لك`)
+          : T(`Split: Zawya ${money(split.zawya)} · Maadi ${money(split.maadi)}`,
+              `تقسيم: زاوية ${money(split.zawya)} · معادي ${money(split.maadi)}`));
         render();
       }
     });
@@ -9913,11 +9939,15 @@ routes.overheads = function (u) {
       ]));
     }
     // Variable — logged actuals, always counted
-    const varMaadi = state.overheads.filter(o => o.branch==="maadi" && ((o.month||(o.date||"").slice(0,7))===month) && !isRecurringOverheadCat(o.category)).reduce((s,o)=>s+(Number(o.amount)||0),0);
-    const varZawya = state.overheads.filter(o => o.branch==="zawya" && ((o.month||(o.date||"").slice(0,7))===month) && !isRecurringOverheadCat(o.category)).reduce((s,o)=>s+(Number(o.amount)||0),0);
+    const varRowsMonth = state.overheads.filter(o => (o.branch==="maadi"||o.branch==="zawya") && ((o.month||(o.date||"").slice(0,7))===month) && !isRecurringOverheadCat(o.category));
+    const varMaadi = varRowsMonth.filter(o => o.branch==="maadi").reduce((s,o)=>s+(Number(o.amount)||0),0);
+    const varZawya = varRowsMonth.filter(o => o.branch==="zawya").reduce((s,o)=>s+(Number(o.amount)||0),0);
     if (varMaadi || varZawya) {
+      // Name the row for what's in it: "Marketing fees" when every entry is marketing,
+      // else the neutral "Variable" (same rule as the section header above).
+      const varRowLabel = varRowsMonth.length && varRowsMonth.every(o => o.category === "marketing_fees") ? "Marketing fees" : "Variable";
       card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"13px", paddingBottom:"4px" } }, [
-        el("div", { style:{color:"var(--ink-dim)"} }, "Variable"),
+        el("div", { style:{color:"var(--ink-dim)"} }, varRowLabel),
         el("div", { style:{textAlign:"right"} }, money(varMaadi)),
         el("div", { style:{textAlign:"right"} }, money(varZawya)),
       ]));
@@ -10818,7 +10848,7 @@ routes.bank = function (u) {
       owedCard.appendChild(el("div", { class: "muted small", style: { marginTop: "2px" } },
         people.map(p => `${p}: ${money(byPerson[p])}`).join("  ·  ")));
     }
-    const srcLabel = { overhead: "Overhead", purchase: "Purchase", salary: "Salary", loan: "Loan", equipment: "Equipment", other: "Other" };
+    const srcLabel = { overhead: "Overhead", purchase: "Purchase", salary: "Salary", loan: "Loan", equipment: "Equipment", petty_cash: "Petty cash top-up", other: "Other" };
     if (_owedOpen.length) {
       const openList = el("div", { class: "list", style: { marginTop: "10px" } });
       for (const e of _owedOpen) {
@@ -18181,7 +18211,7 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>Petty Cash</strong> to see the cash float kept at Maadi and Zawya for small day-to-day spending.",
         "Every entry (a purchase paid from petty cash, a top-up, or an expenditure) stores its own <strong>balance after</strong> — the number you see is simply the most recent entry's balance, not a live sum of everything.",
-        "<strong>Owner:</strong> tap <strong>➕ Top-up</strong> on a branch to add cash to that float, or <strong>➕ Top-up (auto-split)</strong> on the combined card to enter one amount that is divided automatically — by default 60% Zawya / 40% Maadi (editable in Settings, along with the 20,000 EGP monthly estimate). Either way a matching outflow is logged in the Bank Ledger.",
+        "<strong>Owner:</strong> tap <strong>➕ Top-up</strong> on a branch to add cash to that float, or <strong>➕ Top-up (auto-split)</strong> on the combined card to enter one amount that is divided automatically — by default 60% Zawya / 40% Maadi (editable in Settings, along with the 20,000 EGP monthly estimate). Set <strong>Funded from</strong>: <em>Company bank</em> logs the matching outflow in the Bank Ledger; <em>Paid personally</em> instead adds the amount to “company owes you” on the Bank Ledger screen, to reimburse yourself later.",
         "<strong>Head barista:</strong> tap <strong>🧾 Expenditure</strong> to log cash spent from your branch's float that isn't a formal purchase.",
         "<strong>Fresh start every month:</strong> petty cash is meant to begin each month at zero. On the 1st, if cash is left over, the head barista is notified to bank it and a red banner appears with <strong>🏦 Deposit &amp; start fresh</strong> — this moves both floats to the Bank Ledger and resets the month. <strong>🏦 Bank balance</strong> on a single branch card does the same for just that branch.",
         "A red low-cash banner appears automatically once a branch's balance drops below 1,000 EGP.",
