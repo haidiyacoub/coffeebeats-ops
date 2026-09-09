@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260909-005 -->
+<!-- CB_BUILD:20260909-033 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260909-005";
+  var BUILD = "20260909-033";
   (function() {
     function checkFresh() {
       try {
@@ -1088,6 +1088,7 @@ function defaultState() {
     ],
     bank_ledger: [],
     equipment: [],            // fixed-asset register
+    owner_account: [],        // personal-funds tracker — expenses someone paid from their own pocket, awaiting reimbursement
     sales: [],
     shifts: [],
     photo_log: [],            // { id, url, name, context, at, form, branch }
@@ -1208,6 +1209,7 @@ function migrateState(s) {
   s.overhead_cat_overrides  = s.overhead_cat_overrides  || {}; // built-in category value → { label?, hidden?, updated_at }
   s.maintenance_config      = s.maintenance_config      || {}; // engineers + schedule anchors for equipment maintenance
   s.equipment               = s.equipment               || []; // fixed-asset register — [{id,name,category,branch,purchase_date,cost,supplier,model_serial,useful_life_years,status,paid_from,note,by,by_name,at,updated_at}]
+  s.owner_account           = s.owner_account           || []; // personal-funds tracker — [{id,date,amount,source,ref,branch,label,reimbursed,reimbursed_at,reimburse_ref,by,by_name,at,updated_at}]
   s.salary_snapshots        = s.salary_snapshots        || {}; // userId → {month → amount}
   s.purchase_units         = s.purchase_units         || {}; // inv_item_id → { unit_label, pack_size_canonical }
   s.inventory_alerts = s.inventory_alerts || {}; // inv_item_id → { reorder_threshold_days }
@@ -1532,7 +1534,7 @@ const STATE_CHUNKS = {
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
   waste:         ["waste", "deleted_waste"],
-  purchases:     ["purchases", "petty_cash", "bank_ledger", "deleted_purchases"],
+  purchases:     ["purchases", "petty_cash", "bank_ledger", "owner_account", "deleted_purchases"],
   shifts:        ["shifts"],
   // NOTE: snapshots, shift_closes, cleaning_logs and signin_stamps are NO LONGER
   // single docs here — they are append-only logs that grow without bound and would
@@ -6654,6 +6656,7 @@ routes.purchase_new = function (u) {
         ["petty_cash",T("Petty cash (head barista)","العهدة النقدية (رئيس البريستا)")],
         ["owner_bank",T("Bank transfer (owner)","تحويل بنكي (المالك)")],
         ["credit_card",T("Credit card","بطاقة ائتمان")],
+        ["owner_personal",T("Paid personally (reimburse later)","دُفع شخصياً (يُسدَّد لاحقاً)")],
         ["unpaid",T("Unpaid / credit","غير مدفوع / آجل")],
       ].map(([v,l]) => el("option", { value: v, selected: paid_by===v?"true":null }, l))
     );
@@ -6946,6 +6949,8 @@ routes.purchase_new = function (u) {
           by: s.by, by_name: s.by_name, at: s.at, note: `Credit card payment to ${supplier}${suffix}`,
           ...(isTestMode() ? { is_test: true } : {}),
         });
+      } else if (paid_by === "owner_personal") {
+        recordPersonalPayment({ amount: brTotal, date, source: "purchase", ref: purch.id, branch: branchName, label: `Purchase — ${supplier}${suffix}` }, s);
       }
     }
 
@@ -6995,16 +7000,23 @@ function _deletePurchase(p, keep = 20) {
   state.deleted_purchases = state.deleted_purchases || [];
   const ledgerEntry = state.petty_cash.find(x => x.ref === p.id) || state.bank_ledger.find(x => x.ref === p.id) || null;
   const ledgerArr = state.petty_cash.some(x => x.ref === p.id) ? "petty_cash" : "bank_ledger";
+  // Personal-funds entries (owner paid from own pocket) — keep only the still-open ones
+  // so restore can re-add them; a reimbursed one stays put (its bank repayment is real).
+  const ownerEntries = (state.owner_account || []).filter(x => x.ref === p.id && !x.reimbursed);
   state.purchases = state.purchases.filter(x => x.id !== p.id);
   if (ledgerEntry) state[ledgerArr] = state[ledgerArr].filter(x => x.ref !== p.id);
-  state.deleted_purchases.unshift({ ...p, _ledger_entry: ledgerEntry, _ledger_arr: ledgerEntry ? ledgerArr : null, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
+  if (ownerEntries.length) state.owner_account = (state.owner_account || []).filter(x => !(x.ref === p.id && !x.reimbursed));
+  state.deleted_purchases.unshift({ ...p, _ledger_entry: ledgerEntry, _ledger_arr: ledgerEntry ? ledgerArr : null, _owner_entries: ownerEntries, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
   state.deleted_purchases = state.deleted_purchases.slice(0, keep);
   saveState();
 }
 function _restorePurchase(r) {
-  const { deleted_at, deleted_by, _ledger_entry, _ledger_arr, ...original } = r;
+  const { deleted_at, deleted_by, _ledger_entry, _ledger_arr, _owner_entries, ...original } = r;
   state.purchases.push(original);
   if (_ledger_entry && _ledger_arr) state[_ledger_arr].push(_ledger_entry);
+  if (Array.isArray(_owner_entries) && _owner_entries.length) {
+    state.owner_account = (state.owner_account || []).concat(_owner_entries);
+  }
   _untombstone(original.id);
   state.deleted_purchases = (state.deleted_purchases || []).filter(x => x.id !== r.id);
   saveState();
@@ -8145,6 +8157,10 @@ routes.salaries = function (u) {
         { key: "amount",  label: "Loan amount (EGP)", type: "number", value: 0 },
         { key: "date",    label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
         { key: "month",   label: "Deduct from month (YYYY-MM)", type: "text", value: monthInput.value },
+        { key: "paid_from", label: "Paid from", type: "select", value: "", options: [
+          { label: "— not tracked —", value: "" },
+          PERSONAL_PAID_FROM_OPT,
+        ] },
         { key: "note",    label: "Note", type: "text", value: "" },
       ],
       onSubmit: (vals) => {
@@ -8153,12 +8169,19 @@ routes.salaries = function (u) {
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
         const s = stamp();
-        state.salary_loans.push({
+        const loan = {
           id: uuid(), user_id: person.id, barista: person.name,
           amount: amt, date: vals.date, month: vals.month || (vals.date||"").slice(0,7),
+          paid_from: vals.paid_from || "",
           note: vals.note || "", by: s.by, by_name: s.by_name, at: s.at,
-        });
-        saveState(); toast(`Loan recorded for ${person.name}`); render();
+        };
+        state.salary_loans.push(loan);
+        if (vals.paid_from === "owner_personal") {
+          recordPersonalPayment({ amount: amt, date: vals.date, source: "loan", ref: loan.id, label: `Loan advance — ${person.name}` }, s);
+        }
+        saveState();
+        toast(vals.paid_from === "owner_personal" ? `Loan recorded · added to what the company owes you` : `Loan recorded for ${person.name}`);
+        render();
       }
     });
   }
@@ -8274,6 +8297,10 @@ routes.salaries = function (u) {
         { key: "amount",  label: "Amount paid (EGP)", type: "number", value: 0 },
         { key: "month",   label: "For month (YYYY-MM)", type: "text", value: monthInput.value },
         { key: "date",    label: "Transfer date", type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "paid_from", label: "Paid from", type: "select", value: "", options: [
+          { label: "— not tracked —", value: "" },
+          PERSONAL_PAID_FROM_OPT,
+        ] },
         { key: "note",    label: "Note", type: "text", value: "Monthly salary" },
       ],
       onSubmit: (vals) => {
@@ -8281,7 +8308,7 @@ routes.salaries = function (u) {
         if (amt <= 0) return toast("Enter a positive amount", "error");
         const person = state.users.find(x => x.id === vals.user_id);
         const s = stamp();
-        state.salaries.push({
+        const payout = {
           id: uuid(),
           user_id: person ? person.id : null,
           recipient: person ? person.name : (vals.recipient || ""),
@@ -8289,10 +8316,17 @@ routes.salaries = function (u) {
           amount: amt,
           month: vals.month || "",
           date: vals.date,
+          paid_from: vals.paid_from || "",
           note: vals.note || "",
           by: s.by, by_name: s.by_name, at: s.at,
-        });
-        saveState(); toast("Payout logged"); render();
+        };
+        state.salaries.push(payout);
+        if (vals.paid_from === "owner_personal") {
+          recordPersonalPayment({ amount: amt, date: vals.date, source: "salary", ref: payout.id, branch: payout.branch, label: `Salary — ${payout.recipient}` }, s);
+        }
+        saveState();
+        toast(vals.paid_from === "owner_personal" ? "Payout logged · added to what the company owes you" : "Payout logged");
+        render();
       }
     });
   }
@@ -9734,9 +9768,10 @@ routes.overheads = function (u) {
             const gone = new Set(
               shared ? state.overheads.filter(x => x.link_id === r.link_id).map(x => x.id) : [r.id]
             );
-            state.overheads   = state.overheads.filter(x => !gone.has(x.id));
-            state.petty_cash  = state.petty_cash.filter(x => !(x.ref && gone.has(x.ref)));
-            state.bank_ledger = state.bank_ledger.filter(x => !(x.ref && gone.has(x.ref)));
+            state.overheads    = state.overheads.filter(x => !gone.has(x.id));
+            state.petty_cash   = state.petty_cash.filter(x => !(x.ref && gone.has(x.ref)));
+            state.bank_ledger  = state.bank_ledger.filter(x => !(x.ref && gone.has(x.ref)));
+            state.owner_account = (state.owner_account || []).filter(x => !(x.ref && gone.has(x.ref) && !x.reimbursed));
             saveState(); toast("Deleted"); draw();
           }}, "🗑"),
         ]));
@@ -10020,6 +10055,10 @@ routes.overheads = function (u) {
   function togglePaid(br, cat, preset, existing, monthlyOverride) {
     if (existing && existing.paid) {
       existing.paid = false; existing.paid_on = "";
+      // Reverse any linked payment record (petty cash / bank / personal funds).
+      state.petty_cash   = (state.petty_cash   || []).filter(x => x.ref !== existing.id);
+      state.bank_ledger  = (state.bank_ledger  || []).filter(x => x.ref !== existing.id);
+      removePersonalPaymentByRef(existing.id);
       saveState(); toast(`${cat.label}: unmarked`); draw();
       return;
     }
@@ -10035,20 +10074,35 @@ routes.overheads = function (u) {
       fields: [
         { key: "amount",  label: "Amount paid (EGP)", type: "number", value: defaultAmount },
         { key: "paid_on", label: "Paid on (date)", type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "paid_from", label: "Paid from", type: "select", value: "", options: [
+          { label: "— not tracked (P&L only) —", value: "" },
+          { label: "💵 Petty cash", value: "petty_cash" },
+          { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
+          { label: "💳 Credit card", value: "credit_card" },
+          PERSONAL_PAID_FROM_OPT,
+        ] },
         { key: "note",    label: "Note", type: "text", value: existing?.note || preset?.note || "" },
       ],
       onSubmit: (vals) => {
         const amt = Number(vals.amount) || 0;
         if (amt <= 0) return toast("Enter a positive amount", "error");
         const s = stamp();
+        const paidFrom = vals.paid_from || "";
+        let entry;
         if (existing) {
           existing.amount = amt;
           existing.paid = true;
           existing.paid_on = vals.paid_on;
+          existing.paid_from = paidFrom;
           existing.note = vals.note || existing.note || "";
           existing.by = s.by; existing.by_name = s.by_name; existing.at = s.at;
+          entry = existing;
+          // clear any prior linked record before re-creating from this pass
+          state.petty_cash  = (state.petty_cash  || []).filter(x => x.ref !== existing.id);
+          state.bank_ledger = (state.bank_ledger || []).filter(x => x.ref !== existing.id);
+          removePersonalPaymentByRef(existing.id);
         } else {
-          state.overheads.push({
+          entry = {
             id: uuid(),
             branch: br, category: cat.value,
             label: "",
@@ -10057,11 +10111,37 @@ routes.overheads = function (u) {
             date: vals.paid_on,
             paid: true,
             paid_on: vals.paid_on,
+            paid_from: paidFrom,
             note: vals.note || "",
             by: s.by, by_name: s.by_name, at: s.at,
-          });
+          };
+          state.overheads.push(entry);
         }
-        saveState(); toast(`${cat.label} marked paid`); draw();
+        // Mirror the payment (recurring bills, same rules as one-off overheads).
+        if (paidFrom && amt > 0) {
+          const desc = `${cat.label}${entry.note ? " — " + entry.note : ""}`;
+          if (paidFrom === "petty_cash") {
+            const bal = pettyCashBalance(br);
+            state.petty_cash.push({
+              id: uuid(), branch: br, date: vals.paid_on, type: "expense", amount: -amt,
+              balance_after: bal - amt, ref: entry.id,
+              by: s.by, by_name: s.by_name, at: s.at, note: `Overhead — ${desc}`,
+              ...(isTestMode() ? { is_test: true } : {}),
+            });
+          } else if (paidFrom === "owner_personal") {
+            recordPersonalPayment({ amount: amt, date: vals.paid_on, source: "overhead", ref: entry.id, branch: br, label: desc }, s);
+          } else {
+            state.bank_ledger.push({
+              id: uuid(), date: vals.paid_on, amount: -amt, supplier: desc, ref: entry.id,
+              type: paidFrom === "credit_card" ? "overhead_credit_card" : "overhead_payment",
+              by: s.by, by_name: s.by_name, at: s.at, note: `Overhead (${br})`,
+              ...(isTestMode() ? { is_test: true } : {}),
+            });
+          }
+        }
+        saveState();
+        toast(paidFrom === "owner_personal" ? `${cat.label} paid · added to what the company owes you` : `${cat.label} marked paid`);
+        draw();
       }
     });
   }
@@ -10077,8 +10157,9 @@ routes.overheads = function (u) {
     const paidFromOptions = [
       { label: "— not tracked (P&L only) —", value: "" },
       { label: "💵 Petty cash", value: "petty_cash" },
-      { label: "🏦 Owner's bank", value: "owner_bank" },
+      { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
       { label: "💳 Credit card", value: "credit_card" },
+      PERSONAL_PAID_FROM_OPT,
     ];
     openPrompt({
       title: "Log variable overhead",
@@ -10132,6 +10213,8 @@ routes.overheads = function (u) {
               by: s.by, by_name: s.by_name, at: s.at, note: `Overhead — ${desc}`,
               ...(isTestMode() ? { is_test: true } : {}),
             });
+          } else if (paidFrom === "owner_personal") {
+            recordPersonalPayment({ amount: a, date: entry.date, source: "overhead", ref: entry.id, branch: entry.branch, label: desc }, s);
           } else {
             state.bank_ledger.push({
               id: uuid(), date: entry.date, amount: -a, supplier: desc, ref: entry.id,
@@ -10160,7 +10243,10 @@ routes.overheads = function (u) {
         const entry = mkEntry(vals.branch, amt);
         state.overheads.push(entry);
         mkLedger(entry);
-        saveState(); toast(paidFrom ? "Entry saved + payment recorded" : "Entry saved"); draw();
+        saveState();
+        toast(paidFrom === "owner_personal" ? "Saved · added to what the company owes you"
+            : paidFrom ? "Entry saved + payment recorded" : "Entry saved");
+        draw();
       }
     });
   }
@@ -10266,6 +10352,7 @@ routes.overhead_log_new = function (u) {
       { label: "— not tracked (P&L only) —", value: "" },
       { label: "💵 Petty cash", value: "petty_cash" },
       { label: "💳 Credit card", value: "credit_card" },
+      { label: "🙋 Paid personally — reimburse me later", value: "owner_personal" },
     ];
     openPrompt({
       title: T("Log an overhead","تسجيل مصروف ثابت"),
@@ -10304,18 +10391,29 @@ routes.overhead_log_new = function (u) {
           ...(extra || {}),
         });
         const mkLedger = (entry) => {
-          if (paidFrom !== "petty_cash") return;
           const a = Number(entry.amount) || 0;
           if (a <= 0) return;
           const desc = overheadCatLabel(entry.category) + (entry.label ? " — " + entry.label : "");
-          const bal = pettyCashBalance(entry.branch);
-          state.petty_cash = state.petty_cash || [];
-          state.petty_cash.push({
-            id: uuid(), branch: entry.branch, date: entry.date, type: "expense", amount: -a,
-            balance_after: bal - a, ref: entry.id,
-            by: s.by, by_name: s.by_name, at: s.at, note: `Overhead — ${desc}`,
-            ...(isTestMode() ? { is_test: true } : {}),
-          });
+          if (paidFrom === "petty_cash") {
+            const bal = pettyCashBalance(entry.branch);
+            state.petty_cash = state.petty_cash || [];
+            state.petty_cash.push({
+              id: uuid(), branch: entry.branch, date: entry.date, type: "expense", amount: -a,
+              balance_after: bal - a, ref: entry.id,
+              by: s.by, by_name: s.by_name, at: s.at, note: `Overhead — ${desc}`,
+              ...(isTestMode() ? { is_test: true } : {}),
+            });
+          } else if (paidFrom === "credit_card") {
+            state.bank_ledger = state.bank_ledger || [];
+            state.bank_ledger.push({
+              id: uuid(), date: entry.date, amount: -a, supplier: desc, ref: entry.id,
+              type: "overhead_credit_card",
+              by: s.by, by_name: s.by_name, at: s.at, note: `Overhead (${entry.branch})`,
+              ...(isTestMode() ? { is_test: true } : {}),
+            });
+          } else if (paidFrom === "owner_personal") {
+            recordPersonalPayment({ amount: a, date: entry.date, source: "overhead", ref: entry.id, branch: entry.branch, label: desc }, s);
+          }
         };
         if (vals.branch === "both") {
           const zPct = Math.min(100, Math.max(0, Number(vals.split_zawya_pct) || 0));
@@ -10335,7 +10433,9 @@ routes.overhead_log_new = function (u) {
         state.overheads.push(entry);
         mkLedger(entry);
         saveState();
-        toast(paidFrom ? T("Saved + petty cash recorded","تم الحفظ + تسجيل العهدة") : T("Saved","تم الحفظ"));
+        toast(paidFrom === "owner_personal" ? T("Saved · added to what the company owes you","تم الحفظ · أُضيف لما تدين به الشركة لك")
+            : paidFrom ? T("Saved + payment recorded","تم الحفظ + تسجيل الدفع")
+            : T("Saved","تم الحفظ"));
         go("overhead_log_new");
       }
     });
@@ -10456,7 +10556,7 @@ routes.equipment_register = function (u) {
           `Bought ${a.purchase_date || "—"}${a.supplier ? " · " + a.supplier : ""}${a.model_serial ? " · " + a.model_serial : ""}`),
         a.note ? el("div", { class: "muted small", style: { marginTop: "2px", fontStyle: "italic" } }, a.note) : null,
         el("div", { class: "muted small", style: { marginTop: "2px" } },
-          `by ${a.by_name || "—"}${a.paid_from ? " · paid from " + ({ petty_cash: "petty cash", owner_bank: "owner bank", credit_card: "credit card" }[a.paid_from] || a.paid_from) : ""}`),
+          `by ${a.by_name || "—"}${a.paid_from ? " · paid from " + ({ petty_cash: "petty cash", owner_bank: "company bank", credit_card: "credit card", owner_personal: "personal funds (owed back)" }[a.paid_from] || a.paid_from) : ""}`),
       ]),
       el("div", { style: { textAlign: "right", flexShrink: "0" } }, [
         el("div", { style: { fontWeight: "700" } }, money(Number(a.cost) || 0)),
@@ -10498,8 +10598,9 @@ routes.equipment_register = function (u) {
         options: [
           { label: "— not tracked —", value: "" },
           { label: "💵 Petty cash", value: "petty_cash" },
-          { label: "🏦 Owner's bank", value: "owner_bank" },
+          { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
           { label: "💳 Credit card", value: "credit_card" },
+          PERSONAL_PAID_FROM_OPT,
         ], value: "",
       });
     }
@@ -10539,7 +10640,8 @@ routes.equipment_register = function (u) {
         state.equipment.unshift(asset);
         _assetLedger(asset, s);
         saveState();
-        toast(asset.paid_from ? "Asset saved + payment recorded" : "Asset saved");
+        toast(asset.paid_from === "owner_personal" ? "Asset saved · added to what the company owes you"
+            : asset.paid_from ? "Asset saved + payment recorded" : "Asset saved");
         render();
       },
     });
@@ -10566,6 +10668,8 @@ routes.equipment_register = function (u) {
           ...(isTestMode() ? { is_test: true } : {}),
         });
       }
+    } else if (pf === "owner_personal") {
+      recordPersonalPayment({ amount: amt, date: asset.purchase_date, source: "equipment", ref: asset.id, branch: asset.branch, label: desc }, s);
     } else {
       state.bank_ledger.push({
         id: uuid(), date: asset.purchase_date, amount: -amt, supplier: desc, ref: asset.id,
@@ -10577,16 +10681,94 @@ routes.equipment_register = function (u) {
   }
 
   function deleteAsset(a) {
-    const hasLedger = state.petty_cash.some(x => x.ref === a.id) || state.bank_ledger.some(x => x.ref === a.id);
-    if (!confirm(`Delete "${a.name}"?${hasLedger ? " Its linked petty-cash / bank record will be removed too." : ""}`)) return;
-    state.equipment   = state.equipment.filter(x => x.id !== a.id);
-    state.petty_cash  = state.petty_cash.filter(x => x.ref !== a.id);
-    state.bank_ledger = state.bank_ledger.filter(x => x.ref !== a.id);
+    const hasLedger = state.petty_cash.some(x => x.ref === a.id)
+      || state.bank_ledger.some(x => x.ref === a.id)
+      || (state.owner_account || []).some(x => x.ref === a.id && !x.reimbursed);
+    if (!confirm(`Delete "${a.name}"?${hasLedger ? " Its linked petty-cash / bank / owed-to-owner record will be removed too." : ""}`)) return;
+    state.equipment    = state.equipment.filter(x => x.id !== a.id);
+    state.petty_cash   = state.petty_cash.filter(x => x.ref !== a.id);
+    state.bank_ledger  = state.bank_ledger.filter(x => x.ref !== a.id);
+    state.owner_account = (state.owner_account || []).filter(x => !(x.ref === a.id && !x.reimbursed));
     saveState(); toast("Deleted"); render();
   }
 
   return wrap;
 };
+
+// ==============================================================
+// PERSONAL-FUNDS TRACKER ("company owes me")
+// ---
+// When someone pays a company cost from their own pocket (common when the
+// company bank balance is zero), the expense still books to the P&L through
+// its normal record — overhead line, purchase, salary, loan, asset. This
+// tracker only records that the company OWES that person the money back.
+// "Mark reimbursed" (Bank Ledger screen) posts the repayment as a bank
+// OUTFLOW — never a second P&L expense.
+// state.owner_account lives in the "purchases" sync chunk (with petty_cash /
+// bank_ledger); generic merge-by-id + tombstones + the purchases listener.
+// ==============================================================
+function ownerAccountOpen()  { return (state.owner_account || []).filter(e => e && !e.reimbursed && notTest(e)); }
+function ownerAccountDone()   { return (state.owner_account || []).filter(e => e && e.reimbursed && notTest(e)); }
+function ownerOwedTotal()     { return ownerAccountOpen().reduce((s, e) => s + (Number(e.amount) || 0), 0); }
+function ownerOwedByPerson() {
+  const m = {};
+  for (const e of ownerAccountOpen()) {
+    const k = e.by_name || e.by || "—";
+    m[k] = (m[k] || 0) + (Number(e.amount) || 0);
+  }
+  return m;
+}
+// Record that s.by paid `amount` personally for a company cost. De-dupes on ref
+// so re-saving an edited source record doesn't double-log.
+function recordPersonalPayment({ amount, date, source, ref, branch, label }, s) {
+  const amt = Number(amount) || 0;
+  if (amt <= 0) return null;
+  state.owner_account = state.owner_account || [];
+  if (ref && state.owner_account.some(e => e.ref === ref && e.source === source && !e.reimbursed)) return null;
+  const entry = {
+    id: uuid(),
+    date: date || new Date().toISOString().slice(0, 10),
+    amount: amt,
+    source: source || "other",
+    ref: ref || null,
+    branch: branch || null,
+    label: label || "",
+    reimbursed: false,
+    by: s.by, by_name: s.by_name, at: s.at, updated_at: s.at,
+    ...(isTestMode() ? { is_test: true } : {}),
+  };
+  state.owner_account.push(entry);
+  return entry;
+}
+// Drop any open personal-payment entry tied to a source record being deleted.
+function removePersonalPaymentByRef(ref) {
+  if (!ref) return;
+  state.owner_account = (state.owner_account || []).filter(e => !(e.ref === ref && !e.reimbursed));
+}
+// Mark one entry reimbursed and post the repayment to the bank ledger (outflow).
+function reimbursePersonalPayment(entry, { date, note }, s) {
+  entry.reimbursed = true;
+  entry.reimbursed_at = s.at;
+  entry.reimbursed_by = s.by;
+  entry.reimbursed_by_name = s.by_name;
+  entry.reimbursed_note = note || "";
+  entry.updated_at = s.at;
+  const be = {
+    id: uuid(),
+    date: date || new Date().toISOString().slice(0, 10),
+    amount: -(Number(entry.amount) || 0),
+    supplier: `Reimburse ${entry.by_name || "personal funds"}`,
+    ref: entry.id,
+    type: "personal_reimbursement",
+    by: s.by, by_name: s.by_name, at: s.at,
+    note: entry.label ? `Repaid personal funds — ${entry.label}` : "Repaid personal funds",
+    ...(isTestMode() ? { is_test: true } : {}),
+  };
+  entry.reimburse_ref = be.id;
+  state.bank_ledger = state.bank_ledger || [];
+  state.bank_ledger.push(be);
+}
+const PERSONAL_PAID_FROM_OPT = { label: "🙋 Paid personally — reimburse me later", value: "owner_personal" };
 
 // ==============================================================
 // BANK LEDGER (owner)
@@ -10622,6 +10804,85 @@ routes.bank = function (u) {
   }
   wrap.appendChild(pcCard);
 
+  // ── Personal funds — what the company owes (owner / staff who fronted a cost) ──
+  const _owedOpen = ownerAccountOpen().slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const _owedDone = ownerAccountDone().slice().sort((a, b) => (b.reimbursed_at || "").localeCompare(a.reimbursed_at || "")).slice(0, 30);
+  if (_owedOpen.length || _owedDone.length) {
+    const owedCard = el("div", { class: "card", style: { borderColor: "var(--accent)", marginBottom: "16px" } });
+    owedCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" } }, "🙋 Personal funds — company owes"));
+    const byPerson = ownerOwedByPerson();
+    const owedTotal = ownerOwedTotal();
+    owedCard.appendChild(el("div", { style: { fontSize: "24px", fontWeight: "700", color: owedTotal > 0 ? "var(--bad)" : "var(--ok)" } }, money(owedTotal)));
+    const people = Object.keys(byPerson);
+    if (people.length) {
+      owedCard.appendChild(el("div", { class: "muted small", style: { marginTop: "2px" } },
+        people.map(p => `${p}: ${money(byPerson[p])}`).join("  ·  ")));
+    }
+    const srcLabel = { overhead: "Overhead", purchase: "Purchase", salary: "Salary", loan: "Loan", equipment: "Equipment", other: "Other" };
+    if (_owedOpen.length) {
+      const openList = el("div", { class: "list", style: { marginTop: "10px" } });
+      for (const e of _owedOpen) {
+        const rowEl = el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", padding: "8px 0", borderBottom: "1px solid var(--border)" } }, [
+          el("div", { style: { flex: "1", minWidth: "0" } }, [
+            el("div", { style: { fontWeight: "600", fontSize: "13px" } }, `${money(e.amount)} · ${e.label || (srcLabel[e.source] || e.source)}`),
+            el("div", { class: "muted small" }, `${srcLabel[e.source] || e.source} · ${e.date || "—"} · ${e.by_name || "—"}`),
+          ]),
+          el("div", { style: { display: "flex", gap: "4px", flexShrink: "0" } }, [
+            el("button", { class: "btn ghost", style: { fontSize: "11px", padding: "4px 8px", minHeight: "26px" }, onClick: () => markReimbursed(e) }, "✓ Mark reimbursed"),
+            el("button", { class: "btn ghost", style: { fontSize: "11px", padding: "4px 6px", minHeight: "26px", color: "var(--bad)" }, onClick: () => {
+              if (!confirm("Remove this owed-to-owner entry? (Use this only if it was logged by mistake — it does NOT undo the expense.)")) return;
+              if (e.id != null) recordDeletion(e.id);
+              state.owner_account = (state.owner_account || []).filter(x => x.id !== e.id);
+              saveState(); render();
+            } }, "🗑"),
+          ]),
+        ]);
+        openList.appendChild(rowEl);
+      }
+      owedCard.appendChild(openList);
+      if (_owedOpen.length > 1) {
+        owedCard.appendChild(el("button", { class: "btn secondary", style: { marginTop: "10px" }, onClick: () => markReimbursed(_owedOpen.slice()) }, `✓ Reimburse all (${money(owedTotal)})`));
+      }
+    }
+    if (_owedDone.length) {
+      let showDone = false;
+      const doneWrap = el("div", { style: { display: "none", marginTop: "8px" } });
+      for (const e of _owedDone) {
+        doneWrap.appendChild(el("div", { class: "muted small", style: { padding: "3px 0" } },
+          `✓ ${money(e.amount)} · ${e.label || (srcLabel[e.source] || e.source)} · reimbursed ${fmtDate(e.reimbursed_at)} to ${e.by_name || "—"}`));
+      }
+      const doneBtn = el("button", { class: "btn ghost small", style: { marginTop: "8px" }, onClick: () => {
+        showDone = !showDone; doneWrap.style.display = showDone ? "" : "none";
+        doneBtn.textContent = showDone ? "Hide reimbursed history" : `Show reimbursed history (${_owedDone.length})`;
+      } }, `Show reimbursed history (${_owedDone.length})`);
+      owedCard.appendChild(doneBtn);
+      owedCard.appendChild(doneWrap);
+    }
+    wrap.appendChild(owedCard);
+  }
+
+  function markReimbursed(target) {
+    const entries = Array.isArray(target) ? target : [target];
+    const total = entries.reduce((sm, e) => sm + (Number(e.amount) || 0), 0);
+    openPrompt({
+      title: entries.length > 1 ? `Reimburse ${entries.length} entries — ${money(total)}` : `Mark reimbursed — ${money(total)}`,
+      fields: [
+        { key: "date", label: "Repayment date", type: "date", value: new Date().toISOString().slice(0, 10) },
+        { key: "note", label: "Note (optional)", type: "text", value: "" },
+      ],
+      onSubmit: (v) => {
+        const s = stamp();
+        for (const e of entries) {
+          const live = (state.owner_account || []).find(x => x.id === e.id);
+          if (live && !live.reimbursed) reimbursePersonalPayment(live, { date: v.date, note: v.note }, s);
+        }
+        saveState();
+        toast(entries.length > 1 ? `Reimbursed ${entries.length} · ${money(total)} logged to bank` : `Reimbursed · ${money(total)} logged to bank`);
+        render();
+      }
+    });
+  }
+
   // ── Bank entries only (exclude petty_cash_topup) ────────────
   const BANK_TYPES = new Set(["purchase_payment","purchase_credit_card","manual","maadi_deposit"]);
   const allSorted  = state.bank_ledger.filter(notTest).sort((a,b) => b.at.localeCompare(a.at));
@@ -10653,6 +10914,7 @@ routes.bank = function (u) {
       overhead_credit_card: "Credit card (overhead)",
       asset_payment: "Bank transfer (equipment)",
       asset_credit_card: "Credit card (equipment)",
+      personal_reimbursement: "Reimbursed personal funds",
       petty_cash_topup: "Petty cash top-up",
       maadi_deposit: "Maadi ATM deposit",
       cash_deposit: "Cash deposit",
@@ -17941,11 +18203,13 @@ routes.app_guide = function (u) {
         "Owner-only screen showing money that moved through the business bank account or credit card — separate from the cash floats in Petty Cash.",
         "Entries appear automatically from purchases paid by bank/card, petty cash top-ups (money leaving the bank to fund a float), and Maadi cash deposits (money entering the bank). Owner can also add a <strong>manual entry</strong> (payee, amount, note) for anything else — positive for money in, negative for money out.",
         "The total shown is the sum of every entry's amount over the last 200 records. Petty-cash top-ups are hidden from that headline total by default (a toggle can include them) since they're a transfer between accounts, not a real expense.",
+        "<strong>🙋 Personal funds — company owes:</strong> when you log an expense (overhead, purchase, salary, loan, equipment) and set <em>Paid from → Paid personally</em>, it appears here as money the company owes you. The expense still counts in the P&L through its own record — this panel only tracks the debt. Tap <strong>✓ Mark reimbursed</strong> (or <strong>Reimburse all</strong>) once the company pays you back: it posts the repayment as a bank outflow here — never a second expense.",
       ],
       ar_steps: [
         "شاشة خاصة بالمالك فقط تعرض حركة الأموال عبر حساب البنك أو بطاقة الائتمان — منفصلة عن عُهد الكاش في النثرية.",
         "تظهر القيود تلقائياً من المشتريات المدفوعة بالبنك/البطاقة، وتعبئات النثرية (كاش خرج من البنك لتمويل عهدة)، وإيداعات المعادي (كاش دخل البنك). يمكن للمالك أيضاً إضافة <strong>قيد يدوي</strong> (الجهة، المبلغ، ملاحظة) — موجب للداخل وسالب للخارج.",
         "الإجمالي المعروض هو مجموع كل القيود في آخر 200 سجل. تعبئات النثرية مخفية من هذا الإجمالي افتراضياً (يمكن تفعيل إظهارها) لأنها تحويل بين حسابين وليست مصروفاً حقيقياً.",
+        "<strong>🙋 أموال شخصية — الشركة مدينة لك:</strong> عند تسجيل مصروف (مصروف ثابت، مشتريات، راتب، سلفة، معدات) واختيار <em>مدفوع من → دفعت شخصياً</em>، يظهر هنا كمبلغ تدين به الشركة لك. المصروف يبقى محتسباً في الأرباح والخسائر من خلال سجله — هذه اللوحة تتتبّع الدين فقط. اضغط <strong>✓ تم السداد</strong> (أو <strong>سداد الكل</strong>) عندما تسدد لك الشركة: يُسجَّل السداد كخصم بنكي هنا — وليس كمصروف ثانٍ.",
       ],
     },
     {
