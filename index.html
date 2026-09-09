@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260908-629 -->
+<!-- CB_BUILD:20260909-005 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260908-629";
+  var BUILD = "20260909-005";
   (function() {
     function checkFresh() {
       try {
@@ -9597,6 +9597,8 @@ routes.overheads = function (u) {
     monthInput,
     el("button", { class:"btn secondary", style:{marginLeft:"auto"}, onClick:()=>addOverhead("marketing_fees","maadi") }, "➕ Maadi marketing/misc"),
     el("button", { class:"btn secondary", onClick:()=>addOverhead("marketing_fees","zawya") }, "➕ Zawya marketing/misc"),
+    el("div", { class:"muted small", style:{ flexBasis:"100%", marginTop:"2px" } },
+      "Tip: inside the ➕ form, set Branch to 🔀 Both branches to split one amount across Maadi + Zawya, and pick a “Paid from” to auto-record the petty-cash / bank payment."),
   ]));
 
   // ─── Sub-tabs — each overheads area on its own tab instead of one long scroll ──
