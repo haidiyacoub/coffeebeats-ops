@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260909-072 -->
+<!-- CB_BUILD:20260910-055 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260909-072";
+  var BUILD = "20260910-055";
   (function() {
     function checkFresh() {
       try {
@@ -1199,6 +1199,28 @@ function migrateState(s) {
     });
     s._double_shift_5x15_migrated = true;
   }
+  // One-time repair: petty-cash `balance_after` was a cached running total that
+  // drifted (multi-device merges, deletions, back-dated rows) and used to drive
+  // the displayed balance — which is how a branch could read ABOVE the total ever
+  // deposited. The balance is now the live sum of `amount`; rewrite every stored
+  // balance_after so it can't sync a stale number back out. Idempotent.
+  if (!s._pc_balance_after_rebuilt_v1) {
+    if (Array.isArray(s.petty_cash)) {
+      for (const branch of ["maadi", "zawya"]) {
+        let run = 0;
+        s.petty_cash
+          .filter(p => p.branch === branch)
+          .sort((a, b) => String(a.date || "").localeCompare(String(b.date || ""))
+                       || String(a.at   || "").localeCompare(String(b.at   || "")))
+          .forEach(p => {
+            if (!p.is_test) run += Number(p.amount) || 0;
+            p.balance_after = run;
+          });
+      }
+    }
+    s._pc_balance_after_rebuilt_v1 = true;
+  }
+
   s.penalties      = s.penalties      || [];
   s.maadi_deposits = s.maadi_deposits || [];
   s.overheads     = s.overheads     || [];
@@ -4114,11 +4136,38 @@ function invParseRecipeBOM(wb) {
   return recipes;
 }
 
+// Petty-cash balance = the live sum of every non-test entry for the branch.
+//
+// It used to return the `balance_after` of whichever row had the newest `at`.
+// That field is a running total written ONCE when the row is created and never
+// recomputed, so it silently drifts away from reality whenever entries are:
+//   • added on two devices before they sync (last-write-wins keeps both rows,
+//     but each carries a balance_after computed against a different pre-state),
+//   • deleted (later rows keep their now-too-high balance_after),
+//   • back-dated so `date` and `at` order disagree.
+// A drifted chain is exactly how a branch could show MORE than was ever put in
+// (e.g. 5,335 after a single 5,000 deposit). A plain sum of `amount` can't drift:
+// it is order-independent, survives merges (duplicate ids collapse) and survives
+// mid-history deletions. `balance_after` is now display-only (see pettyCashLedger).
 function pettyCashBalance(branch) {
-  const rows = state.petty_cash.filter(p => notTest(p) && p.branch === branch)
-    .sort((a,b) => a.at.localeCompare(b.at));
-  const last = rows[rows.length - 1];
-  return last ? Number(last.balance_after) || 0 : 0;
+  return state.petty_cash
+    .filter(p => notTest(p) && p.branch === branch)
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+}
+
+// Branch ledger, oldest→newest, with a running balance recomputed on the fly so
+// the displayed column always agrees with pettyCashBalance() no matter what the
+// stored balance_after says.
+function pettyCashLedger(branch) {
+  let run = 0;
+  return state.petty_cash
+    .filter(p => p.branch === branch)
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || ""))
+                 || String(a.at   || "").localeCompare(String(b.at   || "")))
+    .map(p => {
+      if (!p.is_test) run += Number(p.amount) || 0;
+      return { ...p, running_balance: run };
+    });
 }
 
 // ----- petty cash monthly budget & 60/40 auto-split -----
@@ -7462,6 +7511,9 @@ routes.petty_cash = function (u) {
     if (u.role === "owner") {
       // TOP-UP — OWNER ONLY
       btns.appendChild(el("button", { class: "btn secondary", onClick: () => addTopup(b) }, T("➕ Top-up","➕ شحن")));
+      // CORRECT BALANCE — OWNER ONLY. Reconcile the float to the cash physically
+      // counted, attributing any shortfall top-up to the bank or to personal funds.
+      btns.appendChild(el("button", { class: "btn ghost", onClick: () => correctBalance(b) }, T("✎ Correct balance","✎ تصحيح الرصيد")));
     }
     if (u.role === "head_barista" && u.branches.includes(b)) {
       // EXPENDITURE — HEAD BARISTA ONLY (for their branch)
@@ -7473,7 +7525,11 @@ routes.petty_cash = function (u) {
     }
     if (btns.children.length > 0) card.appendChild(btns);
 
-    // Recent ledger rows — exclude salary & penalty (those have their own sections)
+    // Recent ledger rows — exclude salary & penalty (those have their own sections).
+    // Running balance is recomputed from the full ledger (pettyCashLedger), so it
+    // always reconciles to the headline figure even if salary rows are hidden here.
+    const runningById = {};
+    pettyCashLedger(b).forEach(p => { runningById[p.id] = p.running_balance; });
     const rows = state.petty_cash
       .filter(p => p.branch === b && p.type !== "salary" && p.type !== "penalty")
       .sort((x,y) => (y.at || "").localeCompare(x.at || ""))
@@ -7485,14 +7541,19 @@ routes.petty_cash = function (u) {
       for (const r of rows) {
         const label = r.type === "expense" ? T(`Expense — ${r.note || ""}`, `مصروف — ${r.note || ""}`)
                     : r.type === "topup" ? T(`Top-up — ${r.note || ""}`, `شحن — ${r.note || ""}`)
+                    : r.type === "adjustment" ? T(`Correction — ${r.note || ""}`, `تصحيح — ${r.note || ""}`)
                     : r.type === "month_end_deposit" ? T(`🏦 Banked to bank — ${r.note || ""}`, `🏦 أُودِع في البنك — ${r.note || ""}`)
                     : `${r.type} — ${r.note || ""}`;
+        const runBal = runningById[r.id];
         card.appendChild(el("div", { class: "kv", style: r.is_test ? { opacity: "0.65" } : {} }, [
           el("div", { class: "k" }, [
             el("div", {}, [label, r.is_test ? el("span", { style: { marginInlineStart: "6px" } }, testBadge()) : null]),
             el("div", { class: "muted small" }, T(`${fmtDate(r.at)} · by ${r.by_name || r.by || "—"}`, `${fmtDate(r.at)} · بواسطة ${r.by_name || r.by || "—"}`)),
           ]),
-          el("div", { class: "v", style: { color: r.amount < 0 ? "var(--bad)" : "var(--ok)" } }, money(r.amount)),
+          el("div", { class: "v", style: { textAlign: "end" } }, [
+            el("div", { style: { color: r.amount < 0 ? "var(--bad)" : "var(--ok)" } }, money(r.amount)),
+            runBal == null ? null : el("div", { class: "muted small" }, T(`bal ${money(runBal)}`, `الرصيد ${money(runBal)}`)),
+          ]),
         ]));
       }
     }
@@ -7547,6 +7608,53 @@ routes.petty_cash = function (u) {
         delete state.settings.alerted_combined;
         saveState();
         toast(vals.funded_from === "owner_personal" ? "Top-up recorded · added to what the company owes you" : "Top-up recorded");
+        render();
+      }
+    });
+  }
+
+  // Owner: reconcile the float to the cash physically counted. Writes ONE
+  // adjustment entry for the difference. If cash is short and the owner is topping
+  // it back up, the make-up amount is attributed either to the company bank or to
+  // personal funds ("company owes me"); if cash is over/under with no top-up, it's
+  // just a booked correction.
+  function correctBalance(branch) {
+    const current = pettyCashBalance(branch);
+    openPrompt({
+      title: T(`Correct ${branch} balance — now shows ${money(current)}`,
+               `تصحيح رصيد ${branch === "maadi" ? "معادي" : "زاوية"} — يظهر الآن ${money(current)}`),
+      fields: [
+        { key: "actual", label: T("Cash physically in the float now (EGP)","النقدية الفعلية في العهدة الآن (جنيه)"), type: "number", value: Math.round(current) },
+        { key: "date", label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0,10) },
+        { key: "funded_from", label: T("If this adds cash, it came from","إذا كان يضيف نقدية، مصدرها"), type: "select", value: "correction", options: [
+          { label: T("↔ Just a bookkeeping correction (no cash moved)","↔ تصحيح دفتري فقط (لم تتحرك نقدية)"), value: "correction" },
+          { label: T("🏦 Company bank / owner transfer","🏦 بنك الشركة / تحويل المالك"), value: "owner_bank" },
+          { label: T("🙋 Paid personally — reimburse me later","🙋 دفعت شخصياً — يُسدَّد لي لاحقاً"), value: "owner_personal" },
+        ] },
+        { key: "note", label: T("Reason","السبب"), type: "text", value: "" },
+      ],
+      onSubmit: (vals) => {
+        const actual = Number(vals.actual);
+        if (!isFinite(actual) || actual < 0) return toast(T("Enter the amount counted","أدخل المبلغ المعدود"), "error");
+        const delta = Math.round((actual - current) * 100) / 100;
+        if (delta === 0) return toast(T("Balance already matches — nothing to correct","الرصيد مطابق — لا شيء للتصحيح"));
+        const s = stamp();
+        const reason = vals.note || T("Balance correction","تصحيح الرصيد");
+        const adj = pushEntry(branch, "adjustment", delta, reason, vals.date);
+        if (delta > 0 && vals.funded_from === "owner_personal") {
+          recordPersonalPayment({ amount: delta, date: vals.date, source: "petty_cash", ref: adj && adj.id, branch, label: `Petty cash correction (${branch})` }, s);
+        } else if (delta > 0 && vals.funded_from === "owner_bank") {
+          state.bank_ledger.push({
+            id: uuid(), date: vals.date, amount: -delta, supplier: `Petty cash (${branch})`, type: "petty_cash_topup",
+            ref: adj && adj.id, by: s.by, by_name: s.by_name, at: s.at, note: `Balance correction — ${branch}`,
+          });
+        }
+        delete state.settings.alerted_combined;
+        saveState();
+        toast(delta > 0 && vals.funded_from === "owner_personal"
+          ? T(`Corrected to ${money(actual)} · ${money(delta)} added to what the company owes you`,
+              `صُحِّح إلى ${money(actual)} · أُضيف ${money(delta)} لما تدين به الشركة لك`)
+          : T(`Corrected to ${money(actual)}`, `صُحِّح إلى ${money(actual)}`));
         render();
       }
     });
