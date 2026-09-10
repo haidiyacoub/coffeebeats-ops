@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260910-055 -->
+<!-- CB_BUILD:20260910-080 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260910-055";
+  var BUILD = "20260910-080";
   (function() {
     function checkFresh() {
       try {
@@ -4189,11 +4189,25 @@ function pettyCashSplitAmount(total) {
   const zawya = Math.round(t * pettyCashZawyaPct() / 100);
   return { zawya, maadi: t - zawya };
 }
-// Total top-ups logged for a branch (or "combined") in a YYYY-MM month.
+// Day (YYYY-MM-DD) of the most recent "start fresh" / zero-out inside `month`,
+// or "" if the float wasn't reset mid-month. Covers the Bank-all reset
+// (month_end_deposit / bank_reset) and a manual zero-out.
+function pettyCashResetDay(month) {
+  return state.petty_cash
+    .filter(p => ((p.type === "month_end_deposit") || p.ref === "bank_reset" || p.ref === "manual_zero")
+      && (p.date || "").slice(0, 7) === month)
+    .reduce((mx, p) => (p.date || "") > mx ? (p.date || "") : mx, "");
+}
+// Top-ups that count toward THIS month's float: everything in the month, but if
+// the float was reset mid-month, only top-ups from the reset day onward (a top-up
+// made before a "start fresh" was zeroed away with the rest and shouldn't inflate
+// the "topped up this month" figure).
 function pettyCashToppedUp(scope, month) {
+  const since = pettyCashResetDay(month);
   return state.petty_cash
     .filter(p => notTest(p) && p.type === "topup"
       && (p.date || "").slice(0, 7) === month
+      && (!since || (p.date || "") >= since)
       && (scope === "combined" || p.branch === scope))
     .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 }
@@ -7461,11 +7475,14 @@ routes.petty_cash = function (u) {
     const _cbBudget = pettyCashBudget();
     const _cbSplit  = pettyCashSplitAmount(_cbBudget);
     const _cbTopped = pettyCashToppedUp("combined", _pcMonth);
+    const _cbResetDay = pettyCashResetDay(_pcMonth);
     combinedCard.appendChild(el("div", { class: "muted small" }, T(
       `Monthly budget ${money(_cbBudget)} — Zawya ${money(_cbSplit.zawya)} (${pettyCashZawyaPct()}%) · Maadi ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`,
       `الميزانية الشهرية ${money(_cbBudget)} — زاوية ${money(_cbSplit.zawya)} (${pettyCashZawyaPct()}%) · معادي ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`)));
-    combinedCard.appendChild(el("div", { class: "muted small" }, T(
-      `Topped up in ${_pcMonth}: ${money(_cbTopped)}`, `شُحن في ${_pcMonth}: ${money(_cbTopped)}`)));
+    combinedCard.appendChild(el("div", { class: "muted small" }, _cbResetDay
+      ? T(`Topped up since fresh start ${fmtDay(_cbResetDay)}: ${money(_cbTopped)}`,
+          `شُحن منذ البداية الجديدة ${fmtDay(_cbResetDay)}: ${money(_cbTopped)}`)
+      : T(`Topped up in ${_pcMonth}: ${money(_cbTopped)}`, `شُحن في ${_pcMonth}: ${money(_cbTopped)}`)));
     // Owner actions: auto-split top-up + bank-everything month reset
     if (u.role === "owner") {
       const cbBtns = el("div", { class: "btn-row", style: { flexWrap: "wrap", gap: "8px", marginTop: "10px" } }, [
