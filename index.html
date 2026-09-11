@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260910-080 -->
+<!-- CB_BUILD:20260912-435 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260910-080";
+  var BUILD = "20260912-435";
   (function() {
     function checkFresh() {
       try {
@@ -11061,6 +11061,24 @@ routes.bank = function (u) {
   }}, "Show petty cash top-ups");
   wrap.appendChild(toggleBtn);
 
+  // Owner-only: an already-booked petty-cash top-up was paid from the company bank
+  // (this row) but should have come from the owner's own pocket. Moves the amount
+  // out of the bank ledger and into "what the company owes you" instead — for when
+  // the funding source needs correcting after the fact.
+  function reclassifyTopupToPersonal(r) {
+    const branch = (/\(([^)]+)\)/.exec(r.supplier || "") || [])[1] || null;
+    const amt = Math.abs(Number(r.amount) || 0);
+    if (amt <= 0) return;
+    if (!confirm(`Move this ${money(amt)} top-up from company bank to your personal funds?\n\nThe bank outflow is removed and "what the company owes you" increases by ${money(amt)}. This does not change the petty-cash balance.`)) return;
+    const s = stamp();
+    state.bank_ledger = state.bank_ledger.filter(x => x.id !== r.id);
+    recordDeletion(r.id);
+    recordPersonalPayment({ amount: amt, date: r.date, source: "petty_cash", ref: r.ref || r.id, branch, label: `Petty cash top-up (${branch || "?"})` }, s);
+    saveState();
+    toast(`Moved ${money(amt)} to personal funds`);
+    render();
+  }
+
   function makeEntryRow(r) {
     const typeLabel = {
       purchase_payment: "Bank transfer",
@@ -11081,6 +11099,9 @@ routes.bank = function (u) {
         el("div", { class: "sub" }, `${r.date} · ${typeLabel}${r.note ? ` · ${r.note}` : ""}`),
         el("div", { class: "sub" }, `by ${r.by_name || "—"} · ${fmtDate(r.at)}`),
       ]),
+      (r.type === "petty_cash_topup" && u.role === "owner")
+        ? el("button", { class: "btn ghost", style: { fontSize: "11px", padding: "4px 8px", minHeight: "26px", flexShrink: "0" }, onClick: () => reclassifyTopupToPersonal(r) }, "🙋 Move to personal")
+        : null,
     ]);
   }
 
