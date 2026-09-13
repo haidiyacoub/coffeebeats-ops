@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260912-435 -->
+<!-- CB_BUILD:20260913-831 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260912-435";
+  var BUILD = "20260913-831";
   (function() {
     function checkFresh() {
       try {
@@ -3058,6 +3058,13 @@ const startEquipmentSyncListener   = _makeLiveListener("equipment", "equipment (
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
+  // The pull below can take several seconds (it's ~20 chunk docs plus every month-sharded
+  // sales/order/log doc, fetched in sequential stages) and nothing signaled that it was
+  // running — the sync badge stayed on whatever it last showed (often absent entirely, on
+  // a fresh tab). Anyone who glanced at the screen in that window saw last session's
+  // cached numbers with no hint that fresher data was still on the way in. Show "syncing"
+  // immediately so it's never ambiguous whether what's on screen is current.
+  updateSyncBadge("syncing");
   // Only flush BEFORE pulling when the local state is genuinely real — i.e. it came from a
   // prior successful pull (settings.last_pull is set). A fresh/seed default state must NEVER
   // be flushed first: even with merge-on-write it would inject duplicate seed rows (petty-cash
@@ -8310,6 +8317,7 @@ routes.salaries = function (u) {
         { key: "month",   label: "Deduct from month (YYYY-MM)", type: "text", value: monthInput.value },
         { key: "paid_from", label: "Paid from", type: "select", value: "", options: [
           { label: "— not tracked —", value: "" },
+          { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
           PERSONAL_PAID_FROM_OPT,
         ] },
         { key: "note",    label: "Note", type: "text", value: "" },
@@ -8329,6 +8337,13 @@ routes.salaries = function (u) {
         state.salary_loans.push(loan);
         if (vals.paid_from === "owner_personal") {
           recordPersonalPayment({ amount: amt, date: vals.date, source: "loan", ref: loan.id, label: `Loan advance — ${person.name}` }, s);
+        } else if (vals.paid_from === "owner_bank") {
+          state.bank_ledger.push({
+            id: uuid(), date: vals.date, amount: -amt, supplier: `Loan advance — ${person.name}`,
+            type: "loan_payment", ref: loan.id, by: s.by, by_name: s.by_name, at: s.at,
+            note: `Loan advance to ${person.name}`,
+            ...(isTestMode() ? { is_test: true } : {}),
+          });
         }
         saveState();
         toast(vals.paid_from === "owner_personal" ? `Loan recorded · added to what the company owes you` : `Loan recorded for ${person.name}`);
@@ -8450,6 +8465,7 @@ routes.salaries = function (u) {
         { key: "date",    label: "Transfer date", type: "date", value: new Date().toISOString().slice(0,10) },
         { key: "paid_from", label: "Paid from", type: "select", value: "", options: [
           { label: "— not tracked —", value: "" },
+          { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
           PERSONAL_PAID_FROM_OPT,
         ] },
         { key: "note",    label: "Note", type: "text", value: "Monthly salary" },
@@ -8474,6 +8490,13 @@ routes.salaries = function (u) {
         state.salaries.push(payout);
         if (vals.paid_from === "owner_personal") {
           recordPersonalPayment({ amount: amt, date: vals.date, source: "salary", ref: payout.id, branch: payout.branch, label: `Salary — ${payout.recipient}` }, s);
+        } else if (vals.paid_from === "owner_bank") {
+          state.bank_ledger.push({
+            id: uuid(), date: vals.date, amount: -amt, supplier: `Salary — ${payout.recipient}`,
+            type: "salary_payment", ref: payout.id, by: s.by, by_name: s.by_name, at: s.at,
+            note: `Salary payout (${payout.branch})`,
+            ...(isTestMode() ? { is_test: true } : {}),
+          });
         }
         saveState();
         toast(vals.paid_from === "owner_personal" ? "Payout logged · added to what the company owes you" : "Payout logged");
@@ -11089,6 +11112,8 @@ routes.bank = function (u) {
       asset_credit_card: "Credit card (equipment)",
       personal_reimbursement: "Reimbursed personal funds",
       petty_cash_topup: "Petty cash top-up",
+      loan_payment: "Loan advance",
+      salary_payment: "Salary payout",
       maadi_deposit: "Maadi ATM deposit",
       cash_deposit: "Cash deposit",
       manual: "Manual",
