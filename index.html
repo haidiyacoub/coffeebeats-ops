@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260915-173 -->
+<!-- CB_BUILD:20260915-190 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260915-173";
+  var BUILD = "20260915-190";
   (function() {
     function checkFresh() {
       try {
@@ -13444,6 +13444,39 @@ routes.users = function (u) {
       const pw = el("div", { style: { marginTop: "16px", padding: "14px", background: "var(--surface-2,var(--surface-alt,#f8f8f8))", borderRadius: "12px" } });
       pw.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "2px" } }, "Change PIN"));
       pw.appendChild(el("div", { class: "muted small", style: { marginBottom: "12px" } }, "4-digit code used to sign in to the app."));
+
+      // Reveal current PIN — owner only
+      if (isOwner) {
+        const revealBtn = el("button", { class: "btn ghost", style: { width: "100%" } }, "👁 Reveal current PIN");
+        const revealOut = el("div", { class: "muted", style: { marginTop: "8px", textAlign: "center", fontSize: "22px", letterSpacing: "8px", fontWeight: "700", display: "none" } });
+        let revealHideTimer = null;
+        revealBtn.addEventListener("click", async () => {
+          if (revealOut.style.display !== "none") {
+            clearTimeout(revealHideTimer);
+            revealOut.style.display = "none";
+            revealBtn.textContent = "👁 Reveal current PIN";
+            return;
+          }
+          revealBtn.disabled = true; revealBtn.textContent = "…";
+          try {
+            const { data } = await functions.httpsCallable("getStaffPin")({ targetUid: usr.uid });
+            revealOut.textContent = data.pin;
+            revealOut.style.display = "block";
+            revealBtn.textContent = "🙈 Hide PIN";
+            revealHideTimer = setTimeout(() => {
+              revealOut.style.display = "none";
+              revealBtn.textContent = "👁 Reveal current PIN";
+            }, 10000);
+          } catch (e) {
+            toast(e.message || "Couldn't fetch PIN", "error");
+            revealBtn.textContent = "👁 Reveal current PIN";
+          }
+          revealBtn.disabled = false;
+        });
+        pw.appendChild(revealBtn);
+        pw.appendChild(revealOut);
+        pw.appendChild(el("div", { style: { height: "14px" } }));
+      }
 
       const pinFieldStyle = { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid var(--border,#ddd)", background: "var(--surface,#fff)", color: "var(--ink,#222)", boxSizing: "border-box", fontSize: "22px", letterSpacing: "10px", textAlign: "center" };
 
