@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260915-167 -->
+<!-- CB_BUILD:20260915-173 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260915-167";
+  var BUILD = "20260915-173";
   (function() {
     function checkFresh() {
       try {
@@ -14986,7 +14986,7 @@ routes.settings = function (u) {
     }
 
     for (const s of list) {
-      const row = el("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "9px 10px", background: s.active ? "var(--surface-2)" : "#fdecea", borderRadius: "8px", marginBottom: "6px" } });
+      const row = el("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px", padding: "9px 10px", background: s.active ? "var(--surface-2)" : "#fdecea", borderRadius: "8px", marginBottom: "6px" } });
 
       const info = el("div", { style: { flex: "1" } });
       info.appendChild(el("div", { style: { fontSize: "14px", fontWeight: "600" } }, s.name + (s.role === "head_barista" ? " ⭐" : "")));
