@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260913-831 -->
+<!-- CB_BUILD:20260915-167 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260913-831";
+  var BUILD = "20260915-167";
   (function() {
     function checkFresh() {
       try {
@@ -4436,7 +4436,9 @@ function loginView() {
     userList.innerHTML = "";
     for (const u of people) {
       const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
-      const branchLabel = u.role === "barista" ? "rotates" : (u.role === "accountant" ? "all branches" : (u.branches || []).join(", "));
+      const branchLabel = u.role === "accountant" ? "all branches"
+        : (u.branches && u.branches.length) ? u.branches.join(", ")
+        : (["barista","head_barista"].includes(u.role) ? "rotates" : "");
       userList.appendChild(el("div", { class: "row", onClick: () => selectUser(u) }, [
         el("div", { class: "icon", style: { fontSize: "22px" } }, icon),
         el("div", { class: "grow" }, [
@@ -4776,9 +4778,9 @@ routes.data_management = function (u) {
 
 routes.home = function (u) {
   const wrap = el("div", {});
-  const branchInfo = u.role === "barista" ? "rotates (Maadi + Zawya)"
-                   : u.role === "accountant" ? "all branches (accountant)"
-                   : `branches: ${u.branches.join(", ")}`;
+  const branchInfo = u.role === "accountant" ? "all branches (accountant)"
+                   : (u.branches && u.branches.length) ? `branches: ${u.branches.join(", ")}`
+                   : (["barista","head_barista"].includes(u.role) ? "rotates (Maadi + Zawya)" : "no branches assigned");
   wrap.appendChild(el("div", { class: "banner-arch" }, [ `Signed in as `, el("b", {}, u.name), ` · ${branchInfo}`]));
 
   const tiles = el("div", { id: "home-grid", class: "grid c2" });
@@ -13139,9 +13141,9 @@ routes.users = function (u) {
     .sort((a,b) => a.name.localeCompare(b.name));
 
   function renderStaffRow(usr) {
-    const branchLabel = usr.role === "barista"
-      ? "rotates (Maadi + Zawya)"
-      : (usr.branches && usr.branches.length ? usr.branches.join(", ") : "\u2014");
+    const branchLabel = (usr.branches && usr.branches.length)
+      ? usr.branches.join(", ")
+      : (["barista","head_barista"].includes(usr.role) ? "rotates (Maadi + Zawya)" : "\u2014");
     const extra = (usr.extra_access || []).length;
     const deny  = (usr.deny_access  || []).length;
     const rightsNote = (extra || deny) ? ` \xb7 +${extra}/-${deny} custom rights` : "";
@@ -15034,6 +15036,33 @@ routes.settings = function (u) {
           });
           row.appendChild(bBtn);
         }
+      }
+
+      // ── PIN lookup — owner only ──
+      if (u.role === "owner") {
+        const pinBtn = el("button", { class: "btn ghost", style: { width: "auto", padding: "4px 9px", fontSize: "11px" } }, "👁 PIN");
+        let hideTimer = null;
+        pinBtn.addEventListener("click", async () => {
+          if (pinBtn.dataset.revealed === "1") {
+            clearTimeout(hideTimer);
+            pinBtn.textContent = "👁 PIN";
+            pinBtn.dataset.revealed = "";
+            return;
+          }
+          pinBtn.disabled = true;
+          pinBtn.textContent = "…";
+          try {
+            const { data } = await functions.httpsCallable("getStaffPin")({ targetUid: s.uid });
+            pinBtn.textContent = `PIN: ${data.pin}`;
+            pinBtn.dataset.revealed = "1";
+            hideTimer = setTimeout(() => { pinBtn.textContent = "👁 PIN"; pinBtn.dataset.revealed = ""; }, 10000);
+          } catch (e) {
+            toast(e.message || "Couldn't fetch PIN", "error");
+            pinBtn.textContent = "👁 PIN";
+          }
+          pinBtn.disabled = false;
+        });
+        row.appendChild(pinBtn);
       }
 
       // ── Dates & notes editor (hire / exit / rehire notes) ──

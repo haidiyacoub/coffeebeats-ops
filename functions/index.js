@@ -4,12 +4,19 @@ const { onDocumentUpdated }      = require("firebase-functions/v2/firestore");
 const { defineSecret }           = require("firebase-functions/params");
 const admin      = require("firebase-admin");
 const bcrypt     = require("bcryptjs");
+const crypto     = require("crypto");
 const nodemailer = require("nodemailer");
 
 // Gmail app-password credentials (set via: firebase functions:secrets:set <NAME>)
 const GMAIL_USER = defineSecret("GMAIL_USER");   // your Gmail address
 const GMAIL_PASS = defineSecret("GMAIL_PASS");   // Gmail app password (16-char)
 const NOTIFY_TO  = defineSecret("NOTIFY_TO");    // recipient email (can be same as GMAIL_USER)
+
+// Symmetric key used to store staff PINs in a form the owner can recover
+// (set via: firebase functions:secrets:set PIN_ENC_KEY). Login itself still
+// checks the bcrypt hash below — this encrypted copy exists only so the
+// owner can look a PIN back up from Team & Barista Management.
+const PIN_ENC_KEY = defineSecret("PIN_ENC_KEY");
 
 // Initialize Admin SDK at module load time (correct pattern for Gen2 functions)
 admin.initializeApp();
@@ -97,19 +104,19 @@ exports.getMasterPinStatus = onCall(async (request) => {
 });
 
 // ─── createStaffUser ──────────────────────────────────────────────────────────
-exports.createStaffUser = onCall(async (request) => {
+exports.createStaffUser = onCall({ secrets: [PIN_ENC_KEY] }, async (request) => {
   _requireOwner(request);
   return _createUser(request.data);
 });
 
 // ─── migrateUser ──────────────────────────────────────────────────────────────
-exports.migrateUser = onCall(async (request) => {
+exports.migrateUser = onCall({ secrets: [PIN_ENC_KEY] }, async (request) => {
   _requireOwner(request);
   return _createUser(request.data);
 });
 
 // ─── updateStaffPin ───────────────────────────────────────────────────────────
-exports.updateStaffPin = onCall(async (request) => {
+exports.updateStaffPin = onCall({ secrets: [PIN_ENC_KEY] }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
 
   const { targetUid, newPin, currentPin } = request.data;
@@ -127,8 +134,33 @@ exports.updateStaffPin = onCall(async (request) => {
   }
 
   const pin_hash = await bcrypt.hash(String(newPin), 12);
-  await getDb().collection("staff").doc(targetUid).update({ pin_hash });
+  const pin_enc  = _encryptPin(newPin);
+  await getDb().collection("staff").doc(targetUid).update({ pin_hash, pin_enc });
   return { ok: true };
+});
+
+// ─── getStaffPin ──────────────────────────────────────────────────────────────
+// Owner-only. Decrypts and returns a staff member's current PIN so it can be
+// shown in Team & Barista Management. Staff created before this feature only
+// have a bcrypt hash (not recoverable) until their PIN is next reset.
+exports.getStaffPin = onCall({ secrets: [PIN_ENC_KEY] }, async (request) => {
+  _requireOwner(request);
+  const { targetUid } = request.data;
+  if (!targetUid) throw new HttpsError("invalid-argument", "targetUid is required.");
+
+  const snap = await getDb().collection("staff").doc(targetUid).get();
+  if (!snap.exists) throw new HttpsError("not-found", "Staff member not found.");
+
+  const { pin_enc } = snap.data();
+  if (!pin_enc) {
+    throw new HttpsError("failed-precondition", "This PIN was set before PIN lookup was added — reset it to make it viewable.");
+  }
+
+  try {
+    return { pin: _decryptPin(pin_enc) };
+  } catch (e) {
+    throw new HttpsError("internal", "Failed to decrypt PIN.");
+  }
 });
 
 // ─── setStaffRole ─────────────────────────────────────────────────────────────
@@ -346,6 +378,25 @@ function _requireOwner(request) {
   }
 }
 
+function _pinEncKey() {
+  return crypto.createHash("sha256").update(PIN_ENC_KEY.value()).digest();
+}
+function _encryptPin(pin) {
+  const iv     = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", _pinEncKey(), iv);
+  const enc    = Buffer.concat([cipher.update(String(pin), "utf8"), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), enc]).toString("base64");
+}
+function _decryptPin(b64) {
+  const data = Buffer.from(b64, "base64");
+  const iv   = data.subarray(0, 12);
+  const tag  = data.subarray(12, 28);
+  const enc  = data.subarray(28);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", _pinEncKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(enc), decipher.final()]).toString("utf8");
+}
+
 async function _createUser({ name, role, branches, pin, legacyId, emergency_number }) {
   if (!name || !role || !pin) throw new HttpsError("invalid-argument", "name, role, and pin are required.");
 
@@ -358,12 +409,14 @@ async function _createUser({ name, role, branches, pin, legacyId, emergency_numb
   await getAuth().setCustomUserClaims(uid, { role, branches: branches || [] });
 
   const pin_hash = await bcrypt.hash(String(pin), 12);
+  const pin_enc  = _encryptPin(pin);
 
   await getDb().collection("staff").doc(uid).set({
     name, role,
     branches:         branches || [],
     active:           true,
     pin_hash,
+    pin_enc,
     deny_access:      [],
     extra_access:     [],
     legacy_id:        legacyId || null,
