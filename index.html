@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260916-397 -->
+<!-- CB_BUILD:20260916-434 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260916-397";
+  var BUILD = "20260916-434";
   (function() {
     function checkFresh() {
       try {
@@ -16627,8 +16627,13 @@ routes.leave_list = function (u) {
         ownerRow.appendChild(el("button", {
           class: "btn ghost",
           onClick: () => {
+            // Always include the leave's CURRENT holder as an option, even if they're
+            // not a barista/head barista (e.g. an owner-filed leave like this one) or
+            // inactive — otherwise the dropdown can't show the current value, so the
+            // browser silently pre-selects a different name while onSubmit still sees
+            // no change (vals.user_id stays at the original), and Save does nothing.
             const reassignOptions = state.users
-              .filter(x => (x.role === "barista" || x.role === "head_barista") && (x.active || x.id === leave.user_id))
+              .filter(x => ((x.role === "barista" || x.role === "head_barista") && x.active) || x.id === leave.user_id)
               .map(x => ({ label: x.name, value: x.id }));
             openPrompt({
               title: T("Edit leave request","تعديل طلب الإجازة"),
@@ -18396,11 +18401,17 @@ function openPrompt({ title, fields, onSubmit, extraButtons }) {
       body.appendChild(preview);
     } else if (f.type === "select" && Array.isArray(f.options)) {
       const sel = el("select", {});
+      let sawMatch = false;
       for (const opt of f.options) {
         const o = el("option", { value: String(opt.value != null ? opt.value : opt) }, String(opt.label != null ? opt.label : opt));
-        if (String(opt.value != null ? opt.value : opt) === String(f.value)) o.selected = true;
+        if (String(opt.value != null ? opt.value : opt) === String(f.value)) { o.selected = true; sawMatch = true; }
         sel.appendChild(o);
       }
+      // f.value isn't among the options — the browser will silently show the first
+      // option instead, so vals[f.key] MUST be updated to match, or a Save with no
+      // "change" event (the shown value already looks right to the person editing)
+      // submits the stale original value instead of what's on screen.
+      if (!sawMatch && f.options.length) vals[f.key] = sel.value;
       sel.addEventListener("change", () => {
         vals[f.key] = sel.value;
         if (typeof f.onChange === "function") f.onChange(sel.value, vals, setField);
