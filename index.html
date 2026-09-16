@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260915-190 -->
+<!-- CB_BUILD:20260916-285 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260915-190";
+  var BUILD = "20260916-285";
   (function() {
     function checkFresh() {
       try {
@@ -5634,13 +5634,21 @@ routes.shift_close_list = function (u) {
     const total = (c.cash||0) + (c.instapay||0) + (c.cc||0) + (c.talabat_credit||0) + (c.talabat_cash||0);
     const mgmt = (c.mgmt_drinks||[]).map(d => `${d.who}: ${d.drink}`).join(" · ") || "—";
     const baDrinks = (c.barista_allowance_drinks||[]).map(d => `${d.who||"?"}:${d.drink}`).join(" · ") || (c.barista_allowance || "—");
+    const rowActions = el("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, [
+      c.is_test ? el("span", { style: { fontSize: "11px", fontWeight: "800", color: "#92400e", background: "#fef3c7", padding: "1px 6px", borderRadius: "999px" } }, T("TEST","تجربة")) : null,
+      el("div", { class: "pill" }, T(`${money(total)} total`, `${money(total)} إجمالي`)),
+    ]);
+    if (u.role === "owner") {
+      state.deleted_shift_closes = state.deleted_shift_closes || [];
+      addRecordActions(rowActions, {
+        record: c, arrKey: "shift_closes", trashKey: "deleted_shift_closes", entityLabel: T("shift close","إغلاق شيفت"),
+        deleteConfirm: T(`Delete this shift close (${c.branch} · ${c.date})? You can undo below.`, `حذف إغلاق الشيفت (${c.branch} · ${c.date})؟ يمكنك التراجع أدناه.`),
+      });
+    }
     list.appendChild(el("div", { class: "card", style: { marginBottom: "8px" } }, [
       el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "6px" } }, [
         el("div", { style: { fontWeight: "600" } }, `${c.branch} · ${c.date}${c.closing_barista ? " · " + c.closing_barista : ""}`),
-        el("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, [
-          c.is_test ? el("span", { style: { fontSize: "11px", fontWeight: "800", color: "#92400e", background: "#fef3c7", padding: "1px 6px", borderRadius: "999px" } }, T("TEST","تجربة")) : null,
-          el("div", { class: "pill" }, T(`${money(total)} total`, `${money(total)} إجمالي`)),
-        ]),
+        rowActions,
       ]),
       el("div", { class: "muted small", style: { marginTop: "4px" } }, [
         c.branch === "zawya"
@@ -5658,6 +5666,10 @@ routes.shift_close_list = function (u) {
     ]));
   }
   wrap.appendChild(list);
+  renderTrashSection(wrap, {
+    arrKey: "shift_closes", trashKey: "deleted_shift_closes", entityLabel: T("Shift close","إغلاق شيفت"), canManage: u.role === "owner",
+    rowLabel: (r) => `${r.branch || ""} · ${r.date || ""}${r.closing_barista ? " · " + r.closing_barista : ""}`,
+  });
   wrap.appendChild(el("div", { class: "sticky-actions" }, [
     el("button", { class: "btn", onClick: () => go("shift_close_new") }, T("+ New shift close","+ إغلاق شيفت جديد")),
     el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, T("← Home","← الرئيسية")),
@@ -15739,50 +15751,133 @@ routes.signin_stamp_new = function (u) {
   return wrap;
 };
 
+function _signinMinsLate(s) {
+  let minsLate = s.mins_late;
+  if (minsLate === undefined) {
+    try {
+      const branch  = (s.branch||"maadi").toLowerCase();
+      const bot     = state.branch_opening_times || {};
+      const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+      const dateStr = localISODate(new Date(s.at));
+      const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
+      minsLate = Math.round((new Date(s.at).getTime() - openMs) / 60000);
+    } catch(e) { minsLate = 0; }
+  }
+  return minsLate;
+}
+function _signinStatus(minsLate) {
+  if (minsLate <= -15) return "early";
+  if (minsLate <= 15)  return "ontime";
+  if (minsLate <= 60)  return "half";
+  if (minsLate <= 120) return "full";
+  return "two";
+}
+const SIGNIN_STATUS_META = {
+  early:  { color: "var(--ok)",   bg: "rgba(47,138,85,0.10)",  label: () => T("⭐ Early","⭐ مبكر") },
+  ontime: { color: "var(--ok)",   bg: "rgba(47,138,85,0.05)",  label: () => T("✅ On time","✅ في الموعد") },
+  half:   { color: "var(--warn)", bg: "rgba(183,121,31,0.13)", label: () => T("⚠ ½ day","⚠ نصف يوم") },
+  full:   { color: "var(--bad)",  bg: "rgba(194,59,59,0.11)",  label: () => T("❌ 1 day","❌ يوم كامل") },
+  two:    { color: "var(--bad)",  bg: "rgba(194,59,59,0.18)",  label: () => T("❌ 2 days","❌ يومان") },
+};
+
 routes.signin_stamp_list = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header(T("Sign-In Stamps","بصمات الحضور"), T("Clock-in records per barista.","سجلات تسجيل الحضور لكل بريستا.")));
+  wrap.appendChild(header(T("Sign-In Stamps","بصمات الحضور"), T("Attendance record — every clock-in, color-coded by punctuality.","سجل الحضور — كل تسجيل دخول، مع ترميز لوني حسب الانضباط.")));
 
-  const mine = state.signin_stamps
-    .filter(s => u.role === "owner" || u.role === "accountant" || s.by === u.id || (u.branches||[]).includes(s.branch))
-    .sort((a, b) => b.at.localeCompare(a.at))
-    .slice(0, 100);
+  const isAdmin = u.role === "owner" || u.role === "accountant";
+  const all = state.signin_stamps
+    .filter(s => isAdmin || s.by === u.id || (u.branches||[]).includes(s.branch));
+
+  const selStyle = { padding: "6px 8px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "inherit", fontSize: "13px" };
+
+  // ── Filters ─────────────────────────────────────────────
+  let fBranch = "all", fStaff = "all", fStatus = "all", fFrom = "", fTo = "";
+  const branchOptions = ["all", ...Array.from(new Set(all.map(s => (s.branch||"").toLowerCase()).filter(Boolean))).sort()];
+  const staffOptions  = ["all", ...Array.from(new Set(all.map(s => s.by_name).filter(Boolean))).sort()];
+
+  const filterBar = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" } });
+
+  const branchSel = el("select", { style: selStyle },
+    branchOptions.map(b => el("option", { value: b }, b === "all" ? T("All branches","كل الفروع") : b.charAt(0).toUpperCase() + b.slice(1))));
+  branchSel.addEventListener("change", () => { fBranch = branchSel.value; draw(); });
+  filterBar.appendChild(branchSel);
+
+  if (isAdmin) {
+    const staffSel = el("select", { style: selStyle },
+      staffOptions.map(n => el("option", { value: n }, n === "all" ? T("All staff","كل الموظفين") : n)));
+    staffSel.addEventListener("change", () => { fStaff = staffSel.value; draw(); });
+    filterBar.appendChild(staffSel);
+  }
+
+  const statusSel = el("select", { style: selStyle }, [
+    ["all",    T("All statuses","كل الحالات")],
+    ["early",  T("⭐ Early","⭐ مبكر")],
+    ["ontime", T("✅ On time","✅ في الموعد")],
+    ["half",   T("⚠ ½ day late","⚠ متأخر نصف يوم")],
+    ["full",   T("❌ 1 day late","❌ متأخر يوم")],
+    ["two",    T("❌ 2 days late","❌ متأخر يومان")],
+  ].map(([v, l]) => el("option", { value: v }, l)));
+  statusSel.addEventListener("change", () => { fStatus = statusSel.value; draw(); });
+  filterBar.appendChild(statusSel);
+
+  const fromInput = el("input", { type: "date", style: selStyle });
+  fromInput.addEventListener("input", () => { fFrom = fromInput.value; draw(); });
+  filterBar.appendChild(fromInput);
+
+  const toInput = el("input", { type: "date", style: selStyle });
+  toInput.addEventListener("input", () => { fTo = toInput.value; draw(); });
+  filterBar.appendChild(toInput);
+
+  wrap.appendChild(filterBar);
+
+  const summaryEl = el("div", { class: "muted small", style: { marginBottom: "6px" } });
+  wrap.appendChild(summaryEl);
 
   const list = el("div", { class: "list" });
-  if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, T("No sign-in stamps yet.","لا توجد بصمات حضور بعد.")));
-  for (const s of mine) {
-    // Compute status badge from stored mins_late or recalculate
-    let minsLate = s.mins_late;
-    if (minsLate === undefined) {
-      try {
-        const branch  = (s.branch||"maadi").toLowerCase();
-        const bot     = state.branch_opening_times || {};
-        const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
-        const dateStr = localISODate(new Date(s.at));
-        const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
-        minsLate = Math.round((new Date(s.at).getTime() - openMs) / 60000);
-      } catch(e) { minsLate = 0; }
-    }
-    const isEarly   = minsLate <= -15;
-    const isOnTime  = minsLate <= 15;
-    const isHalfDay = minsLate > 15  && minsLate <= 60;
-    const isFullDay = minsLate > 60  && minsLate <= 120;
-    const isTwoDays = minsLate > 120;
-    const badge = isEarly   ? el("span", { class: "pill", style: { background: "var(--ok)",   color: "#fff" } }, T("⭐ Early","⭐ مبكر"))
-                : isOnTime  ? el("span", { class: "pill", style: { background: "var(--ok)",   color: "#fff" } }, T("✅ On time","✅ في الموعد"))
-                : isHalfDay ? el("span", { class: "pill", style: { background: "var(--warn)",  color: "#fff" } }, T("⚠ ½ day","⚠ نصف يوم"))
-                : isFullDay ? el("span", { class: "pill", style: { background: "var(--bad)",   color: "#fff" } }, T("❌ 1 day","❌ يوم كامل"))
-                :             el("span", { class: "pill", style: { background: "var(--bad)",   color: "#fff" } }, T("❌ 2 days","❌ يومان"));
-    const minStr = isEarly ? T(`${Math.abs(minsLate)} min early`, `مبكر ${Math.abs(minsLate)} دقيقة`) : minsLate > 0 ? T(`${minsLate} min late`, `متأخر ${minsLate} دقيقة`) : T("on time","في الموعد");
-    list.appendChild(el("div", { class: "row" }, [
-      el("div", { class: "grow" }, [
-        el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, s.is_test ? testBadge() : null]),
-        el("div", { class: "sub" }, `${fmtDate(s.at)} · ${minStr}${s.note ? " · " + s.note : ""}`),
-      ]),
-      badge,
-    ]));
-  }
   wrap.appendChild(list);
+
+  function draw() {
+    list.innerHTML = "";
+    let rows = all.slice().sort((a, b) => b.at.localeCompare(a.at));
+    if (fBranch !== "all") rows = rows.filter(s => (s.branch||"").toLowerCase() === fBranch);
+    if (fStaff  !== "all") rows = rows.filter(s => s.by_name === fStaff);
+    if (fFrom) rows = rows.filter(s => localISODate(new Date(s.at)) >= fFrom);
+    if (fTo)   rows = rows.filter(s => localISODate(new Date(s.at)) <= fTo);
+
+    let scored = rows.map(s => { const minsLate = _signinMinsLate(s); return { s, minsLate, status: _signinStatus(minsLate) }; });
+    if (fStatus !== "all") scored = scored.filter(r => r.status === fStatus);
+
+    // Admins get the full filtered record (this is the attendance record); a
+    // barista's own view is naturally small so a cap just guards against runaway DOM size.
+    const shown = isAdmin ? scored : scored.slice(0, 100);
+
+    const counts = { early: 0, ontime: 0, half: 0, full: 0, two: 0 };
+    scored.forEach(r => counts[r.status]++);
+    const lateCount = counts.half + counts.full + counts.two;
+    summaryEl.textContent = T(
+      `${scored.length} record${scored.length === 1 ? "" : "s"} · ${counts.early} early · ${counts.ontime} on time · ${lateCount} late`,
+      `${scored.length} سجل · ${counts.early} مبكر · ${counts.ontime} في الموعد · ${lateCount} متأخر`
+    );
+
+    if (shown.length === 0) { list.appendChild(el("div", { class: "muted" }, T("No sign-in stamps match these filters.","لا توجد بصمات حضور مطابقة لهذه الفلاتر."))); return; }
+
+    for (const { s, minsLate, status } of shown) {
+      const meta = SIGNIN_STATUS_META[status];
+      const badge = el("span", { class: "pill", style: { background: meta.color, color: "#fff" } }, meta.label());
+      const minStr = status === "early" ? T(`${Math.abs(minsLate)} min early`, `مبكر ${Math.abs(minsLate)} دقيقة`)
+                   : minsLate > 0 ? T(`${minsLate} min late`, `متأخر ${minsLate} دقيقة`)
+                   : T("on time","في الموعد");
+      list.appendChild(el("div", { class: "row", style: { background: meta.bg, borderLeft: `4px solid ${meta.color}` } }, [
+        el("div", { class: "grow" }, [
+          el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, s.is_test ? testBadge() : null]),
+          el("div", { class: "sub" }, `${fmtDate(s.at)} · ${minStr}${s.note ? " · " + s.note : ""}`),
+        ]),
+        badge,
+      ]));
+    }
+  }
+  draw();
+
   wrap.appendChild(el("div", { class: "sticky-actions" }, [
     el("button", { class: "btn", onClick: () => go("signin_stamp_new") }, T("+ New clock-in","+ تسجيل حضور جديد")),
     el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, T("← Home","← الرئيسية")),
