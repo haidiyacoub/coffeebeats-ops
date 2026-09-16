@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260916-373 -->
+<!-- CB_BUILD:20260916-386 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260916-373";
+  var BUILD = "20260916-386";
   (function() {
     function checkFresh() {
       try {
@@ -8685,7 +8685,7 @@ routes.penalties = function (u) {
   nextBtn.addEventListener("click", () => shiftMonth(1));
 
   // ── Barista picker (shown only on the "By Barista" tab) ──
-  const staffForPicker = state.users.filter(x => (x.role === "barista" || x.role === "head_barista"));
+  const staffForPicker = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
   let selBaristaId = staffForPicker[0] ? staffForPicker[0].id : "";
   const baristaNav = el("div", { class: "card", style: { marginTop: "12px" } });
   const baristaSel = el("select", {});
@@ -16393,23 +16393,54 @@ routes.leave_list = function (u) {
 
   const canManage = (u.role === "owner" || u.role === "head_barista");
 
+  // ── Tabs: Requests (existing list) vs Monthly Summary (managers only) ──
+  let activeLeaveTab = "requests"; // "requests" | "monthly"
+  let drawMonthlySummary = () => {}; // assigned below, once the summary section is built
+  const reqSection = el("div", {});
+  const summarySection = el("div", { style: { display: "none" } });
+  if (canManage) {
+    const tabBar = el("div", { class: "tabs", style: { marginBottom: "12px" } });
+    function buildLeaveTabs() {
+      tabBar.innerHTML = "";
+      const defs = [
+        ["requests", T("Requests","الطلبات")],
+        ["monthly",  T("Leaves by Month","الإجازات الشهرية")],
+      ];
+      defs.forEach(([key, label]) => {
+        const btn = el("button", { class: "tab" + (activeLeaveTab === key ? " on" : "") }, label);
+        btn.addEventListener("click", () => {
+          activeLeaveTab = key;
+          buildLeaveTabs();
+          reqSection.style.display = activeLeaveTab === "requests" ? "block" : "none";
+          summarySection.style.display = activeLeaveTab === "monthly" ? "block" : "none";
+          if (activeLeaveTab === "monthly") drawMonthlySummary();
+        });
+        tabBar.appendChild(btn);
+      });
+    }
+    buildLeaveTabs();
+    wrap.appendChild(tabBar);
+  }
+  wrap.appendChild(reqSection);
+  wrap.appendChild(summarySection);
+
   // Filter leaves visible to this user
   const visible = canManage
     ? [...state.leaves].sort((a, b) => b.requested_at.localeCompare(a.requested_at))
     : state.leaves.filter(l => l.user_id === u.id).sort((a, b) => b.requested_at.localeCompare(a.requested_at));
 
   if (canManage) {
-    wrap.appendChild(el("div", { class: "banner-arch" },
+    reqSection.appendChild(el("div", { class: "banner-arch" },
       T("Approve or reject pending leave requests. Approved leaves block the barista from being assigned in the Weekly Schedule for those days.","اعتمد أو ارفض طلبات الإجازة المعلّقة. الإجازات المعتمدة تمنع تعيين البريستا في الجدول الأسبوعي في تلك الأيام.")));
-    wrap.appendChild(el("button", {
+    reqSection.appendChild(el("button", {
       class: "btn secondary",
       style: { marginTop: "10px", marginBottom: "4px" },
       onClick: () => go("leave_new"),
     }, T("➕ Submit New Leave Request","➕ إرسال طلب إجازة جديد")));
   } else {
-    wrap.appendChild(el("div", { class: "banner-arch" },
+    reqSection.appendChild(el("div", { class: "banner-arch" },
       T("Your leave requests — you can cancel pending requests. Approved leaves cannot be cancelled here; contact the head barista.","طلبات إجازتك — يمكنك إلغاء الطلبات المعلّقة. لا يمكن إلغاء الإجازات المعتمدة هنا؛ تواصل مع رئيس البريستا.")));
-    wrap.appendChild(el("button", {
+    reqSection.appendChild(el("button", {
       class: "btn secondary",
       style: { marginTop: "10px", marginBottom: "4px" },
       onClick: () => go("leave_new"),
@@ -16417,7 +16448,7 @@ routes.leave_list = function (u) {
   }
 
   const list = el("div", { class: "list", style: { marginTop: "12px" } });
-  wrap.appendChild(list);
+  reqSection.appendChild(list);
 
   const STATUS_LABELS_AR = { Pending: "معلّقة", Approved: "معتمدة", Rejected: "مرفوضة", Cancelled: "ملغاة" };
 
@@ -16627,10 +16658,91 @@ routes.leave_list = function (u) {
   }
 
   draw();
-  renderTrashSection(wrap, {
+  renderTrashSection(reqSection, {
     arrKey: "leaves", trashKey: "deleted_leaves", entityLabel: T("Leave request","طلب إجازة"), canManage: u.role === "owner",
     rowLabel: (r) => `${r.user_name || "—"} · ${r.from_date} → ${r.to_date}`,
   });
+
+  // ── Monthly Summary tab: leave days taken by each active barista, per month ──
+  if (canManage) {
+    const _nmNow = new Date();
+    const nowMonth = fmtYearMonth(_nmNow.getFullYear(), _nmNow.getMonth() + 1);
+    let summaryMonth = nowMonth;
+
+    const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" } });
+    const prevBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+    const nextBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" }, disabled: true }, "›");
+    const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, fmtYm(summaryMonth));
+    monthNav.appendChild(prevBtn);
+    monthNav.appendChild(monthLbl);
+    monthNav.appendChild(nextBtn);
+    summarySection.appendChild(monthNav);
+
+    const summaryBody = el("div", {});
+    summarySection.appendChild(summaryBody);
+
+    function shiftSummaryMonth(delta) {
+      const [y, m] = summaryMonth.split("-").map(Number);
+      const d = new Date(y, m - 1 + delta, 1);
+      summaryMonth = fmtYearMonth(d.getFullYear(), d.getMonth() + 1);
+      monthLbl.textContent = fmtYm(summaryMonth);
+      nextBtn.disabled = summaryMonth >= nowMonth;
+      drawMonthlySummary();
+    }
+    prevBtn.addEventListener("click", () => shiftSummaryMonth(-1));
+    nextBtn.addEventListener("click", () => shiftSummaryMonth(1));
+
+    // Days of `leave` (approved) that fall within calendar month `ym` ("YYYY-MM").
+    function leaveDaysInMonth(leave, ym) {
+      const [y, m] = ym.split("-").map(Number);
+      const monthStart = new Date(y, m - 1, 1);
+      const monthEnd   = new Date(y, m, 0);
+      const from = new Date(leave.from_date);
+      const to   = new Date(leave.to_date);
+      const start = from > monthStart ? from : monthStart;
+      const end   = to < monthEnd ? to : monthEnd;
+      if (start > end) return 0;
+      return Math.round((end - start) / 86400000) + 1;
+    }
+
+    drawMonthlySummary = function () {
+      summaryBody.innerHTML = "";
+      const activeStaff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
+      const approved = state.leaves.filter(l => l.status === "approved");
+
+      const rows = activeStaff.map(p => {
+        const own = approved.filter(l => l.user_id === p.id);
+        const annualDays = own.filter(l => l.type === "annual").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0);
+        const sickDays   = own.filter(l => l.type === "sick").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0);
+        return { name: p.name, annualDays, sickDays, totalDays: annualDays + sickDays };
+      }).sort((a,b) => b.totalDays - a.totalDays || a.name.localeCompare(b.name));
+
+      const grandTotal = rows.reduce((s,r) => s + r.totalDays, 0);
+      summaryBody.appendChild(el("div", { class: "card", style: { marginBottom: "12px" } }, [
+        el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } },
+          T(`Total leave days — ${fmtYm(summaryMonth)}`, `إجمالي أيام الإجازة — ${fmtYm(summaryMonth)}`)),
+        el("div", { style: { fontSize: "26px", fontWeight: "700" } }, `${grandTotal} ${grandTotal === 1 ? T("day","يوم") : T("days","أيام")}`),
+      ]));
+
+      const list = el("div", { class: "card" });
+      if (rows.every(r => r.totalDays === 0)) {
+        list.appendChild(el("div", { class: "muted small" }, T("No leave days taken this month.","لا توجد أيام إجازة مأخوذة هذا الشهر.")));
+      } else {
+        for (const r of rows) {
+          list.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
+            el("div", { class: "k" }, [
+              el("div", {}, r.name),
+              el("div", { class: "muted small" },
+                T(`🌴 ${r.annualDays} annual · 🤒 ${r.sickDays} sick`, `🌴 ${r.annualDays} سنوية · 🤒 ${r.sickDays} مرضية`)),
+            ]),
+            el("div", { class: "v" }, `${r.totalDays} ${r.totalDays === 1 ? T("day","يوم") : T("days","أيام")}`),
+          ]));
+        }
+      }
+      summaryBody.appendChild(list);
+    };
+  }
+
   wrap.appendChild(btnBack());
   return wrap;
 };
