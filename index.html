@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260916-285 -->
+<!-- CB_BUILD:20260916-373 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260916-285";
+  var BUILD = "20260916-373";
   (function() {
     function checkFresh() {
       try {
@@ -4900,6 +4900,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🧾", T("Overheads & Maintenance","المصروفات والصيانة"), T("Log one-off costs · maintenance & pest-control schedule","تسجيل مصروفات لمرة واحدة · جدول الصيانة ومكافحة الحشرات"), () => go("overhead_log_new")));
     tiles.appendChild(tile("📋", T("My Shifts","شيفتاتي"), T("History","السجل"), () => go("shifts")));
     tiles.appendChild(tile("🔒", T("Shift Close","إغلاق الشيفت"), T("End-of-shift summary","ملخص نهاية الشيفت"), () => go("shift_close_new")));
+    tiles.appendChild(tile("📅", T("Shift Closes (Month)","إغلاقات الشيفت (الشهر)"), T("Every day's end-of-shift log","سجل نهاية الشيفت لكل يوم"), () => go("shift_close_list")));
     tiles.appendChild(tile("🧹", T("Cleaning Log","سجل النظافة"), T("Upload checklist photo","رفع صورة قائمة التحقق"), () => go("cleaning_log_new")));
     tiles.appendChild(tile("🕐", T("Sign-In Stamp","بصمة الحضور"), T("Clock-in photo","صورة تسجيل الدخول"), () => go("signin_stamp_new")));
     tiles.appendChild(tile("📷", T("Photo Gallery","معرض الصور"), T("Drive photo repository","مستودع صور Drive"), () => go("photo_gallery")));
@@ -5621,16 +5622,38 @@ routes.shift_close_new = function (u) {
 
 routes.shift_close_list = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header(T("Shift Closes","إغلاقات الشيفت"), T("End-of-shift reports. Tap + to add today's.","تقارير نهاية الشيفت. اضغط + لإضافة تقرير اليوم.")));
+  wrap.appendChild(header(T("Shift Closes","إغلاقات الشيفت"), T("End-of-shift reports, every day of the month. Tap + to add today's.","تقارير نهاية الشيفت لكل يوم في الشهر. اضغط + لإضافة تقرير اليوم.")));
 
-  const mine = state.shift_closes
-    .filter(c => u.role === "owner" || u.role === "accountant" || c.by === u.id || (u.branches||[]).includes(c.branch))
-    .sort((a, b) => b.at.localeCompare(a.at))
-    .slice(0, 100);
+  let month = new Date().toISOString().slice(0, 7); // default: current month, so every day shows
+  const monthInput = el("input", { type: "month", value: month, style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" } });
+  monthInput.addEventListener("change", () => { month = monthInput.value; draw(); });
+  const allTimeBtn = el("button", { class: "btn ghost", onClick: () => { month = ""; monthInput.value = ""; draw(); } }, T("All time","كل الوقت"));
 
-  const list = el("div", { class: "list" });
-  if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, T("No shift closes yet.","لا توجد إغلاقات شيفت بعد.")));
-  for (const c of mine) {
+  wrap.appendChild(el("div", { class: "card", style: { display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" } }, [
+    el("span", { class: "muted small", style: { fontWeight: "600" } }, T("Filter by month","تصفية حسب الشهر")),
+    monthInput, allTimeBtn,
+  ]));
+
+  const listWrap = el("div", {});
+  wrap.appendChild(listWrap);
+  draw();
+
+  wrap.appendChild(el("div", { class: "sticky-actions" }, [
+    el("button", { class: "btn", onClick: () => go("shift_close_new") }, T("+ New shift close","+ إغلاق شيفت جديد")),
+    el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, T("← Home","← الرئيسية")),
+  ]));
+  return wrap;
+
+  function draw() {
+    listWrap.innerHTML = "";
+    const mine = state.shift_closes
+      .filter(c => u.role === "owner" || u.role === "accountant" || c.by === u.id || (u.branches||[]).includes(c.branch))
+      .filter(c => !month || (c.date || "").slice(0, 7) === month)
+      .sort((a, b) => b.at.localeCompare(a.at));
+
+    const list = el("div", { class: "list" });
+    if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, T("No shift closes yet.","لا توجد إغلاقات شيفت بعد.")));
+    for (const c of mine) {
     const total = (c.cash||0) + (c.instapay||0) + (c.cc||0) + (c.talabat_credit||0) + (c.talabat_cash||0);
     const mgmt = (c.mgmt_drinks||[]).map(d => `${d.who}: ${d.drink}`).join(" · ") || "—";
     const baDrinks = (c.barista_allowance_drinks||[]).map(d => `${d.who||"?"}:${d.drink}`).join(" · ") || (c.barista_allowance || "—");
@@ -5664,17 +5687,13 @@ routes.shift_close_list = function (u) {
       c.discount_photo_id ? el("div", { class: "muted small", style: { color: "var(--ok)" } }, T("📷 Discount receipt photo attached","📷 صورة إيصال الخصم مرفقة")) : null,
       el("div", { class: "muted small" }, T(`by ${c.by_name} · ${fmtDate(c.at)}`, `بواسطة ${c.by_name} · ${fmtDate(c.at)}`)),
     ]));
+    }
+    listWrap.appendChild(list);
+    renderTrashSection(listWrap, {
+      arrKey: "shift_closes", trashKey: "deleted_shift_closes", entityLabel: T("Shift close","إغلاق شيفت"), canManage: u.role === "owner",
+      rowLabel: (r) => `${r.branch || ""} · ${r.date || ""}${r.closing_barista ? " · " + r.closing_barista : ""}`,
+    });
   }
-  wrap.appendChild(list);
-  renderTrashSection(wrap, {
-    arrKey: "shift_closes", trashKey: "deleted_shift_closes", entityLabel: T("Shift close","إغلاق شيفت"), canManage: u.role === "owner",
-    rowLabel: (r) => `${r.branch || ""} · ${r.date || ""}${r.closing_barista ? " · " + r.closing_barista : ""}`,
-  });
-  wrap.appendChild(el("div", { class: "sticky-actions" }, [
-    el("button", { class: "btn", onClick: () => go("shift_close_new") }, T("+ New shift close","+ إغلاق شيفت جديد")),
-    el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("home") }, T("← Home","← الرئيسية")),
-  ]));
-  return wrap;
 };
 
 // ==============================================================
@@ -8213,14 +8232,16 @@ routes.salaries = function (u) {
                                         .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
                                          .reduce((s,r)=>s+(Number(r.amount)||0),0);
+      const annualOver  = annualLeaveOverage(p.id, month, salary);
+      const annualSum   = annualOver.amount;
       const hbIncentive = p.role === "head_barista" ? calcHBIncentive(p, month).total : 0;
-      const due = Math.max(0, salary + otSum + hbIncentive - penSum - loanSum - sickSum);
+      const due = Math.max(0, salary + otSum + hbIncentive - penSum - loanSum - sickSum - annualSum);
       grandDue += due;
       const incentivePart = hbIncentive > 0 ? ` + Incentive ${money(hbIncentive)}` : "";
       dueCard.appendChild(el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
         el("div", { class: "k" }, [
           el("div", {}, p.name + (p.active ? "" : " (archived)")),
-          el("div", { class: "muted small" }, `Salary ${money(salary)}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}`),
+          el("div", { class: "muted small" }, `Salary ${money(salary)}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
         ]),
         el("div", { class: "v" }, money(due)),
       ]));
@@ -8552,15 +8573,29 @@ const PENALTY_KINDS = [
   { label: "3 days",    value: "three_days", days: 3   },
   { label: "Other (custom amount)", value: "custom", days: null },
 ];
-// Optional context (doesn't affect amount — just labels the penalty)
+// Reason picks the duration automatically (defaultKind) — the head barista/owner
+// can still override the Duration dropdown by hand after picking a reason.
 const PENALTY_REASONS = [
-  { label: "Late",                     value: "late" },
-  { label: "No show",                  value: "no_show" },
-  { label: "Not wearing the uniform",  value: "no_uniform" },
-  { label: "Personal hygiene",         value: "hygiene" },
-  { label: "Not following the rules",  value: "rules_break" },
-  { label: "Other",                    value: "other" },
+  { label: "Late 10–60 min",                              value: "late_10_60",   defaultKind: "half_day" },
+  { label: "Late 60–120 min",                              value: "late_60_120",  defaultKind: "full_day" },
+  { label: "Late more than 120 min",                       value: "late_over_120",defaultKind: "two_days" },
+  { label: "No stamp (no show)",                           value: "no_show",      defaultKind: "three_days" },
+  { label: "Not following the rules / not updating the site", value: "rules_break", defaultKind: "half_day" },
+  { label: "Not wearing the uniform",                      value: "no_uniform",   defaultKind: "half_day" },
+  { label: "Personal hygiene",                             value: "hygiene",      defaultKind: "half_day" },
+  { label: "Other",                                        value: "other",        defaultKind: null },
 ];
+// Repeat-offender doubling for MANUALLY recorded penalties (mirrors the automatic
+// late-stamp doubling): from the 2nd manual "no show" this month onward, and
+// separately from the 2nd manual conduct penalty (rules/uniform/hygiene) this
+// month onward, every further one of that category is doubled. Late-tier manual
+// entries are excluded — automatic late stamps already double on their own.
+const PENALTY_CONDUCT_REASONS = ["rules_break", "no_uniform", "hygiene"];
+function penaltyDoubleCategory(reasonCode) {
+  if (reasonCode === "no_show") return "no_show";
+  if (PENALTY_CONDUCT_REASONS.includes(reasonCode)) return "conduct";
+  return null;
+}
 
 function penaltyAmount(kind, monthlySalary) {
   const s = Number(monthlySalary) || 0;
@@ -8589,7 +8624,7 @@ routes.penalties = function (u) {
 
   const btnRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
   if (canEnter) {
-    btnRow.appendChild(el("button", { class: "btn secondary", onClick: addPenalty }, T("➕ Record penalty","➕ تسجيل خصم")));
+    btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => addPenalty() }, T("➕ Record penalty","➕ تسجيل خصم")));
     // Missing-stamp checker: pick a past date, auto-apply 3-day deductions for no-shows
     btnRow.appendChild(el("button", { class: "btn secondary", onClick: () => {
       const dateVal = prompt(T("Check missing stamps for date (YYYY-MM-DD):","تحقق من البصمات المفقودة للتاريخ (YYYY-MM-DD):"), localISODate(new Date(Date.now() - 86400000)));
@@ -8597,7 +8632,7 @@ routes.penalties = function (u) {
       if (dateVal >= localISODate(new Date())) return toast(T("Choose a past date","اختر تاريخاً في الماضي"), "error");
       const n = applyMissingStampPenalties(dateVal, u);
       if (n === 0) toast(T("No missing stamps found for " + dateVal + " — all good or no morning shifts scheduled","لا توجد بصمات مفقودة لـ " + dateVal + " — كل شيء تمام أو لا يوجد شيفتات صباحية"), "ok");
-      else { toast(T(`⚠ ${n} missing-stamp deduction${n > 1 ? "s" : ""} applied for ${dateVal}`, `⚠ تم تطبيق ${n} خصم بصمة مفقودة لـ ${dateVal}`), "warn"); render(); }
+      else { toast(T(`⚠ ${n} missing-stamp deduction${n > 1 ? "s" : ""} applied for ${dateVal}`, `⚠ تم تطبيق ${n} خصم بصمة مفقودة لـ ${dateVal}`), "warn"); drawBody(); }
     }}, T("🔍 Check missing stamps","🔍 تحقق من البصمات المفقودة")));
   } else {
     wrap.appendChild(el("div", { class: "banner-arch" }, T("View-only access. Penalties are entered by the owner or head barista.","للعرض فقط. الخصومات يسجّلها المالك أو رئيس البريستا.")));
@@ -8607,109 +8642,186 @@ routes.penalties = function (u) {
   }
   wrap.appendChild(btnRow);
 
-  const visible = state.penalties.slice().sort((a,b) => (b.at||"").localeCompare(a.at||""));
-  const total = visible.reduce((s,r) => s + (Number(r.amount)||0), 0);
-  wrap.appendChild(el("div", { class: "card", style: { marginTop: "12px" } }, [
-    el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, T("Total deductions (all time)","إجمالي الخصومات (كل الوقت)")),
-    el("div", { style: { fontSize: "26px", fontWeight: "700" } }, money(total)),
-  ]));
-
-  const list = el("div", { class: "card", style: { marginTop: "12px" } });
-  if (visible.length === 0) {
-    list.appendChild(el("div", { class: "muted small" }, T("No penalties recorded.","لا توجد خصومات مسجّلة.")));
-  } else {
-    for (const r of visible) {
-      const reasonLabel = (PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
-      const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
-      const row = el("div", { class: "kv", style: { alignItems: "center" } }, [
-        el("div", { class: "k" }, [
-          el("div", {}, `${r.barista || "—"} · ${kindLabel} · ${r.branch || ""}`),
-          el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || r.by || "—"} · ${reasonLabel}${r.note ? " — " + r.note : ""}`),
-        ]),
-        el("div", { class: "v" }, money(r.amount)),
-      ]);
-      if (canEnter) {
-        row.appendChild(el("button", {
-          class: "btn ghost",
-          style: { marginLeft: "8px" },
-          title: T("Edit this penalty","تعديل هذا الخصم"),
-          onClick: () => {
-            openPrompt({
-              title: T("Edit penalty","تعديل الخصم"),
-              fields: [
-                { key: "amount", label: "Amount (EGP)", type: "number", value: r.amount },
-                { key: "note",   label: "Note", type: "text", value: r.note || "" },
-              ],
-              onSubmit: (vals) => {
-                r.amount = Number(vals.amount) || 0;
-                r.note = vals.note || "";
-                saveState(); toast(T("Penalty updated","تم تحديث الخصم")); render();
-              }
-            });
-          }
-        }, "✎"));
-        row.appendChild(el("button", {
-          class: "btn ghost",
-          style: { marginLeft: "8px", color: "var(--bad)", border: "1px solid var(--bad)" },
-          title: T("Delete this penalty","حذف هذا الخصم"),
-          onClick: () => {
-            if (!confirm(T(`Delete penalty ${money(r.amount)} for ${r.barista}? You can undo below.`, `حذف خصم ${money(r.amount)} لـ ${r.barista}؟ يمكنك التراجع أدناه.`))) return;
-            state.penalties = state.penalties.filter(x => x.id !== r.id);
-            state.deleted_penalties.unshift({ ...r, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
-            state.deleted_penalties = state.deleted_penalties.slice(0, 20); // keep last 20
-            saveState();
-            toast(T(`Penalty deleted — scroll down to undo`, `تم حذف الخصم — مرّر لأسفل للتراجع`));
-            render();
-          }
-        }, "🗑"));
-      }
-      list.appendChild(row);
-    }
+  // ── Tabs: This Month (default) vs By Barista (whole history) ──
+  let activeTab = "month"; // "month" | "by_barista"
+  const tabBar = el("div", { class: "tabs", style: { marginTop: "12px" } });
+  function buildTabs() {
+    tabBar.innerHTML = "";
+    const defs = [
+      ["month",      T("This Month","هذا الشهر")],
+      ["by_barista", T("By Barista","حسب البريستا")],
+    ];
+    defs.forEach(([key, label]) => {
+      const btn = el("button", { class: "tab" + (activeTab === key ? " on" : "") }, label);
+      btn.addEventListener("click", () => { activeTab = key; buildTabs(); drawBody(); });
+      tabBar.appendChild(btn);
+    });
   }
-  wrap.appendChild(list);
+  buildTabs();
+  wrap.appendChild(tabBar);
 
-  // ---- Deleted / trash (undo) ----
-  if (state.deleted_penalties && state.deleted_penalties.length > 0) {
-    const trash = el("div", { class: "card", style: { marginTop: "12px", borderColor: "var(--warn)" } });
-    trash.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", color:"var(--warn)" } }, T("Recently deleted (tap to restore)","المحذوف مؤخراً (اضغط للاستعادة)")));
-    for (const r of state.deleted_penalties.slice(0, 10)) {
-      const reasonLabel = (PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
-      const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
-      trash.appendChild(el("div", { class: "kv", style: { alignItems:"center" } }, [
-        el("div", { class: "k" }, [
-          el("div", { style: { color: "var(--ink-dim)" } }, `${r.barista || "—"} · ${kindLabel} · ${money(r.amount)}`),
-          el("div", { class: "muted small" }, `Deleted ${fmtDate(r.deleted_at)} · originally ${fmtDate(r.at)}`),
-        ]),
-        el("button", {
-          class: "btn secondary",
-          style: { width: "auto" },
-          onClick: () => {
-            const { deleted_at, deleted_by, ...original } = r;
-            state.penalties.push(original);
-            _untombstone(original.id); // clear the deletion tombstone so it isn't re-stripped
-            state.deleted_penalties = state.deleted_penalties.filter(x => x.id !== r.id);
-            saveState();
-            toast(T(`Penalty for ${r.barista} restored ✓`, `تم استعادة خصم ${r.barista} ✓`));
-            render();
-          }
-        }, T("↩ Restore","↩ استعادة")),
-      ]));
-    }
-    if (canEnter) {
-      trash.appendChild(el("button", {
-        class: "btn ghost",
-        style: { marginTop: "8px", color: "var(--bad)" },
-        onClick: () => {
-          if (!confirm(T("Permanently clear all deleted penalties?","حذف كل الخصومات المحذوفة نهائياً؟"))) return;
-          state.deleted_penalties = [];
-          saveState(); toast(T("Trash cleared","تم إفراغ المهملات")); render();
-        }
-      }, T("🗑 Clear trash","🗑 إفراغ المهملات")));
-    }
-    wrap.appendChild(trash);
+  // ── Month nav (shown only on the "This Month" tab) ──
+  const _nmNow = new Date();
+  const nowMonth = fmtYearMonth(_nmNow.getFullYear(), _nmNow.getMonth() + 1);
+  let selMonth = nowMonth;
+  const monthNav = el("div", { class: "card", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "12px" } });
+  const prevBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" } }, "‹");
+  const nextBtn = el("button", { class: "btn ghost", style: { fontSize: "18px", padding: "4px 12px" }, disabled: true }, "›");
+  const monthLbl = el("div", { style: { fontWeight: "700", fontSize: "15px" } }, fmtYm(selMonth));
+  monthNav.appendChild(prevBtn);
+  monthNav.appendChild(monthLbl);
+  monthNav.appendChild(nextBtn);
+  wrap.appendChild(monthNav);
+
+  function shiftMonth(delta) {
+    const [y, m] = selMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    selMonth = fmtYearMonth(d.getFullYear(), d.getMonth() + 1);
+    monthLbl.textContent = fmtYm(selMonth);
+    nextBtn.disabled = selMonth >= nowMonth;
+    drawBody();
   }
+  prevBtn.addEventListener("click", () => shiftMonth(-1));
+  nextBtn.addEventListener("click", () => shiftMonth(1));
 
+  // ── Barista picker (shown only on the "By Barista" tab) ──
+  const staffForPicker = state.users.filter(x => (x.role === "barista" || x.role === "head_barista"));
+  let selBaristaId = staffForPicker[0] ? staffForPicker[0].id : "";
+  const baristaNav = el("div", { class: "card", style: { marginTop: "12px" } });
+  const baristaSel = el("select", {});
+  staffForPicker.forEach(p => {
+    const o = el("option", { value: p.id }, p.name);
+    if (p.id === selBaristaId) o.selected = true;
+    baristaSel.appendChild(o);
+  });
+  baristaSel.addEventListener("change", () => { selBaristaId = baristaSel.value; drawBody(); });
+  baristaNav.appendChild(el("label", {}, T("Barista","البريستا")));
+  baristaNav.appendChild(baristaSel);
+  wrap.appendChild(baristaNav);
+
+  const body = el("div", {});
+  wrap.appendChild(body);
   wrap.appendChild(btnBack());
+
+  function renderPenaltyRow(r) {
+    const reasonLabel = (PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
+    const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
+    const row = el("div", { class: "kv", style: { alignItems: "center" } }, [
+      el("div", { class: "k" }, [
+        el("div", {}, `${r.barista || "—"} · ${kindLabel} · ${r.branch || ""}`),
+        el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || r.by || "—"} · ${reasonLabel}${r.note ? " — " + r.note : ""}`),
+      ]),
+      el("div", { class: "v" }, money(r.amount)),
+    ]);
+    if (canEnter) {
+      row.appendChild(el("button", {
+        class: "btn ghost",
+        style: { marginLeft: "8px" },
+        title: T("Edit this penalty","تعديل هذا الخصم"),
+        onClick: () => {
+          openPrompt({
+            title: T("Edit penalty","تعديل الخصم"),
+            fields: [
+              { key: "amount", label: "Amount (EGP)", type: "number", value: r.amount },
+              { key: "note",   label: "Note", type: "text", value: r.note || "" },
+            ],
+            onSubmit: (vals) => {
+              r.amount = Number(vals.amount) || 0;
+              r.note = vals.note || "";
+              saveState(); toast(T("Penalty updated","تم تحديث الخصم")); drawBody();
+            }
+          });
+        }
+      }, "✎"));
+      row.appendChild(el("button", {
+        class: "btn ghost",
+        style: { marginLeft: "8px", color: "var(--bad)", border: "1px solid var(--bad)" },
+        title: T("Delete this penalty","حذف هذا الخصم"),
+        onClick: () => {
+          if (!confirm(T(`Delete penalty ${money(r.amount)} for ${r.barista}? You can undo below.`, `حذف خصم ${money(r.amount)} لـ ${r.barista}؟ يمكنك التراجع أدناه.`))) return;
+          state.penalties = state.penalties.filter(x => x.id !== r.id);
+          state.deleted_penalties.unshift({ ...r, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
+          state.deleted_penalties = state.deleted_penalties.slice(0, 20); // keep last 20
+          saveState();
+          toast(T(`Penalty deleted — scroll down to undo`, `تم حذف الخصم — مرّر لأسفل للتراجع`));
+          drawBody();
+        }
+      }, "🗑"));
+    }
+    return row;
+  }
+
+  function drawBody() {
+    monthNav.style.display   = activeTab === "month" ? "flex" : "none";
+    baristaNav.style.display = activeTab === "by_barista" ? "block" : "none";
+    body.innerHTML = "";
+
+    const visible = activeTab === "month"
+      ? state.penalties.filter(x => (x.month || (x.date||"").slice(0,7)) === selMonth)
+        .slice().sort((a,b) => (b.at||"").localeCompare(a.at||""))
+      : state.penalties.filter(x => x.user_id === selBaristaId)
+        .slice().sort((a,b) => (b.at||"").localeCompare(a.at||""));
+    const total = visible.reduce((s,r) => s + (Number(r.amount)||0), 0);
+
+    body.appendChild(el("div", { class: "card", style: { marginBottom: "12px" } }, [
+      el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } },
+        activeTab === "month"
+          ? T(`Total deductions — ${fmtYm(selMonth)}`, `إجمالي الخصومات — ${fmtYm(selMonth)}`)
+          : T("Total deductions (all time)","إجمالي الخصومات (كل الوقت)")),
+      el("div", { style: { fontSize: "26px", fontWeight: "700" } }, money(total)),
+    ]));
+
+    const list = el("div", { class: "card" });
+    if (visible.length === 0) {
+      list.appendChild(el("div", { class: "muted small" }, T("No penalties recorded.","لا توجد خصومات مسجّلة.")));
+    } else {
+      for (const r of visible) list.appendChild(renderPenaltyRow(r));
+    }
+    body.appendChild(list);
+
+    // ---- Deleted / trash (undo) — only on the This Month tab ----
+    if (activeTab === "month" && state.deleted_penalties && state.deleted_penalties.length > 0) {
+      const trash = el("div", { class: "card", style: { marginTop: "12px", borderColor: "var(--warn)" } });
+      trash.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", color:"var(--warn)" } }, T("Recently deleted (tap to restore)","المحذوف مؤخراً (اضغط للاستعادة)")));
+      for (const r of state.deleted_penalties.slice(0, 10)) {
+        const reasonLabel = (PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
+        const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
+        trash.appendChild(el("div", { class: "kv", style: { alignItems:"center" } }, [
+          el("div", { class: "k" }, [
+            el("div", { style: { color: "var(--ink-dim)" } }, `${r.barista || "—"} · ${kindLabel} · ${money(r.amount)}`),
+            el("div", { class: "muted small" }, `Deleted ${fmtDate(r.deleted_at)} · originally ${fmtDate(r.at)}`),
+          ]),
+          el("button", {
+            class: "btn secondary",
+            style: { width: "auto" },
+            onClick: () => {
+              const { deleted_at, deleted_by, ...original } = r;
+              state.penalties.push(original);
+              _untombstone(original.id); // clear the deletion tombstone so it isn't re-stripped
+              state.deleted_penalties = state.deleted_penalties.filter(x => x.id !== r.id);
+              saveState();
+              toast(T(`Penalty for ${r.barista} restored ✓`, `تم استعادة خصم ${r.barista} ✓`));
+              drawBody();
+            }
+          }, T("↩ Restore","↩ استعادة")),
+        ]));
+      }
+      if (canEnter) {
+        trash.appendChild(el("button", {
+          class: "btn ghost",
+          style: { marginTop: "8px", color: "var(--bad)" },
+          onClick: () => {
+            if (!confirm(T("Permanently clear all deleted penalties?","حذف كل الخصومات المحذوفة نهائياً؟"))) return;
+            state.deleted_penalties = [];
+            saveState(); toast(T("Trash cleared","تم إفراغ المهملات")); drawBody();
+          }
+        }, T("🗑 Clear trash","🗑 إفراغ المهملات")));
+      }
+      body.appendChild(trash);
+    }
+  }
+
+  drawBody();
 
   function addPenalty() {
     const staff = state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active);
@@ -8722,8 +8834,11 @@ routes.penalties = function (u) {
       fields: [
         { key: "branch",  label: "Branch (maadi/zawya)", type: "text", value: u.branches[0] || "maadi" },
         { key: "user_id", label: "Barista", type: "select", options: staffOptions, value: staffOptions[0] ? staffOptions[0].value : "" },
-        { key: "kind",    label: "Duration (auto-calc from salary)", type: "select", options: kindOptions, value: "half_day" },
-        { key: "reason_code", label: "Reason (for the record)", type: "select", options: reasonOptions, value: "late" },
+        { key: "reason_code", label: "Reason (auto-fills the duration below)", type: "select", options: reasonOptions, value: "late_10_60", onChange: (val, vals2, setField) => {
+            const r = PENALTY_REASONS.find(x => x.value === val);
+            if (r && r.defaultKind) setField("kind", r.defaultKind);
+          } },
+        { key: "kind",    label: "Duration (auto-filled from reason — override if needed)", type: "select", options: kindOptions, value: "half_day" },
         { key: "custom_reason", label: "Reason note (optional / required for Other)", type: "text", value: "" },
         { key: "custom_amount", label: "Custom amount (only used if duration = Other)", type: "number", value: 0 },
         { key: "date",    label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
@@ -8731,7 +8846,7 @@ routes.penalties = function (u) {
       onSubmit: (vals) => {
         const person = state.users.find(x => x.id === vals.user_id);
         if (!person) return toast("Pick a barista", "error");
-        const salary = getSalaryForMonth(person.id, (vals.date||"").slice(0,7) || month);
+        const salary = getSalaryForMonth(person.id, (vals.date||"").slice(0,7));
         const kindSpec = PENALTY_KINDS.find(k => k.value === vals.kind) || PENALTY_KINDS[0];
         const reasonSpec = PENALTY_REASONS.find(r => r.value === vals.reason_code) || PENALTY_REASONS[0];
 
@@ -8745,7 +8860,22 @@ routes.penalties = function (u) {
           amount = penaltyAmount(kindSpec.value, salary);
         }
 
+        // Repeat-offender doubling: 2nd+ manual "no show" or conduct penalty
+        // (rules/uniform/hygiene) for this barista in the same month.
+        const penMonth = (vals.date || "").slice(0,7);
+        const category = penaltyDoubleCategory(reasonSpec.value);
+        let doubled = false;
+        if (category) {
+          const priorCount = state.penalties.filter(p =>
+            p.user_id === person.id &&
+            (p.month || (p.date||"").slice(0,7)) === penMonth &&
+            penaltyDoubleCategory(p.reason_code) === category
+          ).length;
+          if (priorCount >= 1) { amount = amount * 2; doubled = true; }
+        }
+
         const s = stamp();
+        const doubleNote = doubled ? " (×2 — 2nd+ this month)" : "";
         state.penalties.push({
           id: uuid(),
           user_id: person.id,
@@ -8755,16 +8885,23 @@ routes.penalties = function (u) {
           kind_label: kindSpec.label,
           amount,
           date: vals.date,
-          month: (vals.date || "").slice(0,7),
+          month: penMonth,
           reason_code: reasonSpec.value,
           reason: reasonSpec.label,
-          note: (vals.custom_reason || "").trim(),
+          note: ((vals.custom_reason || "").trim() + doubleNote).trim(),
           salary_at_time: salary,
           by: s.by, by_name: s.by_name, at: s.at,
         });
         saveState();
-        toast(`Penalty ${money(amount)} — ${person.name} (${kindSpec.label})`);
-        render();
+        toast(`Penalty ${money(amount)} — ${person.name} (${kindSpec.label}${doubleNote})`);
+        // Jump the "This Month" view to the recorded month so the new entry is visible.
+        if (activeTab === "month" && penMonth !== selMonth) {
+          selMonth = penMonth;
+          monthLbl.textContent = fmtYm(selMonth);
+          nextBtn.disabled = selMonth >= nowMonth;
+        }
+        if (activeTab === "by_barista") selBaristaId = person.id, baristaSel.value = person.id;
+        drawBody();
       }
     });
   }
@@ -9502,6 +9639,27 @@ function workedDaysReport(uid, month, flatSalary) {
            startedMidCycle, exitedMidCycle, rateChanged,
            sickDays, annualDays, noShowDays, rosterDayCount: rosterDates.size,
            discrepancy, notes };
+}
+
+// Annual leave policy: every barista gets 4 paid annual leave days per calendar
+// month; each approved annual leave day beyond the 4th in that month deducts one
+// full day's salary (monthly salary ÷ 30). Returns per-day counts for `month`
+// (YYYY-MM) plus the deduction amount at the given salary.
+function annualLeaveOverage(uid, month, salary) {
+  const FREE_DAYS = 4;
+  const toDate = s => { const [yy, mm, dd] = s.split("-").map(Number); return new Date(yy, mm - 1, dd); };
+  const iso    = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  let usedDays = 0;
+  for (const lv of (state.leaves || [])) {
+    if (lv.user_id !== uid || lv.status !== "approved" || lv.type !== "annual") continue;
+    if (!lv.from_date || !lv.to_date) continue;
+    for (let d = toDate(lv.from_date), end = toDate(lv.to_date); d <= end; d.setDate(d.getDate() + 1)) {
+      if (iso(d).slice(0, 7) === month) usedDays++;
+    }
+  }
+  const excessDays = Math.max(0, usedDays - FREE_DAYS);
+  const amount = Math.round((Number(salary) || 0) / 30 * excessDays * 100) / 100;
+  return { freeDays: FREE_DAYS, usedDays, excessDays, amount };
 }
 
 function calcHBBaseSalary(month) {
@@ -16966,6 +17124,9 @@ routes.handbook = function (u) {
         { type: "subheader", text: "Automatic Salary Deduction Tiers" },
         { type: "para", text: "Applied automatically the moment your stamp is uploaded. Each deduction is a share of one day's pay (monthly salary ÷ 30), so the EGP amount scales with your own salary." },
         { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "No stamp at all for an assigned morning shift: 3 days deducted (applied when management runs the missing-stamp check).", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a morning shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points."] },
+        { type: "subheader", text: "Other Penalties" },
+        { type: "para", text: "Logged manually by the owner or head barista from the Penalties screen — same ½-day-of-salary math as above (monthly salary ÷ 30 × 0.5)." },
+        { type: "bullets", items: ["Not following the rules, or not updating the app/site as required: ½ day deducted.", "Hygiene or uniform violation: ½ day deducted.", "No stamp (no show), logged manually rather than by the automatic missing-stamp check: 3 days deducted.", "Repeat-offender rule: from your 2nd \"no show\" this month onward, every further \"no show\" that month is doubled. Separately, from your 2nd conduct penalty (rules/site, hygiene, or uniform) this month onward, every further conduct penalty that month is doubled."] },
         { type: "subheader", text: "Punctuality KPI Impact" },
         { type: "para", text: "Separate from the salary deduction. Your Punctuality KPI starts at 100 each month and each morning shift adjusts it: 30+ min early = +10 pts · 15–30 min early = +5 pts · on time or within the 10-min grace = 0 · 11–120 min late = −20 pts · more than 120 min late = −50 pts · no stamp = −100 pts · covering an unassigned shift = +50 pts. If the deductions push your Punctuality score below 0, the overflow is taken off your overall KPI total." },
         { type: "subheader", text: "Notifications" },
@@ -16980,6 +17141,9 @@ routes.handbook = function (u) {
         { type: "subheader", text: "شرائح الخصم التلقائي من الراتب" },
         { type: "para", text: "تُطبَّق تلقائياً لحظة رفع البصمة. كل خصم هو جزء من أجر يوم واحد (الراتب الشهري ÷ 30)، فيتناسب المبلغ مع راتبك أنت." },
         { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك: خصم 3 أيام (يُطبَّق عند تشغيل الإدارة لفحص البصمات المفقودة).", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت صباحي غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط."] },
+        { type: "subheader", text: "خصومات أخرى" },
+        { type: "para", text: "يسجّلها المالك أو رئيس البريستا يدوياً من شاشة الخصومات — بنفس حساب نصف يوم من الراتب (الراتب الشهري ÷ 30 × 0.5)." },
+        { type: "bullets", items: ["عدم الالتزام بالقواعد، أو عدم تحديث التطبيق/الموقع كما هو مطلوب: خصم نصف يوم.", "مخالفة النظافة الشخصية أو الزي الموحد: خصم نصف يوم.", "غياب بدون بصمة (no show) مُسجَّل يدوياً وليس عبر فحص البصمات المفقودة التلقائي: خصم 3 أيام.", "قاعدة التكرار: من الغياب بدون بصمة الثاني في نفس الشهر فصاعداً، يُضاعَف كل خصم غياب لاحق في ذلك الشهر. وبشكل منفصل، من خصم السلوك الثاني (قواعد/موقع، نظافة، أو زي) في نفس الشهر فصاعداً، يُضاعَف كل خصم سلوك لاحق في ذلك الشهر."] },
         { type: "subheader", text: "تأثير مؤشر الانضباط" },
         { type: "para", text: "منفصل عن خصم الراتب. يبدأ مؤشر الانضباط من 100 كل شهر ويعدّله كل شيفت صباحي: مبكر 30 دقيقة أو أكثر = +10 · مبكر 15–30 دقيقة = +5 · في الموعد أو ضمن سماح الـ10 دقائق = 0 · تأخر 11–120 دقيقة = −20 · تأخر أكثر من 120 دقيقة = −50 · بدون بصمة = −100 · تغطية شيفت غير مخصص = +50. إذا دفعت الخصومات درجتك تحت الصفر، يُخصم الفائض من إجمالي مؤشر الأداء." },
         { type: "subheader", text: "الإشعارات" },
@@ -17101,6 +17265,13 @@ routes.handbook = function (u) {
         { type: "subheader", text: "Staff HR — Management View" },
         { type: "para", text: "Owners, accountants, and head baristas can access the Staff HR view showing the complete payroll summary for all active staff:" },
         { type: "bullets", items: ["A summary row: Total Active Staff, Total Payroll, Total Penalties, Total Overtime for the selected month.", "A full table: Name, Role, Base Salary, Overtime, Penalties, Loans, Net Due, KPI Score, Leave Days for every barista.", "A grand total row summing all payroll columns across the team.", "Clickable rows to drill into any individual barista's My HR view.", "Month navigation to review any previous payroll period."] },
+        { type: "subheader", text: "Annual Leave Policy" },
+        { type: "bullets", items: [
+          "Every barista gets <strong>4 paid annual leave days per calendar month</strong>.",
+          "Any approved annual leave day beyond the 4th in that same calendar month is unpaid — <strong>one full day's salary is deducted automatically</strong> from that month's payroll (daily rate = monthly salary ÷ 30) for every day past the 4th.",
+          "The free-day count resets at the start of each calendar month and does not carry over or accumulate.",
+          "Sick leave is separate and unaffected by this rule — it is auto-approved instantly with a ¼-day deduction per sick day, as recorded in HR.",
+        ] },
         { type: "subheader", text: "Payroll Cycle" },
         { type: "para", text: "Payroll is calculated monthly. All deductions, overtime entries, and loan repayments are recorded throughout the month in the Operations App. The final net due figure is locked at the end of the month. Disputes must be raised with the branch manager within seven days of month-end." },
       ],
@@ -17113,6 +17284,13 @@ routes.handbook = function (u) {
         { type: "subheader", text: "موارد البشرية للطاقم — عرض الإدارة" },
         { type: "para", text: "يمكن للملاك والمحاسبين ورؤساء البريستا الوصول إلى عرض الموارد البشرية للطاقم الذي يعرض ملخص الرواتب الكامل لجميع الموظفين النشطين:" },
         { type: "bullets", items: ["صف ملخص: إجمالي الموظفين النشطين، إجمالي الرواتب، إجمالي العقوبات، إجمالي العمل الإضافي للشهر المحدد.", "جدول كامل: الاسم، الدور، الراتب الأساسي، العمل الإضافي، العقوبات، القروض، الصافي المستحق، درجة الأداء، أيام الإجازة لكل بريستا.", "صف الإجمالي الكلي يجمع جميع أعمدة الرواتب للفريق.", "صفوف قابلة للنقر للدخول إلى عرض الموارد البشرية لأي بريستا بعينه.", "التنقل بين الأشهر لمراجعة أي فترة رواتب سابقة."] },
+        { type: "subheader", text: "سياسة الإجازة السنوية" },
+        { type: "bullets", items: [
+          "يحصل كل بريستا على <strong>4 أيام إجازة سنوية مدفوعة لكل شهر ميلادي</strong>.",
+          "أي يوم إجازة سنوية معتمد بعد اليوم الرابع في نفس الشهر يكون بدون أجر — <strong>يُخصم يوم كامل من الراتب تلقائياً</strong> من رواتب ذلك الشهر (أجر اليوم = الراتب الشهري ÷ 30) عن كل يوم بعد الرابع.",
+          "يُعاد ضبط عدد الأيام المجانية في بداية كل شهر ميلادي ولا يتراكم أو يُرحَّل.",
+          "الإجازة المرضية منفصلة ولا تتأثر بهذه القاعدة — تُعتمد فوراً مع خصم ربع يوم لكل يوم مرضي، كما هو مسجّل في الموارد البشرية.",
+        ] },
         { type: "subheader", text: "دورة الرواتب" },
         { type: "para", text: "يُحسب الراتب شهرياً. جميع الخصومات وإدخالات العمل الإضافي وأقساط القرض مسجّلة طوال الشهر في تطبيق العمليات. يُقفَل الصافي المستحق النهائي في نهاية الشهر. يجب تقديم الاعتراضات لمدير الفرع خلال سبعة أيام من نهاية الشهر." },
       ]
@@ -18035,6 +18213,12 @@ function openSheet(content) {
 function closeSheet() { $("#modal-root").innerHTML = ""; }
 function openPrompt({ title, fields, onSubmit, extraButtons }) {
   const vals = {}; for (const f of fields) vals[f.key] = f.value;
+  const fieldEls = {};
+  function setField(key, value) {
+    vals[key] = value;
+    const ref = fieldEls[key];
+    if (ref) ref.value = String(value);
+  }
   const body = el("div", {}, [ el("h2", {}, title) ]);
   for (const f of fields) {
     body.appendChild(el("label", {}, f.label));
@@ -18069,11 +18253,16 @@ function openPrompt({ title, fields, onSubmit, extraButtons }) {
         if (String(opt.value != null ? opt.value : opt) === String(f.value)) o.selected = true;
         sel.appendChild(o);
       }
-      sel.addEventListener("change", () => vals[f.key] = sel.value);
+      sel.addEventListener("change", () => {
+        vals[f.key] = sel.value;
+        if (typeof f.onChange === "function") f.onChange(sel.value, vals, setField);
+      });
+      fieldEls[f.key] = sel;
       body.appendChild(sel);
     } else {
       const i = el("input", { type: f.type || "text", value: String(f.value ?? "") });
       i.addEventListener("input", () => vals[f.key] = i.value);
+      fieldEls[f.key] = i;
       body.appendChild(i);
     }
   }
@@ -18281,6 +18470,7 @@ routes.app_guide = function (u) {
         "Write a short <strong>reason</strong> (optional).",
         "<strong>Sick Leave:</strong> tap Submit — the leave is approved instantly and a ¼-day salary deduction is applied automatically per sick day. No approval needed.",
         "<strong>Annual Leave:</strong> tap Submit — a notification email is sent to the head barista. Leave is not confirmed until you receive approval.",
+        "<strong>4 free days per month:</strong> you get 4 paid annual leave days every calendar month. Any approved annual leave day after the 4th in that same month deducts one full day's salary automatically.",
         "You can track your request status and cancel it in <strong>My Leaves</strong>.",
       ],
       ar_steps: [
@@ -18290,6 +18480,7 @@ routes.app_guide = function (u) {
         "اكتب <strong>سبباً</strong> مختصراً (اختياري).",
         "<strong>الإجازة المرضية:</strong> اضغط إرسال — تُعتمد فوراً وتُطبَّق خصومة ربع يوم تلقائياً عن كل يوم مرضي. لا تحتاج موافقة.",
         "<strong>الإجازة السنوية:</strong> اضغط إرسال — يُرسل إشعار بريد إلكتروني لرئيس البريستا. الإجازة غير مؤكدة حتى تحصل على موافقة.",
+        "<strong>4 أيام مجانية شهرياً:</strong> تحصل على 4 أيام إجازة سنوية مدفوعة كل شهر ميلادي. أي يوم إجازة سنوية معتمد بعد اليوم الرابع في نفس الشهر يُخصم منه يوم كامل من الراتب تلقائياً.",
         "يمكنك متابعة حالة طلبك وإلغاؤه في <strong>إجازاتي</strong>.",
       ],
     },
@@ -20647,7 +20838,9 @@ routes.my_hr = function(u, params) {
     const otSum    = otList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const otHrs    = otList.reduce((s, r) => s + (Number(r.hours) || 0), 0);
     const loanSum  = loanList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-    const netDue   = Math.max(0, salary + otSum - penSum - loanSum);
+    const annualOver = annualLeaveOverage(uid, selMonth, salary);
+    const annualSum   = annualOver.amount;
+    const netDue   = Math.max(0, salary + otSum - penSum - loanSum - annualSum);
     const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
 
     // Section A — Pay Summary
@@ -20659,6 +20852,12 @@ routes.my_hr = function(u, params) {
       [isAR ? "الخصومات" : "Penalties", "−" + money(penSum), penSum > 0 ? "var(--bad)" : ""],
       [isAR ? "سلف" : "Loans", "−" + money(loanSum), loanSum > 0 ? "var(--warn)" : ""],
     ];
+    if (annualSum > 0) {
+      rows.push([
+        isAR ? `تجاوز الإجازة السنوية (${annualOver.excessDays} يوم بعد ${annualOver.freeDays} مجانية)` : `Annual leave overage (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)`,
+        "−" + money(annualSum), "var(--bad)",
+      ]);
+    }
     rows.forEach(([k, v, c]) => {
       const row = el("div", { class: "kv" });
       row.appendChild(el("div", { class: "k" }, k));
@@ -20792,6 +20991,8 @@ routes.my_hr = function(u, params) {
     [
       [isAR ? `إجازة سنوية مستخدمة (${thisYear})` : `Annual used (${thisYear})`, annualUsed + (isAR ? " يوم" : " days")],
       [isAR ? `إجازة مرضية (${thisYear})` : `Sick used (${thisYear})`, sickUsed + (isAR ? " يوم" : " days")],
+      [isAR ? `أيام مجانية متبقية هذا الشهر (${selMonth})` : `Free days left this month (${selMonth})`,
+        Math.max(0, annualOver.freeDays - annualOver.usedDays) + (isAR ? " يوم" : " days")],
     ].forEach(([k, v]) => {
       const c = el("div", { class: "card", style: { padding: "10px", textAlign: "center" } });
       c.appendChild(el("div", { class: "muted", style: { fontSize: "11px", marginBottom: "4px" } }, k));
@@ -20895,7 +21096,9 @@ routes.staff_hr = function(u) {
       const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
-      const netDue  = Math.max(0, salary + otSum - penSum - loanSum);
+      const annualOver = annualLeaveOverage(p.id, selMonth, salary);
+      const annualSum  = annualOver.amount;
+      const netDue  = Math.max(0, salary + otSum - penSum - loanSum - annualSum);
       const scores  = kpiGetUserScores(p.id);
       const kpiTotal = scores ? kpiCalcTotal(scores) : 0;
       const thisYear = selMonth.slice(0, 4);
@@ -20905,7 +21108,7 @@ routes.staff_hr = function(u) {
       totalPayroll += netDue;
       totalPen     += penSum;
       totalOT      += otSum;
-      return { p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays };
+      return { p, salary, penSum, otSum, loanSum, annualSum, annualOver, netDue, kpiTotal, lvDays };
     });
 
     const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
@@ -20938,7 +21141,7 @@ routes.staff_hr = function(u) {
     ])]));
     const tb = el("tbody", {});
     let grandBase = 0, grandOT = 0, grandPen = 0, grandLoan = 0, grandNet = 0;
-    staffData.forEach(({ p, salary, penSum, otSum, loanSum, netDue, kpiTotal, lvDays }) => {
+    staffData.forEach(({ p, salary, penSum, otSum, loanSum, annualSum, annualOver, netDue, kpiTotal, lvDays }) => {
       grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
       const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
       const archivedStyle = p.active ? "" : "opacity:.55;font-style:italic";
@@ -20951,7 +21154,10 @@ routes.staff_hr = function(u) {
         el("td", { class: "num", style: { color: loanSum ? "var(--warn)" : "" } }, loanSum ? "−" + money(loanSum) : "—"),
         el("td", { class: "num", style: { fontWeight: "700", color: netColor } }, money(netDue)),
         el("td", { style: { textAlign: "center", fontSize: "12px", fontWeight: "700", color: kpiScoreColor(kpiTotal) } }, kpiTotal ? kpiGradeEn(kpiTotal).split(" ")[0] + " " + kpiTotal.toFixed(0) : "—"),
-        el("td", { style: { textAlign: "center" } }, lvDays ? String(lvDays) + "d" : "—"),
+        el("td", { style: { textAlign: "center" } }, [
+          el("div", {}, lvDays ? String(lvDays) + "d" : "—"),
+          annualSum > 0 ? el("div", { class: "muted small", style: { color: "var(--bad)" } }, `−${money(annualSum)}`) : null,
+        ].filter(Boolean)),
       ]);
       tb.appendChild(tr);
     });
