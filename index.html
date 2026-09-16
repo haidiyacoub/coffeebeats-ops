@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260916-386 -->
+<!-- CB_BUILD:20260916-397 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260916-386";
+  var BUILD = "20260916-397";
   (function() {
     function checkFresh() {
       try {
@@ -16183,13 +16183,18 @@ routes.leave_new = function (u) {
   const form = el("div", { class: "card", style: { marginTop: "12px" } });
 
   // Who is this leave for?
-  let targetUserId = u.id;
+  // Default to the current user's own row if they appear in the staff list
+  // (e.g. a head barista), otherwise the first staff member — this MUST match
+  // whichever <option> the browser actually pre-selects below, or a manager
+  // who submits without touching the dropdown ends up filing the leave under
+  // their own name instead of the barista shown on screen.
+  let targetUserId = staff.some(s => s.id === u.id) ? u.id : (staff[0] ? staff[0].id : u.id);
   if (canRequestForOthers) {
     form.appendChild(el("label", {}, T("Leave for (barista)","الإجازة لـ (بريستا)")));
     const staffSel = el("select", {});
     for (const s of staff) {
       const o = el("option", { value: s.id }, s.name);
-      if (s.id === u.id) o.selected = true;
+      if (s.id === targetUserId) o.selected = true;
       staffSel.appendChild(o);
     }
     staffSel.addEventListener("change", () => { targetUserId = staffSel.value; });
@@ -16622,19 +16627,28 @@ routes.leave_list = function (u) {
         ownerRow.appendChild(el("button", {
           class: "btn ghost",
           onClick: () => {
+            const reassignOptions = state.users
+              .filter(x => (x.role === "barista" || x.role === "head_barista") && (x.active || x.id === leave.user_id))
+              .map(x => ({ label: x.name, value: x.id }));
             openPrompt({
               title: T("Edit leave request","تعديل طلب الإجازة"),
               fields: [
+                { key: "user_id",   label: "Barista (reassign if it was filed under the wrong name)", type: "select", options: reassignOptions, value: leave.user_id },
                 { key: "from_date", label: "From date", type: "date", value: leave.from_date },
                 { key: "to_date",   label: "To date", type: "date", value: leave.to_date },
                 { key: "type",      label: "Type (annual/sick)", type: "text", value: leave.type },
                 { key: "reason",    label: "Reason", type: "text", value: leave.reason || "" },
               ],
               onSubmit: (vals) => {
+                if (vals.user_id && vals.user_id !== leave.user_id) {
+                  const newPerson = state.users.find(x => x.id === vals.user_id);
+                  if (newPerson) { leave.user_id = newPerson.id; leave.user_name = newPerson.name; }
+                }
                 leave.from_date = vals.from_date || leave.from_date;
                 leave.to_date = vals.to_date || leave.to_date;
                 leave.type = vals.type || leave.type;
                 leave.reason = vals.reason || "";
+                leave.updated_at = now();
                 saveState(); toast(T("Leave request updated","تم تحديث طلب الإجازة")); draw();
               }
             });
@@ -16714,28 +16728,50 @@ routes.leave_list = function (u) {
         const own = approved.filter(l => l.user_id === p.id);
         const annualDays = own.filter(l => l.type === "annual").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0);
         const sickDays   = own.filter(l => l.type === "sick").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0);
-        return { name: p.name, annualDays, sickDays, totalDays: annualDays + sickDays };
+        const salary = getSalaryForMonth(p.id, summaryMonth);
+        const over = annualLeaveOverage(p.id, summaryMonth, salary); // { freeDays, usedDays, excessDays, amount }
+        return { name: p.name, annualDays, sickDays, totalDays: annualDays + sickDays,
+                 freeDays: over.freeDays, excessDays: over.excessDays, deduction: over.amount };
       }).sort((a,b) => b.totalDays - a.totalDays || a.name.localeCompare(b.name));
 
       const grandTotal = rows.reduce((s,r) => s + r.totalDays, 0);
-      summaryBody.appendChild(el("div", { class: "card", style: { marginBottom: "12px" } }, [
+      const grandDeduction = rows.reduce((s,r) => s + r.deduction, 0);
+      const summaryCard = el("div", { class: "card", style: { marginBottom: "12px" } }, [
         el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } },
           T(`Total leave days — ${fmtYm(summaryMonth)}`, `إجمالي أيام الإجازة — ${fmtYm(summaryMonth)}`)),
         el("div", { style: { fontSize: "26px", fontWeight: "700" } }, `${grandTotal} ${grandTotal === 1 ? T("day","يوم") : T("days","أيام")}`),
-      ]));
+      ]);
+      if (grandDeduction > 0) {
+        summaryCard.appendChild(el("div", { class: "small", style: { marginTop: "6px", color: "var(--bad)", fontWeight: "700" } },
+          T(`⚠ ${money(grandDeduction)} unpaid this month — annual leave beyond each barista's 4 free days`,
+            `⚠ ${money(grandDeduction)} بدون أجر هذا الشهر — إجازة سنوية تتجاوز 4 أيام مجانية لكل بريستا`)));
+      }
+      summaryBody.appendChild(summaryCard);
 
       const list = el("div", { class: "card" });
       if (rows.every(r => r.totalDays === 0)) {
         list.appendChild(el("div", { class: "muted small" }, T("No leave days taken this month.","لا توجد أيام إجازة مأخوذة هذا الشهر.")));
       } else {
         for (const r of rows) {
+          const annualLine = el("div", { class: "muted small" });
+          if (r.excessDays > 0) {
+            const freeUsed = r.annualDays - r.excessDays;
+            annualLine.appendChild(el("span", {}, T(`🌴 ${freeUsed} of ${r.freeDays} free`, `🌴 ${freeUsed} من ${r.freeDays} مجانية`)));
+            annualLine.appendChild(el("span", {}, " + "));
+            annualLine.appendChild(el("span", { style: { color: "var(--bad)", fontWeight: "700" } },
+              T(`${r.excessDays} unpaid (−${money(r.deduction)})`, `${r.excessDays} بدون أجر (−${money(r.deduction)})`)));
+          } else {
+            annualLine.appendChild(el("span", {}, T(`🌴 ${r.annualDays} of ${r.freeDays} free used`, `🌴 ${r.annualDays} من ${r.freeDays} مجانية مستخدمة`)));
+          }
+          annualLine.appendChild(el("span", {}, T(` · 🤒 ${r.sickDays} sick`, ` · 🤒 ${r.sickDays} مرضية`)));
+
           list.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
             el("div", { class: "k" }, [
               el("div", {}, r.name),
-              el("div", { class: "muted small" },
-                T(`🌴 ${r.annualDays} annual · 🤒 ${r.sickDays} sick`, `🌴 ${r.annualDays} سنوية · 🤒 ${r.sickDays} مرضية`)),
+              annualLine,
             ]),
-            el("div", { class: "v" }, `${r.totalDays} ${r.totalDays === 1 ? T("day","يوم") : T("days","أيام")}`),
+            el("div", { class: "v", style: r.excessDays > 0 ? { color: "var(--bad)", fontWeight: "700" } : {} },
+              `${r.totalDays} ${r.totalDays === 1 ? T("day","يوم") : T("days","أيام")}`),
           ]));
         }
       }
