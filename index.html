@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260916-434 -->
+<!-- CB_BUILD:20260918-645 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260916-434";
+  var BUILD = "20260918-645";
   (function() {
     function checkFresh() {
       try {
@@ -1660,7 +1660,20 @@ function _groupByMonth(arr, keyFn) {
 // row whose branch this device is NOT writing, and append our local rows on top.
 // This is what stops "laptop pushes Zawya June and wipes Maadi June" — the exact
 // data-loss seen in the field.
-async function _mergeShardWrite(writes, docId, arrayName, localRows, affectedBranches) {
+//
+// mergeById (used by _syncMonthShards for shift_closes/cleaning_logs/signin_stamps/
+// snapshots — per-record append-only logs, each row carrying a stable uuid `id`):
+// wholesale "kept = remote rows NOT in localBranches, then append local rows" also
+// silently wiped remote rows for a branch this device DOES own whenever this device's
+// local copy of that branch/month was incomplete — e.g. a head barista's phone that
+// missed a pull, or two baristas at the same branch submitting shift closes from
+// different devices before either has pulled the other's entry. The second push would
+// overwrite the first entry clean off the server. Root cause of "not all shift-close
+// entries submitted show up — entries get lost in sync". For these arrays we instead
+// union-merge by id within the branches we own (last-edit-wins per id, via
+// _mergeArrays) so a record neither side deleted always survives, then strip any
+// locally-tombstoned ids so a genuine delete still propagates (see _tombstoneSet).
+async function _mergeShardWrite(writes, docId, arrayName, localRows, affectedBranches, opts) {
   // Normally the set of branches this device is authoritative for is inferred from
   // localRows. But when a branch+month is deleted down to ZERO local rows, localRows is
   // empty and that inference silently breaks — an empty Set matches nothing, so `kept`
@@ -1669,13 +1682,23 @@ async function _mergeShardWrite(writes, docId, arrayName, localRows, affectedBra
   // caller (e.g. the sales-shard wipe queue) state explicitly which branch(es) it's
   // authoritative for even when localRows can't carry that information anymore.
   const localBranches = affectedBranches ? new Set(affectedBranches) : new Set(localRows.map(r => r.branch));
-  let kept = [];
   // A failed read must ABORT (throw), never fall back to local-only — otherwise a transient
   // read blip drops the OTHER branch's rows that live in the same month shard.
   const snap = await db.collection("state").doc(docId).get();
   const ex = snap.exists ? snap.data()[arrayName] : null;
-  if (Array.isArray(ex)) kept = ex.filter(r => !localBranches.has(r.branch));
-  const doc = _sanitizeForFirestore({ [arrayName]: [...kept, ...localRows] });
+  const remoteRows = Array.isArray(ex) ? ex : [];
+  let merged;
+  if (opts && opts.mergeById) {
+    const remoteOwn   = remoteRows.filter(r => localBranches.has(r.branch));
+    const remoteOther = remoteRows.filter(r => !localBranches.has(r.branch));
+    merged = [...remoteOther, ..._mergeArrays(localRows, remoteOwn)];
+    const tomb = _tombstoneSet();
+    if (tomb.size) merged = _stripTomb(merged, tomb);
+  } else {
+    const kept = remoteRows.filter(r => !localBranches.has(r.branch));
+    merged = [...kept, ...localRows];
+  }
+  const doc = _sanitizeForFirestore({ [arrayName]: merged });
   const bytes = JSON.stringify(doc).length;
   if (bytes > 800_000) toast(`⚠️ ${arrayName} shard ${docId} is ${(bytes / 1024).toFixed(0)} KB — approaching limit`, "error");
   writes.push(db.collection("state").doc(docId).set(doc).catch(err => { err._chunk = docId; throw err; }));
@@ -1800,9 +1823,11 @@ async function _syncMonthShards() {
       const sigKey = `${cfg.prefix}__${m}`;
       if (!_monthChanged(sigKey, byMonth[m])) continue;
       dirty.push([sigKey, byMonth[m]]);
-      // Merge by branch-within-month, same as sales, so a device that only holds one
-      // branch's logs can't wipe another branch's logs in the same month shard.
-      shardOps.push(_mergeShardWrite(writes, `${cfg.prefix}__${m}`, arr, byMonth[m]));
+      // Union-merge by record id within each branch (see _mergeShardWrite's mergeById
+      // path) — these are per-record logs with a stable uuid `id`, so unlike the sales
+      // bulk-upload shards, a wholesale branch replace can silently drop a co-worker's
+      // entry this device never pulled.
+      shardOps.push(_mergeShardWrite(writes, `${cfg.prefix}__${m}`, arr, byMonth[m], undefined, { mergeById: true }));
     }
     mergedIdx[arr] = [...new Set([...(remoteIdx[arr] || []), ...months])];
   }
@@ -5634,6 +5659,27 @@ routes.shift_close_list = function (u) {
     monthInput, allTimeBtn,
   ]));
 
+  // Branch tabs — lets a head barista or owner view one branch's shift closes alone
+  // instead of the combined feed. Only shown when the user can actually see more than
+  // one branch (owner/accountant see both; everyone else only their assigned branches).
+  const viewableBranches = (u.role === "owner" || u.role === "accountant") ? ["zawya", "maadi"] : (u.branches || []);
+  let branchFilter = "all";
+  if (viewableBranches.length > 1) {
+    const branchTabs = el("div", { class: "tabs", style: { marginTop: "4px" } });
+    const paintBranchTabs = () => {
+      branchTabs.innerHTML = "";
+      const opts = [["all", T("All branches", "كل الفروع")], ...viewableBranches.map(b => [b, b[0].toUpperCase() + b.slice(1)])];
+      for (const [val, label] of opts) {
+        branchTabs.appendChild(el("div", {
+          class: "tab" + (val === branchFilter ? " on" : ""),
+          onClick: () => { branchFilter = val; paintBranchTabs(); draw(); },
+        }, label));
+      }
+    };
+    paintBranchTabs();
+    wrap.appendChild(branchTabs);
+  }
+
   const listWrap = el("div", {});
   wrap.appendChild(listWrap);
   draw();
@@ -5649,6 +5695,7 @@ routes.shift_close_list = function (u) {
     const mine = state.shift_closes
       .filter(c => u.role === "owner" || u.role === "accountant" || c.by === u.id || (u.branches||[]).includes(c.branch))
       .filter(c => !month || (c.date || "").slice(0, 7) === month)
+      .filter(c => branchFilter === "all" || c.branch === branchFilter)
       .sort((a, b) => b.at.localeCompare(a.at));
 
     const list = el("div", { class: "list" });
