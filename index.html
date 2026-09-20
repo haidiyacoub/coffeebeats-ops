@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260918-645 -->
+<!-- CB_BUILD:20260920-911 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260918-645";
+  var BUILD = "20260920-911";
   (function() {
     function checkFresh() {
       try {
@@ -5696,7 +5696,7 @@ routes.shift_close_list = function (u) {
       .filter(c => u.role === "owner" || u.role === "accountant" || c.by === u.id || (u.branches||[]).includes(c.branch))
       .filter(c => !month || (c.date || "").slice(0, 7) === month)
       .filter(c => branchFilter === "all" || c.branch === branchFilter)
-      .sort((a, b) => b.at.localeCompare(a.at));
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.at.localeCompare(a.at));
 
     const list = el("div", { class: "list" });
     if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, T("No shift closes yet.","لا توجد إغلاقات شيفت بعد.")));
@@ -16072,9 +16072,14 @@ routes.signin_stamp_list = function (u) {
       const minStr = status === "early" ? T(`${Math.abs(minsLate)} min early`, `مبكر ${Math.abs(minsLate)} دقيقة`)
                    : minsLate > 0 ? T(`${minsLate} min late`, `متأخر ${minsLate} دقيقة`)
                    : T("on time","في الموعد");
-      list.appendChild(el("div", { class: "row", style: { background: meta.bg, borderLeft: `4px solid ${meta.color}` } }, [
+      const hasPhoto = (s.photo_ids && s.photo_ids.length) || s.photo_id;
+      list.appendChild(el("div", {
+        class: "row",
+        style: { background: meta.bg, borderLeft: `4px solid ${meta.color}`, cursor: hasPhoto ? "pointer" : "default" },
+        ...(hasPhoto ? { onClick: () => viewSigninStampPhotos(s) } : {}),
+      }, [
         el("div", { class: "grow" }, [
-          el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, s.is_test ? testBadge() : null]),
+          el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
           el("div", { class: "sub" }, `${fmtDate(s.at)} · ${minStr}${s.note ? " · " + s.note : ""}`),
         ]),
         badge,
@@ -16089,6 +16094,52 @@ routes.signin_stamp_list = function (u) {
   ]));
   return wrap;
 };
+
+// Opens a bottom sheet showing every photo attached to a sign-in stamp.
+// Tries the local IndexedDB blob first (instant, works offline on the device
+// that captured it), then falls back to the synced cloud URL so the photo is
+// still viewable from any other device.
+function viewSigninStampPhotos(s) {
+  const ids   = (s.photo_ids && s.photo_ids.length) ? s.photo_ids : (s.photo_id ? [s.photo_id] : []);
+  const names = (s.photo_names && s.photo_names.length) ? s.photo_names : (s.photo_name ? [s.photo_name] : []);
+  const urls  = s.drive_ids || [];
+
+  const body = el("div", {});
+  body.appendChild(el("h2", {}, T("Clock-in photo","صورة تسجيل الحضور")));
+  body.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    `${s.by_name} · ${s.branch} · ${fmtDate(s.at)}`));
+
+  if (!ids.length) {
+    body.appendChild(el("div", { class: "muted" }, T("No photo attached to this stamp.","لا توجد صورة مرفقة بهذه البصمة.")));
+  } else {
+    ids.forEach((id, i) => {
+      const cell = el("div", { style: { marginBottom: "14px" } });
+      const status = el("div", { class: "muted small", style: { marginBottom: "4px" } }, T("Loading photo…","جارٍ تحميل الصورة…"));
+      cell.appendChild(status);
+      body.appendChild(cell);
+
+      const showImg = (src) => {
+        status.remove();
+        cell.appendChild(el("img", {
+          src,
+          style: { width: "100%", maxHeight: "70vh", objectFit: "contain", borderRadius: "10px", border: "1px solid var(--border)", background: "#000" },
+        }));
+        if (names[i]) cell.appendChild(el("div", { class: "muted small", style: { marginTop: "4px" } }, names[i]));
+      };
+
+      IDB.get(id).then(blob => {
+        if (blob) { showImg(URL.createObjectURL(blob)); return; }
+        if (urls[i]) { showImg(urls[i]); return; }
+        status.textContent = T("Photo not available on this device.","الصورة غير متاحة على هذا الجهاز.");
+      }).catch(() => {
+        if (urls[i]) { showImg(urls[i]); return; }
+        status.textContent = T("Photo not available on this device.","الصورة غير متاحة على هذا الجهاز.");
+      });
+    });
+  }
+
+  openSheet(body);
+}
 
 // ==============================================================
 // Barista Handbook — dynamic recipe store in state
