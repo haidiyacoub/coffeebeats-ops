@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260920-911 -->
+<!-- CB_BUILD:20260922-012 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260920-911";
+  var BUILD = "20260922-012";
   (function() {
     function checkFresh() {
       try {
@@ -15799,14 +15799,10 @@ routes.signin_stamp_new = function (u) {
         for (let i = 0; i < photoBlobs.length; i++) {
           try { await IDB.put(photoIds[i], photoBlobs[i]); } catch (e) { console.warn(e); }
         }
-        // Pre-compute early_bonus before pushing so it's in the record
-        const _stampSubmitTime = new Date(s.at);
-        const _stampTodayStr   = localISODate(_stampSubmitTime);
-        const _stampBot        = state.branch_opening_times || {};
-        const _stampOpenStr    = ((_stampBot[branch?.toLowerCase()] || {})["morning"])
-                                 || (branch?.toLowerCase() === "maadi" ? "10:00" : "12:00");
-        const _stampOpeningMs  = new Date(_stampTodayStr + "T" + _stampOpenStr + ":00").getTime();
-        const _stampMinsLate   = Math.round((_stampSubmitTime.getTime() - _stampOpeningMs) / 60000);
+        // Score against the time the clock photo was taken (EXIF), falling back to upload time.
+        const _photoTime       = await photoClockTime(photoBlobs, s.at);
+        const _clockAt         = _photoTime ? _photoTime.toISOString() : s.at;
+        const _stampMinsLate   = minsLateAt(branch, _clockAt);
         const _earlyBonus      = _stampMinsLate <= -15;
 
         state.signin_stamps.push({
@@ -15818,6 +15814,8 @@ routes.signin_stamp_new = function (u) {
           note: note.trim(),
           early_bonus: _earlyBonus,
           mins_late: _stampMinsLate,
+          clock_at: _clockAt,
+          clock_source: _photoTime ? "photo" : "upload",
           ...(isTestMode() ? { is_test: true } : {}),
         });
 
@@ -15859,12 +15857,7 @@ routes.signin_stamp_new = function (u) {
             return; // not today's assigned morning barista — no late penalty
           }
 
-          // Get morning opening time for this branch from the schedule config
-          const bot      = state.branch_opening_times || {};
-          const openStr  = ((bot[branch.toLowerCase()] || {})["morning"])
-                           || (branch.toLowerCase() === "maadi" ? "10:00" : "12:00");
-          const openingMs = new Date(todayStr + "T" + openStr + ":00").getTime();
-          const minsLate  = Math.round((submitTime.getTime() - openingMs) / 60000);
+          const minsLate  = _stampMinsLate; // photo capture time vs morning opening
 
           if (minsLate <= 10) return; // on time or within grace period (≤10 min)
 
@@ -15956,23 +15949,93 @@ routes.signin_stamp_new = function (u) {
   return wrap;
 };
 
-function _signinMinsLate(s) {
-  let minsLate = s.mins_late;
-  if (minsLate === undefined) {
-    try {
-      const branch  = (s.branch||"maadi").toLowerCase();
-      const bot     = state.branch_opening_times || {};
-      const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
-      const dateStr = localISODate(new Date(s.at));
-      const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
-      minsLate = Math.round((new Date(s.at).getTime() - openMs) / 60000);
-    } catch(e) { minsLate = 0; }
-  }
-  return minsLate;
+// Morning opening time ("HH:MM") for a branch — Settings → Attendance Opening Times.
+function branchMorningOpen(branch) {
+  const b = (branch || "maadi").toLowerCase();
+  return ((state.branch_opening_times || {})[b] || {}).morning || (b === "maadi" ? "10:00" : "12:00");
 }
+// Minutes between a branch's morning opening and `iso` on that same local day (negative = early).
+function minsLateAt(branch, iso) {
+  const t = new Date(iso);
+  const openMs = new Date(localISODate(t) + "T" + branchMorningOpen(branch) + ":00").getTime();
+  return Math.round((t.getTime() - openMs) / 60000);
+}
+// When a stamp counts as clocked in: the photo's capture time if it could be read, else upload time.
+function stampClockTime(s) { return s.clock_at || s.at; }
+
+// Reads the capture time out of a JPEG's EXIF (DateTimeOriginal → DateTimeDigitized → DateTime).
+// Returns a Date or null. No timezone in EXIF unless OffsetTimeOriginal is present, so it's
+// read as device-local time — the phone taking the photo is in the café.
+async function exifTakenAt(blob) {
+  try {
+    const buf = await blob.slice(0, 256 * 1024).arrayBuffer();
+    const v = new DataView(buf);
+    if (v.getUint16(0) !== 0xFFD8) return null;
+    let off = 2;
+    while (off + 4 < v.byteLength) {
+      const marker = v.getUint16(off);
+      const len = v.getUint16(off + 2);
+      if (marker === 0xFFE1 && v.getUint32(off + 4) === 0x45786966) { // "Exif"
+        const tiff = off + 10;
+        const le = v.getUint16(tiff) === 0x4949;
+        const u16 = p => v.getUint16(p, le), u32 = p => v.getUint32(p, le);
+        const readIfd = (ifdOff) => {
+          const out = {};
+          const n = u16(tiff + ifdOff);
+          for (let i = 0; i < n; i++) {
+            const e = tiff + ifdOff + 2 + i * 12;
+            const tag = u16(e), type = u16(e + 2), count = u32(e + 4);
+            if (tag === 0x8769) out.exifPtr = u32(e + 8);
+            else if (type === 2) {
+              const p = count > 4 ? tiff + u32(e + 8) : e + 8;
+              let str = "";
+              for (let k = 0; k < count - 1 && p + k < v.byteLength; k++) str += String.fromCharCode(v.getUint8(p + k));
+              out[tag] = str;
+            }
+          }
+          return out;
+        };
+        const ifd0 = readIfd(u32(tiff + 4));
+        const exif = ifd0.exifPtr ? readIfd(ifd0.exifPtr) : {};
+        const raw = exif[0x9003] || exif[0x9004] || ifd0[0x0132];
+        const m = raw && raw.match(/^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+        if (!m) return null;
+        const tz = exif[0x9011] && /^[+-]\d{2}:\d{2}$/.test(exif[0x9011]) ? exif[0x9011] : "";
+        const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${tz}`);
+        return isNaN(d) ? null : d;
+      }
+      if ((marker & 0xFF00) !== 0xFF00) break;
+      off += 2 + len;
+    }
+  } catch (e) {}
+  return null;
+}
+// Earliest usable capture time across a stamp's photos. A photo only counts if it was taken
+// on the same local day as the upload and not after it (small clock-skew allowance) — so an
+// old photo from another day can't be reused to look on time.
+async function photoClockTime(blobs, uploadIso) {
+  const up = new Date(uploadIso);
+  let best = null;
+  for (const b of blobs) {
+    if (!b) continue;
+    let d = await exifTakenAt(b);
+    if (!d && b.lastModified) d = new Date(b.lastModified);
+    if (!d || isNaN(d)) continue;
+    if (localISODate(d) !== localISODate(up)) continue;
+    if (d.getTime() > up.getTime() + 5 * 60000) continue;
+    if (!best || d < best) best = d;
+  }
+  return best;
+}
+
+function _signinMinsLate(s) {
+  if (s.mins_late !== undefined) return s.mins_late;
+  try { return minsLateAt(s.branch, stampClockTime(s)); } catch (e) { return 0; }
+}
+// Same thresholds as the salary deduction: ≤10 min late is the grace period.
 function _signinStatus(minsLate) {
   if (minsLate <= -15) return "early";
-  if (minsLate <= 15)  return "ontime";
+  if (minsLate <= 10)  return "ontime";
   if (minsLate <= 60)  return "half";
   if (minsLate <= 120) return "full";
   return "two";
@@ -15984,6 +16047,70 @@ const SIGNIN_STATUS_META = {
   full:   { color: "var(--bad)",  bg: "rgba(194,59,59,0.11)",  label: () => T("❌ 1 day","❌ يوم كامل") },
   two:    { color: "var(--bad)",  bg: "rgba(194,59,59,0.18)",  label: () => T("❌ 2 days","❌ يومان") },
 };
+
+// Re-scores stamps dated `fromDate` onward against the current opening times, using each
+// photo's capture time when readable (local blob first, then the cloud copy). Matching
+// auto late-penalties are re-tiered or removed; new penalties are never created here.
+// Returns human-readable change lines.
+async function rescoreSigninStamps(fromDate) {
+  const log = [];
+  const stamps = (state.signin_stamps || [])
+    .filter(s => localISODate(new Date(s.at)) >= fromDate)
+    .sort((a, b) => stampClockTime(a).localeCompare(stampClockTime(b)));
+  const stampedAt = now();
+  for (const s of stamps) {
+    const ids = (s.photo_ids && s.photo_ids.length) ? s.photo_ids : (s.photo_id ? [s.photo_id] : []);
+    const urls = s.drive_ids || [];
+    const blobs = [];
+    for (let i = 0; i < Math.max(ids.length, urls.length); i++) {
+      let b = null;
+      try { if (ids[i]) b = await IDB.get(ids[i]); } catch (e) {}
+      if (!b && urls[i]) { try { const r = await fetch(urls[i]); if (r.ok) b = await r.blob(); } catch (e) {} }
+      if (b) blobs.push(b);
+    }
+    // lastModified on a cloud-fetched blob is the download time, so only trust EXIF here.
+    let photo = null;
+    for (const b of blobs) {
+      const d = await exifTakenAt(b);
+      if (!d || localISODate(d) !== localISODate(new Date(s.at)) || d.getTime() > new Date(s.at).getTime() + 5 * 60000) continue;
+      if (!photo || d < photo) photo = d;
+    }
+    const clockAt = photo ? photo.toISOString() : stampClockTime(s);
+    const mins = minsLateAt(s.branch, clockAt);
+    if (mins !== s.mins_late || clockAt !== s.clock_at) {
+      log.push(`${s.by_name} · ${s.branch} · ${localISODate(new Date(s.at))}: ${s.mins_late ?? "?"} → ${mins} min${photo ? " (photo time)" : ""}`);
+      s.clock_at = clockAt;
+      s.clock_source = photo ? "photo" : (s.clock_source || "upload");
+      s.mins_late = mins;
+      s.early_bonus = mins <= -15;
+      s.last_edited_at = stampedAt;
+    }
+
+    const dateStr = localISODate(new Date(s.at));
+    const p = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === dateStr);
+    if (!p) continue;
+    if (mins <= 10) {
+      state.penalties = state.penalties.filter(x => x.id !== p.id);
+      state.deleted_penalties = [{ ...p, deleted_at: now(), deleted_by: currentUser()?.name || "?" }, ...(state.deleted_penalties || [])].slice(0, 20);
+      recordDeletion(p.id);
+      log.push(`   ↳ penalty removed (${p.barista}, ${money(p.amount)})`);
+      continue;
+    }
+    const kind = mins > 120 ? "two_days" : mins > 60 ? "full_day" : "half_day";
+    const doubled = state.penalties.some(x => x.auto_late && x.id !== p.id && x.user_id === p.user_id && x.month === p.month && x.date < p.date);
+    const amount = penaltyAmount(kind, getSalaryForMonth(p.user_id, p.month)) * (doubled ? 2 : 1);
+    if (kind !== p.kind || amount !== p.amount) {
+      const kLabel = { half_day: "Half day", full_day: "Full day", two_days: "2 days" }[kind];
+      log.push(`   ↳ penalty ${money(p.amount)} → ${money(amount)} (${kLabel}${doubled ? " ×2" : ""})`);
+      p.kind = kind;
+      p.amount = amount;
+      p.note = `Auto: ${mins} min late — ${kLabel} deducted${doubled ? " (×2 — 2nd+ late this month)" : ""} (sign-in stamp, rescored)`;
+      p.last_edited_at = stampedAt;
+    }
+  }
+  saveState();
+  return log;
+}
 
 routes.signin_stamp_list = function (u) {
   const wrap = el("div", {});
@@ -16035,6 +16162,25 @@ routes.signin_stamp_list = function (u) {
 
   wrap.appendChild(filterBar);
 
+  // Owner: re-score stamps after changing opening times (reads photo capture times too).
+  if (u.role === "owner") {
+    const rsFrom = el("input", { type: "date", value: localISODate(new Date()), style: selStyle });
+    const rsBtn = el("button", { class: "btn ghost", style: { width: "auto", padding: "6px 12px" } }, T("↻ Rescore","↻ إعادة الاحتساب"));
+    rsBtn.addEventListener("click", async () => {
+      if (!rsFrom.value) return;
+      if (!confirm(T(`Re-score every sign-in stamp from ${rsFrom.value} with the current opening times and photo times? Late penalties will be reduced or removed to match.`,
+                     `إعادة احتساب كل بصمات الحضور من ${rsFrom.value} بمواعيد الفتح الحالية ووقت الصور؟ سيتم تخفيض أو حذف خصومات التأخير لتطابق.`))) return;
+      rsBtn.disabled = true; rsBtn.textContent = "…";
+      const log = await rescoreSigninStamps(rsFrom.value);
+      rsBtn.disabled = false; rsBtn.textContent = T("↻ Rescore","↻ إعادة الاحتساب");
+      alert(log.length ? log.join("\n") : T("Nothing changed.","لم يتغير شيء."));
+      draw();
+    });
+    wrap.appendChild(el("div", { style: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "10px" } }, [
+      el("span", { class: "muted small" }, T("Rescore from","إعادة الاحتساب من")), rsFrom, rsBtn,
+    ]));
+  }
+
   const summaryEl = el("div", { class: "muted small", style: { marginBottom: "6px" } });
   wrap.appendChild(summaryEl);
 
@@ -16080,7 +16226,10 @@ routes.signin_stamp_list = function (u) {
       }, [
         el("div", { class: "grow" }, [
           el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
-          el("div", { class: "sub" }, `${fmtDate(s.at)} · ${minStr}${s.note ? " · " + s.note : ""}`),
+          el("div", { class: "sub" }, `${fmtDate(stampClockTime(s))} · ${minStr}${s.note ? " · " + s.note : ""}`),
+          s.clock_source === "photo" && Math.abs(new Date(s.at) - new Date(s.clock_at)) >= 60000
+            ? el("div", { class: "muted small" }, T(`📷 photo time · uploaded ${fmtDate(s.at)}`, `📷 وقت الصورة · رُفعت ${fmtDate(s.at)}`))
+            : null,
         ]),
         badge,
       ]));
@@ -19728,7 +19877,7 @@ function kpiPunctualityScore(userId, cutoff) {
       if (!st) {
         delta -= 100;
       } else {
-        const diff = Math.round((new Date(st.at).getTime() - openMs) / 60000);
+        const diff = _signinMinsLate(st);
         if      (diff <= -30) delta += 10;
         else if (diff <= -15) delta +=  5;
         else if (diff <=  10) delta +=  0;  // grace: ≤10 min late = no KPI hit
@@ -19750,11 +19899,7 @@ function kpiPunctualityScore(userId, cutoff) {
     if (!stamps.length) return null;
     stamps.forEach(s => {
       try {
-        const submitTime  = new Date(s.at);
-        const branch      = (s.branch||"maadi").toLowerCase();
-        const openStr     = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
-        const scheduledMs = new Date(localISODate(submitTime) + "T" + openStr + ":00").getTime();
-        const diff        = Math.round((submitTime.getTime() - scheduledMs) / 60000);
+        const diff        = _signinMinsLate(s);
         if      (diff <= -30) delta += 10;
         else if (diff <= -15) delta +=  5;
         else if (diff <=  10) delta +=  0;
@@ -20080,8 +20225,7 @@ function kpiLeadershipScore(userId, month) {
           );
           if (hasNoStampPenalty) deductions += 15;
         } else {
-          const minsLate = Math.round((new Date(stamp.at).getTime() - openMs) / 60000);
-          if (minsLate > 15) deductions += 10;
+          if (_signinMinsLate(stamp) > 15) deductions += 10;
         }
       }
     }
