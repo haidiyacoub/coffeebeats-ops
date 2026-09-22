@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260922-025 -->
+<!-- CB_BUILD:20260922-033 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260922-025";
+  var BUILD = "20260922-033";
   (function() {
     function checkFresh() {
       try {
@@ -12374,6 +12374,9 @@ routes.roster = function (u) {
   for (const otBranch of ["maadi", "zawya"]) {
     const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
+    const otMeta = state.branch_opening_times[otBranch] || {};
+    if (otMeta.updated_at) otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } },
+      `Last changed by ${otMeta.updated_by || "?"} · ${fmtDate(otMeta.updated_at)}`));
     for (const otShift of ["morning", "night"]) {
       const shLabel = otShift[0].toUpperCase() + otShift.slice(1);
       const currentVal = (state.branch_opening_times[otBranch] || {})[otShift] || "";
@@ -12388,6 +12391,7 @@ routes.roster = function (u) {
           // Without it the merge is "each device's own value wins", so any device still
           // holding the old time pushed it back and the change kept reverting.
           state.branch_opening_times[otBranch].updated_at = now();
+          state.branch_opening_times[otBranch].updated_by = u.name;
           saveState();
           toast(`${brLabel} ${shLabel} opening time updated → ${otInp.value}`);
         });
@@ -16052,6 +16056,35 @@ const SIGNIN_STATUS_META = {
   two:    { color: "var(--bad)",  bg: "rgba(194,59,59,0.18)",  label: () => T("❌ 2 days","❌ يومان") },
 };
 
+// Brings a stamp's auto late-penalty in line with its current mins_late: removed if now
+// within grace, re-tiered (with the monthly ×2 rule re-evaluated) otherwise. Never creates one.
+function _retierLatePenalty(s, stampedAt) {
+  const log = [];
+  const mins = s.mins_late;
+  const dateStr = localISODate(new Date(s.at));
+  const p = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === dateStr);
+  if (!p) return log;
+  if (mins <= 10) {
+    state.penalties = state.penalties.filter(x => x.id !== p.id);
+    state.deleted_penalties = [{ ...p, deleted_at: now(), deleted_by: currentUser()?.name || "?" }, ...(state.deleted_penalties || [])].slice(0, 20);
+    recordDeletion(p.id);
+    log.push(`   ↳ penalty removed (${p.barista}, ${money(p.amount)})`);
+    return log;
+  }
+  const kind = mins > 120 ? "two_days" : mins > 60 ? "full_day" : "half_day";
+  const doubled = state.penalties.some(x => x.auto_late && x.id !== p.id && x.user_id === p.user_id && x.month === p.month && x.date < p.date);
+  const amount = penaltyAmount(kind, getSalaryForMonth(p.user_id, p.month)) * (doubled ? 2 : 1);
+  if (kind !== p.kind || amount !== p.amount) {
+    const kLabel = { half_day: "Half day", full_day: "Full day", two_days: "2 days" }[kind];
+    log.push(`   ↳ penalty ${money(p.amount)} → ${money(amount)} (${kLabel}${doubled ? " ×2" : ""})`);
+    p.kind = kind;
+    p.amount = amount;
+    p.note = `Auto: ${mins} min late — ${kLabel} deducted${doubled ? " (×2 — 2nd+ late this month)" : ""} (sign-in stamp, rescored)`;
+    p.last_edited_at = stampedAt;
+  }
+  return log;
+}
+
 // Re-scores stamps dated `fromDate` onward against the current opening times, using each
 // photo's capture time when readable (local blob first, then the cloud copy). Matching
 // auto late-penalties are re-tiered or removed; new penalties are never created here.
@@ -16090,7 +16123,9 @@ async function rescoreSigninStamps(fromDate) {
     const clockAt = photo ? photo.toISOString() : stampClockTime(s);
     const mins = minsLateAt(s.branch, clockAt);
     log.push(`${s.by_name} · ${s.branch} · ${localISODate(new Date(s.at))} — opening ${branchMorningOpen(s.branch)}, ` +
-      (photo ? `photo time ${fmtDate(clockAt)}` : `upload time (${[...new Set(why)].join(", ") || "photo not found"})`) +
+      (photo ? `photo time ${fmtDate(clockAt)}`
+        : s.clock_source === "manual" ? `time set from photo ${fmtDate(clockAt)}`
+        : `upload time (${[...new Set(why)].join(", ") || "photo not found"})`) +
       `: ${s.mins_late ?? "?"} → ${mins} min`);
     if (mins !== s.mins_late || clockAt !== s.clock_at) {
       s.clock_at = clockAt;
@@ -16100,27 +16135,7 @@ async function rescoreSigninStamps(fromDate) {
       s.last_edited_at = stampedAt;
     }
 
-    const dateStr = localISODate(new Date(s.at));
-    const p = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === dateStr);
-    if (!p) continue;
-    if (mins <= 10) {
-      state.penalties = state.penalties.filter(x => x.id !== p.id);
-      state.deleted_penalties = [{ ...p, deleted_at: now(), deleted_by: currentUser()?.name || "?" }, ...(state.deleted_penalties || [])].slice(0, 20);
-      recordDeletion(p.id);
-      log.push(`   ↳ penalty removed (${p.barista}, ${money(p.amount)})`);
-      continue;
-    }
-    const kind = mins > 120 ? "two_days" : mins > 60 ? "full_day" : "half_day";
-    const doubled = state.penalties.some(x => x.auto_late && x.id !== p.id && x.user_id === p.user_id && x.month === p.month && x.date < p.date);
-    const amount = penaltyAmount(kind, getSalaryForMonth(p.user_id, p.month)) * (doubled ? 2 : 1);
-    if (kind !== p.kind || amount !== p.amount) {
-      const kLabel = { half_day: "Half day", full_day: "Full day", two_days: "2 days" }[kind];
-      log.push(`   ↳ penalty ${money(p.amount)} → ${money(amount)} (${kLabel}${doubled ? " ×2" : ""})`);
-      p.kind = kind;
-      p.amount = amount;
-      p.note = `Auto: ${mins} min late — ${kLabel} deducted${doubled ? " (×2 — 2nd+ late this month)" : ""} (sign-in stamp, rescored)`;
-      p.last_edited_at = stampedAt;
-    }
+    log.push(..._retierLatePenalty(s, stampedAt));
   }
   saveState();
   return log;
@@ -16236,13 +16251,15 @@ routes.signin_stamp_list = function (u) {
       list.appendChild(el("div", {
         class: "row",
         style: { background: meta.bg, borderLeft: `4px solid ${meta.color}`, cursor: hasPhoto ? "pointer" : "default" },
-        ...(hasPhoto ? { onClick: () => viewSigninStampPhotos(s) } : {}),
+        ...(hasPhoto ? { onClick: () => viewSigninStampPhotos(s, draw) } : {}),
       }, [
         el("div", { class: "grow" }, [
           el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
           el("div", { class: "sub" }, `${fmtDate(stampClockTime(s))} · ${minStr}${s.note ? " · " + s.note : ""}`),
-          s.clock_source === "photo" && Math.abs(new Date(s.at) - new Date(s.clock_at)) >= 60000
-            ? el("div", { class: "muted small" }, T(`📷 photo time · uploaded ${fmtDate(s.at)}`, `📷 وقت الصورة · رُفعت ${fmtDate(s.at)}`))
+          (s.clock_source === "photo" || s.clock_source === "manual") && Math.abs(new Date(s.at) - new Date(s.clock_at)) >= 60000
+            ? el("div", { class: "muted small" }, s.clock_source === "manual"
+                ? T(`✎ time set from photo · uploaded ${fmtDate(s.at)}`, `✎ الوقت من الصورة · رُفعت ${fmtDate(s.at)}`)
+                : T(`📷 photo time · uploaded ${fmtDate(s.at)}`, `📷 وقت الصورة · رُفعت ${fmtDate(s.at)}`))
             : null,
         ]),
         badge,
@@ -16262,7 +16279,7 @@ routes.signin_stamp_list = function (u) {
 // Tries the local IndexedDB blob first (instant, works offline on the device
 // that captured it), then falls back to the synced cloud URL so the photo is
 // still viewable from any other device.
-function viewSigninStampPhotos(s) {
+function viewSigninStampPhotos(s, onSaved) {
   const ids   = (s.photo_ids && s.photo_ids.length) ? s.photo_ids : (s.photo_id ? [s.photo_id] : []);
   const names = (s.photo_names && s.photo_names.length) ? s.photo_names : (s.photo_name ? [s.photo_name] : []);
   const urls  = s.drive_ids || [];
@@ -16271,6 +16288,41 @@ function viewSigninStampPhotos(s) {
   body.appendChild(el("h2", {}, T("Clock-in photo","صورة تسجيل الحضور")));
   body.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
     `${s.by_name} · ${s.branch} · ${fmtDate(s.at)}`));
+
+  // Owner: type the time shown on the clock in the photo. Used when the photo's capture
+  // time can't be read (e.g. stamps uploaded before photo-time scoring existed).
+  if (currentUser()?.role === "owner") {
+    const cur = new Date(stampClockTime(s));
+    const hhmm = String(cur.getHours()).padStart(2, "0") + ":" + String(cur.getMinutes()).padStart(2, "0");
+    const tInp = el("input", { type: "time", value: hhmm, style: { maxWidth: "140px" } });
+    const saveBtn = el("button", { class: "btn", style: { width: "auto", padding: "6px 14px" } }, T("Save","حفظ"));
+    saveBtn.addEventListener("click", () => {
+      if (!tInp.value) return;
+      const clockAt = new Date(localISODate(new Date(s.at)) + "T" + tInp.value + ":00");
+      if (clockAt.getTime() > new Date(s.at).getTime() + 5 * 60000)
+        return toast(T("The clock time can't be after the upload time.","لا يمكن أن يكون الوقت بعد وقت الرفع."), "error");
+      const stampedAt = now();
+      const before = s.mins_late;
+      s.clock_at = clockAt.toISOString();
+      s.clock_source = "manual";
+      s.mins_late = minsLateAt(s.branch, s.clock_at);
+      s.early_bonus = s.mins_late <= -15;
+      s.last_edited_at = stampedAt;
+      s.last_edited_by_name = currentUser()?.name || "?";
+      const log = _retierLatePenalty(s, stampedAt);
+      saveState();
+      toast(T(`${s.by_name}: ${before ?? "?"} → ${s.mins_late} min (opening ${branchMorningOpen(s.branch)})${log.length ? " · penalty updated" : ""}`,
+              `${s.by_name}: ${before ?? "?"} ← ${s.mins_late} دقيقة`), "ok");
+      closeSheet();
+      if (onSaved) onSaved();
+    });
+    body.appendChild(el("div", { class: "card", style: { background: "var(--surface-2)", marginBottom: "12px" } }, [
+      el("div", { class: "muted small", style: { marginBottom: "6px" } },
+        T(`Time shown on the clock in the photo — lateness is scored from this (opening ${branchMorningOpen(s.branch)}).`,
+          `الوقت الظاهر على الساعة في الصورة — يُحتسب التأخير منه (الفتح ${branchMorningOpen(s.branch)}).`)),
+      el("div", { style: { display: "flex", gap: "8px", alignItems: "center" } }, [tInp, saveBtn]),
+    ]));
+  }
 
   if (!ids.length) {
     body.appendChild(el("div", { class: "muted" }, T("No photo attached to this stamp.","لا توجد صورة مرفقة بهذه البصمة.")));
