@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260922-012 -->
+<!-- CB_BUILD:20260922-021 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260922-012";
+  var BUILD = "20260922-021";
   (function() {
     function checkFresh() {
       try {
@@ -16062,23 +16062,33 @@ async function rescoreSigninStamps(fromDate) {
     const ids = (s.photo_ids && s.photo_ids.length) ? s.photo_ids : (s.photo_id ? [s.photo_id] : []);
     const urls = s.drive_ids || [];
     const blobs = [];
+    const why = [];
     for (let i = 0; i < Math.max(ids.length, urls.length); i++) {
       let b = null;
       try { if (ids[i]) b = await IDB.get(ids[i]); } catch (e) {}
-      if (!b && urls[i]) { try { const r = await fetch(urls[i]); if (r.ok) b = await r.blob(); } catch (e) {} }
+      if (!b && urls[i]) {
+        try { const r = await fetch(urls[i]); if (r.ok) b = await r.blob(); else why.push(`download ${r.status}`); }
+        catch (e) { why.push("download blocked"); }
+      }
       if (b) blobs.push(b);
     }
+    if (!ids.length && !urls.length) why.push("no photo");
     // lastModified on a cloud-fetched blob is the download time, so only trust EXIF here.
     let photo = null;
     for (const b of blobs) {
       const d = await exifTakenAt(b);
-      if (!d || localISODate(d) !== localISODate(new Date(s.at)) || d.getTime() > new Date(s.at).getTime() + 5 * 60000) continue;
+      if (!d) { why.push("photo has no capture time"); continue; }
+      if (localISODate(d) !== localISODate(new Date(s.at)) || d.getTime() > new Date(s.at).getTime() + 5 * 60000) {
+        why.push(`photo taken ${fmtDate(d.toISOString())} — not same day/before upload`); continue;
+      }
       if (!photo || d < photo) photo = d;
     }
     const clockAt = photo ? photo.toISOString() : stampClockTime(s);
     const mins = minsLateAt(s.branch, clockAt);
+    log.push(`${s.by_name} · ${s.branch} · ${localISODate(new Date(s.at))} — opening ${branchMorningOpen(s.branch)}, ` +
+      (photo ? `photo time ${fmtDate(clockAt)}` : `upload time (${[...new Set(why)].join(", ") || "photo not found"})`) +
+      `: ${s.mins_late ?? "?"} → ${mins} min`);
     if (mins !== s.mins_late || clockAt !== s.clock_at) {
-      log.push(`${s.by_name} · ${s.branch} · ${localISODate(new Date(s.at))}: ${s.mins_late ?? "?"} → ${mins} min${photo ? " (photo time)" : ""}`);
       s.clock_at = clockAt;
       s.clock_source = photo ? "photo" : (s.clock_source || "upload");
       s.mins_late = mins;
@@ -16173,7 +16183,7 @@ routes.signin_stamp_list = function (u) {
       rsBtn.disabled = true; rsBtn.textContent = "…";
       const log = await rescoreSigninStamps(rsFrom.value);
       rsBtn.disabled = false; rsBtn.textContent = T("↻ Rescore","↻ إعادة الاحتساب");
-      alert(log.length ? log.join("\n") : T("Nothing changed.","لم يتغير شيء."));
+      alert(log.length ? log.join("\n") : T("No stamps from that date.","لا توجد بصمات من هذا التاريخ."));
       draw();
     });
     wrap.appendChild(el("div", { style: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "10px" } }, [
