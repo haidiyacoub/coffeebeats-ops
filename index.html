@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260922-021 -->
+<!-- CB_BUILD:20260922-025 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260922-021";
+  var BUILD = "20260922-025";
   (function() {
     function checkFresh() {
       try {
@@ -12384,6 +12384,10 @@ routes.roster = function (u) {
         otInp.addEventListener("change", () => {
           if (!state.branch_opening_times[otBranch]) state.branch_opening_times[otBranch] = {};
           state.branch_opening_times[otBranch][otShift] = otInp.value;
+          // Timestamp makes the branch entry a record → newest edit wins in _mergeValue.
+          // Without it the merge is "each device's own value wins", so any device still
+          // holding the old time pushed it back and the change kept reverting.
+          state.branch_opening_times[otBranch].updated_at = now();
           saveState();
           toast(`${brLabel} ${shLabel} opening time updated → ${otInp.value}`);
         });
