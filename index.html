@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260922-033 -->
+<!-- CB_BUILD:20260922-039 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260922-033";
+  var BUILD = "20260922-039";
   (function() {
     function checkFresh() {
       try {
@@ -12374,9 +12374,13 @@ routes.roster = function (u) {
   for (const otBranch of ["maadi", "zawya"]) {
     const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
-    const otMeta = state.branch_opening_times[otBranch] || {};
-    if (otMeta.updated_at) otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "4px" } },
-      `Last changed by ${otMeta.updated_by || "?"} · ${fmtDate(otMeta.updated_at)}`));
+    const otMetaEl = el("div", { class: "muted small", style: { marginBottom: "4px" } });
+    const drawOtMeta = () => {
+      const m = state.branch_opening_times[otBranch] || {};
+      otMetaEl.textContent = m.updated_at ? `Last changed by ${m.updated_by || "?"} · ${fmtDate(m.updated_at)}` : "";
+    };
+    drawOtMeta();
+    otCard.appendChild(otMetaEl);
     for (const otShift of ["morning", "night"]) {
       const shLabel = otShift[0].toUpperCase() + otShift.slice(1);
       const currentVal = (state.branch_opening_times[otBranch] || {})[otShift] || "";
@@ -12393,6 +12397,7 @@ routes.roster = function (u) {
           state.branch_opening_times[otBranch].updated_at = now();
           state.branch_opening_times[otBranch].updated_by = u.name;
           saveState();
+          drawOtMeta();
           toast(`${brLabel} ${shLabel} opening time updated → ${otInp.value}`);
         });
         otRow.appendChild(el("div", { class: "v" }, [otInp]));
