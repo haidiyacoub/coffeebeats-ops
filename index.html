@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260922-052 -->
+<!-- CB_BUILD:20260922-055 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260922-052";
+  var BUILD = "20260922-055";
   (function() {
     function checkFresh() {
       try {
@@ -12375,7 +12375,7 @@ routes.roster = function (u) {
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Sign-in stamps are checked against these times. 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time = 2 days · No stamp = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
+    "Sign-in stamps are checked against these times. 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time or no stamp = no show = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
   for (const otBranch of ["maadi", "zawya"]) {
     const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
@@ -15876,7 +15876,7 @@ routes.signin_stamp_new = function (u) {
           }
 
           const minsLate  = _stampMinsLate; // photo capture time vs morning opening
-          // From 1 Oct 2026 an unreadable photo time is its own 2-day penalty — upload time
+          // From 1 Oct 2026 an unreadable photo time counts as a no show (3 days) — upload time
           // is no longer trusted as a stand-in for arrival time.
           const noPhotoTime = !_photoTime && todayStr >= STAMP_RULES_2026_10;
 
@@ -15894,8 +15894,8 @@ routes.signin_stamp_new = function (u) {
             `${lateWhat} at ${branch} on ${todayStr}.`
           );
 
-          // Penalty tier: 10–60 min = ½ day · 60–120 min = 1 day · >120 min = 2 days · no photo time = 2 days
-          const kind   = noPhotoTime ? "two_days" : minsLate > 120 ? "two_days" : minsLate > 60 ? "full_day" : "half_day";
+          // Penalty tier: 10–60 min = ½ day · 60–120 min = 1 day · >120 min = 2 days · no photo time = 3 days (no show)
+          const kind   = noPhotoTime ? "three_days" : minsLate > 120 ? "two_days" : minsLate > 60 ? "full_day" : "half_day";
           const salary = getSalaryForMonth(u.id, todayStr.slice(0, 7));
           let amount   = penaltyAmount(kind, salary);
 
@@ -15904,10 +15904,10 @@ routes.signin_stamp_new = function (u) {
           const priorLateCount = (state.penalties || []).filter(p =>
             p.auto_late && p.user_id === u.id && p.month === thisMonth
           ).length;
-          const doubled = !noPhotoTime && priorLateCount >= 1; // no-photo-time is a flat 2 days
+          const doubled = !noPhotoTime && priorLateCount >= 1; // no-photo-time is a flat 3 days (no show)
           if (doubled) amount = amount * 2;
 
-          const kLabels = { half_day: "Half day", full_day: "Full day", two_days: "2 days" };
+          const kLabels = { half_day: "Half day", full_day: "Full day", two_days: "2 days", three_days: "3 days (no show)" };
           const kLabel  = kLabels[kind] || kind;
           const doubleNote = doubled ? " (×2 — 2nd+ late this month)" : "";
 
@@ -15972,7 +15972,7 @@ routes.signin_stamp_new = function (u) {
   return wrap;
 };
 
-// From this date: a clock-in photo whose capture time can't be read = 2 days deducted
+// From this date: a clock-in photo whose capture time can't be read = no show = 3 days deducted
 // (no fallback to upload time), and a missing morning stamp (no show, 3 days) is applied
 // automatically instead of waiting for someone to run the missing-stamp check.
 const STAMP_RULES_2026_10 = "2026-10-01";
@@ -17611,7 +17611,7 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or Zawya).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
         { type: "subheader", text: "Automatic Salary Deduction Tiers" },
         { type: "para", text: "Applied automatically the moment your stamp is uploaded. Each deduction is a share of one day's pay (monthly salary ÷ 30), so the EGP amount scales with your own salary." },
-        { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "Lateness is measured from the time the clock photo was taken — take the photo the moment you arrive. If the app can't read the photo's time (e.g. a screenshot, an edited or forwarded picture): 2 days deducted.", "No stamp at all for an assigned morning shift counts as a no show: 3 days deducted, applied automatically the next day.", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a morning shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points."] },
+        { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "Lateness is measured from the time the clock photo was taken — take the photo the moment you arrive. If the app can't read the photo's time (e.g. a screenshot, an edited or forwarded picture) it counts as a no show: 3 days deducted.", "No stamp at all for an assigned morning shift counts as a no show: 3 days deducted, applied automatically the next day.", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a morning shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points."] },
         { type: "subheader", text: "Other Penalties" },
         { type: "para", text: "Logged manually by the owner or head barista from the Penalties screen — same ½-day-of-salary math as above (monthly salary ÷ 30 × 0.5)." },
         { type: "bullets", items: ["Not following the rules, or not updating the app/site as required: ½ day deducted.", "Hygiene or uniform violation: ½ day deducted.", "No stamp (no show), logged manually rather than by the automatic missing-stamp check: 3 days deducted.", "Repeat-offender rule: from your 2nd \"no show\" this month onward, every further \"no show\" that month is doubled. Separately, from your 2nd conduct penalty (rules/site, hygiene, or uniform) this month onward, every further conduct penalty that month is doubled."] },
@@ -17628,7 +17628,7 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو زاوية).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
         { type: "subheader", text: "شرائح الخصم التلقائي من الراتب" },
         { type: "para", text: "تُطبَّق تلقائياً لحظة رفع البصمة. كل خصم هو جزء من أجر يوم واحد (الراتب الشهري ÷ 30)، فيتناسب المبلغ مع راتبك أنت." },
-        { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "يُحتسب التأخير من وقت التقاط صورة الساعة — التقط الصورة فور وصولك. إذا لم يتمكن التطبيق من قراءة وقت الصورة (مثل لقطة شاشة أو صورة معدّلة أو مُعاد توجيهها): خصم يومين.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك يُعتبر غياباً (no show): خصم 3 أيام، يُطبَّق تلقائياً في اليوم التالي.", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت صباحي غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط."] },
+        { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "يُحتسب التأخير من وقت التقاط صورة الساعة — التقط الصورة فور وصولك. إذا لم يتمكن التطبيق من قراءة وقت الصورة (مثل لقطة شاشة أو صورة معدّلة أو مُعاد توجيهها) يُعتبر غياباً: خصم 3 أيام.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك يُعتبر غياباً (no show): خصم 3 أيام، يُطبَّق تلقائياً في اليوم التالي.", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت صباحي غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط."] },
         { type: "subheader", text: "خصومات أخرى" },
         { type: "para", text: "يسجّلها المالك أو رئيس البريستا يدوياً من شاشة الخصومات — بنفس حساب نصف يوم من الراتب (الراتب الشهري ÷ 30 × 0.5)." },
         { type: "bullets", items: ["عدم الالتزام بالقواعد، أو عدم تحديث التطبيق/الموقع كما هو مطلوب: خصم نصف يوم.", "مخالفة النظافة الشخصية أو الزي الموحد: خصم نصف يوم.", "غياب بدون بصمة (no show) مُسجَّل يدوياً وليس عبر فحص البصمات المفقودة التلقائي: خصم 3 أيام.", "قاعدة التكرار: من الغياب بدون بصمة الثاني في نفس الشهر فصاعداً، يُضاعَف كل خصم غياب لاحق في ذلك الشهر. وبشكل منفصل، من خصم السلوك الثاني (قواعد/موقع، نظافة، أو زي) في نفس الشهر فصاعداً، يُضاعَف كل خصم سلوك لاحق في ذلك الشهر."] },
@@ -18823,7 +18823,7 @@ routes.app_guide = function (u) {
         "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
         "Tap <strong>Submit clock-in</strong>.",
         "<strong>\"Late\" is measured against your branch's opening time for the current month</strong> — the time on your Weekly Schedule. It is set by management each month and can change, so the rules below are always relative to it, never to a fixed clock time.",
-        "<strong>⚠ Automatic salary deduction:</strong> within 10 min after opening = <strong>no penalty</strong> (grace). 10–60 min late = <strong>½ day</strong>. 60–120 min late = <strong>1 full day</strong>. More than 120 min late = <strong>2 days</strong>. Lateness counts from when the clock photo was taken; a photo whose time can't be read = <strong>2 days</strong>. No stamp for an assigned morning shift = no show = <strong>3 days</strong>, applied automatically. Each deduction is a share of one day's pay (monthly salary ÷ 30).",
+        "<strong>⚠ Automatic salary deduction:</strong> within 10 min after opening = <strong>no penalty</strong> (grace). 10–60 min late = <strong>½ day</strong>. 60–120 min late = <strong>1 full day</strong>. More than 120 min late = <strong>2 days</strong>. Lateness counts from when the clock photo was taken; a photo whose time can't be read = no show = <strong>3 days</strong>. No stamp for an assigned morning shift = no show = <strong>3 days</strong>, applied automatically. Each deduction is a share of one day's pay (monthly salary ÷ 30).",
         "<strong>Repeat-offender rule:</strong> from your 2nd late stamp in one calendar month onward, every further late penalty that month is <strong>doubled automatically</strong>.",
         "<strong>Substitute cover:</strong> stamping a morning shift not assigned to you (covering a colleague) = no penalty even if late, plus <strong>+50 Punctuality KPI</strong>.",
         "<strong>Punctuality KPI</strong> (separate from the salary deduction): starts at 100 each month. 30+ min early = <strong>+10</strong>. 15–30 min early = <strong>+5</strong>. On time / within grace = 0. 11–120 min late = <strong>−20</strong>. 120+ min late = <strong>−50</strong>. No stamp = <strong>−100</strong>. Cover = <strong>+50</strong>. Anything past 0 spills into your overall KPI.",
@@ -18835,7 +18835,7 @@ routes.app_guide = function (u) {
         "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك.",
         "اضغط <strong>تسجيل الحضور</strong>.",
         "<strong>يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك للشهر الحالي</strong> — الموعد الظاهر في جدولك الأسبوعي. تحدده الإدارة كل شهر وقد يتغير، لذا القواعد أدناه دائماً نسبةً إليه وليس إلى وقت ثابت.",
-        "<strong>⚠ الخصم التلقائي من الراتب:</strong> خلال 10 دقائق بعد الفتح = <strong>لا خصم</strong> (سماح). تأخر 10–60 دقيقة = <strong>نصف يوم</strong>. 60–120 دقيقة = <strong>يوم كامل</strong>. أكثر من 120 دقيقة = <strong>يومان</strong>. يُحتسب التأخير من وقت التقاط صورة الساعة؛ صورة لا يمكن قراءة وقتها = <strong>يومان</strong>. غياب بدون بصمة لشيفت صباحي مُخصَّص = غياب = <strong>3 أيام</strong>، يُطبَّق تلقائياً. كل خصم جزء من أجر يوم (الراتب الشهري ÷ 30).",
+        "<strong>⚠ الخصم التلقائي من الراتب:</strong> خلال 10 دقائق بعد الفتح = <strong>لا خصم</strong> (سماح). تأخر 10–60 دقيقة = <strong>نصف يوم</strong>. 60–120 دقيقة = <strong>يوم كامل</strong>. أكثر من 120 دقيقة = <strong>يومان</strong>. يُحتسب التأخير من وقت التقاط صورة الساعة؛ صورة لا يمكن قراءة وقتها = غياب = <strong>3 أيام</strong>. غياب بدون بصمة لشيفت صباحي مُخصَّص = غياب = <strong>3 أيام</strong>، يُطبَّق تلقائياً. كل خصم جزء من أجر يوم (الراتب الشهري ÷ 30).",
         "<strong>قاعدة التكرار:</strong> من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق تلقائياً.",
         "<strong>تغطية شيفت:</strong> بصمة شيفت صباحي غير مُخصَّص لك (تغطية زميل) = لا خصم حتى لو تأخرت، و<strong>+50 نقطة انضباط</strong>.",
         "<strong>مؤشر الانضباط</strong> (منفصل عن خصم الراتب): يبدأ من 100 كل شهر. مبكر 30 دقيقة+ = <strong>+10</strong>. مبكر 15–30 دقيقة = <strong>+5</strong>. في الموعد/ضمن السماح = 0. تأخر 11–120 دقيقة = <strong>−20</strong>. 120+ دقيقة = <strong>−50</strong>. بدون بصمة = <strong>−100</strong>. تغطية = <strong>+50</strong>. أي فائض تحت الصفر يُخصم من إجمالي المؤشر.",
@@ -21870,7 +21870,7 @@ routes.my_jd = function(u) {
         en:"Punctuality, Attendance & Operations Discipline",ar:"الانضباط والحضور وانضباط العمليات",
         items_en:[
           "Arrive 15 min before shift start for machine warm-up and team briefing — non-negotiable · KPI: Late Arrivals ≤ 1/month (Punctuality Score auto from stamp)",
-          "Grace period: ≤10 min late = no penalty. 10–60 min = ½ day. 60–120 min = 1 day. >120 min = 2 days. Photo with no readable time = 2 days. No stamp = 3 days. 2nd+ late same month: penalty doubles.",
+          "Grace period: ≤10 min late = no penalty. 10–60 min = ½ day. 60–120 min = 1 day. >120 min = 2 days. Photo with no readable time or no stamp = no show = 3 days. 2nd+ late same month: penalty doubles.",
           "Covering a colleague's unassigned shift earns +50 punctuality KPI bonus — encourage this culture in your team",
           "Attendance ≥ 95% of scheduled shifts — arrange cover proactively, never last-minute · KPI: Attendance ≥ 95%",
           "Submit Cleaning Log + Waste Log personally every shift you work — lead by example · KPI: Personal Log Compliance 100%",
@@ -21961,7 +21961,7 @@ routes.my_jd = function(u) {
         en:"Punctuality & Attendance",ar:"الانضباط والحضور",
         items_en:[
           "Arrive and clock in on time — measured daily via Sign-In Stamp · KPI: Punctuality Score ≥ 80 (auto-calculated)",
-          "Grace period: ≤10 min late = no penalty. 10–60 min = ½ day deducted. 60–120 min = 1 day. >120 min = 2 days. Photo with no readable time = 2 days. No stamp = 3 days.",
+          "Grace period: ≤10 min late = no penalty. 10–60 min = ½ day deducted. 60–120 min = 1 day. >120 min = 2 days. Photo with no readable time or no stamp = no show = 3 days.",
           "Late 2+ times in same month: every further penalty that month is doubled automatically",
           "Covering a shift not assigned to you earns +50 punctuality KPI bonus points automatically",
           "Attendance ≥ 90% of scheduled shifts — proactive communication required for any absence · KPI: Attendance ≥ 90%",
