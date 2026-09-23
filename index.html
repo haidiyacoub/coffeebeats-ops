@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260922-055 -->
+<!-- CB_BUILD:20260923-228 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260922-055";
+  var BUILD = "20260923-228";
   (function() {
     function checkFresh() {
       try {
@@ -917,11 +917,11 @@ const CloudPhoto = (() => {
   const isConfigured = () => true; // always available via Firebase
 
   async function uploadPhoto(blob, filename) {
-    const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+    const ext = blob.type === "application/pdf" ? "pdf" : blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
     const safeName = filename.replace(/[^a-zA-Z0-9_\-]/g, "_");
     const path = `photos/${safeName}_${Date.now()}.${ext}`;
     const ref = storage.ref(path);
-    const snap = await ref.put(blob, { contentType: blob.type });
+    const snap = await ref.put(blob, { contentType: blob.type || (ext === "pdf" ? "application/pdf" : "image/jpeg") });
     const secure_url = await snap.ref.getDownloadURL();
     return {
       secure_url,
@@ -6722,7 +6722,7 @@ routes.purchase_new = function (u) {
     note: "",
   }];
   // Receipt photos — initialized once, re-appended on each draw()
-  const receiptPhotoField = makePhotoField({ label: T("Receipt photo(s)","صورة/صور الفاتورة"), formLabel: "Purchase Receipt" });
+  const receiptPhotoField = makePhotoField({ label: T("Receipt photo(s) or PDF","صورة/صور الفاتورة أو PDF"), formLabel: "Purchase Receipt", allowPdf: true });
 
   const branchPicker = makeBranchPicker(pickerBranches, () => branch, b => {
     branch = b;
@@ -7050,6 +7050,7 @@ routes.purchase_new = function (u) {
           qty_canonical: canonicalQty,                  // inventory units added (used by inventory / dashboard)
           unit_cost: canonicalQty ? cost / canonicalQty : 0,  // EGP per inventory unit
           line_total: cost,
+          expiry_date: l.expiry_date || "",
           note: l.note || "",
         };
       }
@@ -7074,6 +7075,7 @@ routes.purchase_new = function (u) {
         receipt_photo_names: photoNames,
         receipt_drive_ids: receiptPhotoField.getDriveIds(),
         image_url: (receiptPhotoField.getCloudUrls().filter(Boolean)[0]) || "",
+        receipt_types: rpBlobs.map(f => f.type || ""),
         no_receipt,
         no_receipt_reason: no_receipt ? no_receipt_reason.trim() : "",
         ...(extra || {}),
@@ -7371,8 +7373,27 @@ routes.purchase_no_receipt_report = function (u) {
 };
 
 async function showPurchase(p) {
-  const photo = p.receipt_photo_id ? await IDB.get(p.receipt_photo_id) : null;
-  const url = photo ? URL.createObjectURL(photo) : null;
+  // Receipt attachments (images and/or PDFs): prefer the local copy on this device,
+  // fall back to the cloud URL so other devices can see them too.
+  const ids = (p.receipt_photo_ids && p.receipt_photo_ids.length) ? p.receipt_photo_ids : (p.receipt_photo_id ? [p.receipt_photo_id] : []);
+  const cloud = p.receipt_drive_ids || [];
+  const names = p.receipt_photo_names || [];
+  const types = p.receipt_types || [];
+  const n = Math.max(ids.length, cloud.length, p.image_url ? 1 : 0);
+  const attachments = [];
+  for (let i = 0; i < n; i++) {
+    let blob = null;
+    if (ids[i]) { try { blob = await IDB.get(ids[i]); } catch (e) {} }
+    const src = blob ? URL.createObjectURL(blob) : (cloud[i] || (i === 0 ? p.image_url : "") || "");
+    if (!src) continue;
+    const name = names[i] || "";
+    const pdf = (blob && blob.type === "application/pdf") || types[i] === "application/pdf" || /\.pdf$/i.test(name) || /\.pdf(\?|$)/i.test(src);
+    attachments.push({ src, name, pdf });
+  }
+  const attachEls = attachments.map(a => a.pdf
+    ? el("a", { href: a.src, target: "_blank", rel: "noopener", class: "btn secondary", style: { display: "block", marginBottom: "8px", textAlign: "center" } },
+        `📄 ${T("Open PDF","فتح PDF")}${a.name ? ` — ${a.name}` : ""}`)
+    : el("img", { src: a.src, class: "thumb", style: { width: "100%", height: "auto", maxHeight: "420px", objectFit: "contain", marginBottom: "8px" } }));
   openSheet(el("div", {}, [
     el("h2", {}, T(`Purchase — ${p.supplier}`, `مشترى — ${p.supplier}`)),
     el("div", { class: "muted" }, `${p.branch} · ${p.date} · ${p.paid_by} · ${money(p.total)}`),
@@ -7390,12 +7411,12 @@ async function showPurchase(p) {
         ]);
       }
       return el("div", { class: "kv" }, [
-        el("div", { class: "k" }, `${l.item_name || "—"} (${fmtQty(l.qty_canonical || 0, l.unit || "")})${l.purchase_unit ? ` · ${l.purchase_qty||0} ${l.purchase_unit}` : ""}`),
+        el("div", { class: "k" }, `${l.item_name || "—"} (${fmtQty(l.qty_canonical || 0, l.unit || "")})${l.purchase_unit ? ` · ${l.purchase_qty||0} ${l.purchase_unit}` : ""}${l.expiry_date ? T(` · expires ${l.expiry_date}`, ` · ينتهي ${l.expiry_date}`) : ""}`),
         el("div", { class: "v" }, money(l.line_total || 0)),
       ]);
     }),
     el("div", { class: "hr" }),
-    url ? el("img", { src: url, class: "thumb", style: { width: "100%", height: "auto", maxHeight: "420px", objectFit: "contain" } })
+    attachEls.length ? el("div", {}, attachEls)
       : p.no_receipt
         ? el("div", { class: "card", style: { borderColor: "var(--warn)" } }, [
             el("div", { style: { fontWeight: "700", color: "var(--warn)" } }, T("⚠️ Submitted without a receipt","⚠️ تم الإرسال بدون فاتورة")),
@@ -18428,7 +18449,8 @@ routes.photo_gallery = function (u) {
  * Auto-uploads to Firebase Storage.
  * formLabel: used for photo_log context (e.g. "Cleaning Log")
  */
-function makePhotoField({ label = "Photo(s)", required = false, multiple = true, formLabel = "" } = {}) {
+function makePhotoField({ label = "Photo(s)", required = false, multiple = true, formLabel = "", allowPdf = false } = {}) {
+  const isPdf = (f) => f && (f.type === "application/pdf" || /\.pdf$/i.test(f.name || ""));
   const container = el("div", { style: { marginTop: "12px" } });
   const labelEl = el("div", { style: { fontWeight: "600", fontSize: "14px", color: "var(--ink-dim)", marginBottom: "8px" } },
     label + (required ? " *" : " (optional)"));
@@ -18450,11 +18472,13 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
 
   // Drop zone
   const dropZone = el("div", { class: "photo-drop" });
-  const fileInput = el("input", { type: "file", accept: "image/*" });
+  const fileInput = el("input", { type: "file", accept: allowPdf ? "image/*,application/pdf,.pdf" : "image/*" });
   if (multiple) fileInput.setAttribute("multiple", "true");
-  dropZone.appendChild(el("div", { class: "drop-icon" }, "📷"));
-  dropZone.appendChild(el("div", { class: "drop-label" }, onMobile ? (multiple ? "Tap to choose from gallery" : "Tap to choose from gallery") : (multiple ? "Tap to add photos" : "Tap to add a photo")));
-  dropZone.appendChild(el("div", { class: "drop-sub" }, multiple ? "Multiple files OK · drag & drop supported" : "Drag & drop supported"));
+  dropZone.appendChild(el("div", { class: "drop-icon" }, allowPdf ? "📷📄" : "📷"));
+  dropZone.appendChild(el("div", { class: "drop-label" }, allowPdf
+    ? (onMobile ? T("Tap to choose photos or PDFs","اضغط لاختيار صور أو ملفات PDF") : T("Tap to add photos or PDFs","اضغط لإضافة صور أو ملفات PDF"))
+    : onMobile ? (multiple ? "Tap to choose from gallery" : "Tap to choose from gallery") : (multiple ? "Tap to add photos" : "Tap to add a photo")));
+  dropZone.appendChild(el("div", { class: "drop-sub" }, multiple ? (allowPdf ? "Images or PDF · multiple files OK · drag & drop supported" : "Multiple files OK · drag & drop supported") : "Drag & drop supported"));
   dropZone.appendChild(fileInput);
   container.appendChild(dropZone);
 
@@ -18505,23 +18529,31 @@ function makePhotoField({ label = "Photo(s)", required = false, multiple = true,
 
   function addFiles(files) {
     for (const file of files) {
-      if (!file.type.startsWith("image/")) continue;
+      const pdf = allowPdf && isPdf(file);
+      if (!file.type.startsWith("image/") && !pdf) continue;
       const idx = blobs.length;
       blobs.push(file);
       cloudUrls.push(null);
 
       const wrap = el("div", { class: "photo-thumb-wrap" });
-      const img = new Image();
-      img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
-      img.src = URL.createObjectURL(file);
-      wrap.appendChild(img);
+      const img = pdf ? { src: "" } : new Image();
+      if (pdf) {
+        wrap.appendChild(el("div", { style: { width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", background: "var(--surface-2)", padding: "4px", boxSizing: "border-box" } }, [
+          el("div", { style: { fontSize: "28px" } }, "📄"),
+          el("div", { style: { fontSize: "10px", textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" } }, file.name || "PDF"),
+        ]));
+      } else {
+        img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+        img.src = URL.createObjectURL(file);
+        wrap.appendChild(img);
+      }
 
       const rmBtn = el("button", { class: "ph-remove" }, "×");
       rmBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         blobs.splice(idx, 1);
         cloudUrls.splice(idx, 1);
-        URL.revokeObjectURL(img.src);
+        if (img.src) URL.revokeObjectURL(img.src);
         wrap.remove();
       });
       wrap.appendChild(rmBtn);
