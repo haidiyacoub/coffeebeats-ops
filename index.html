@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260926-091 -->
+<!-- CB_BUILD:20260926-157 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260926-091";
+  var BUILD = "20260926-157";
   (function() {
     function checkFresh() {
       try {
@@ -15847,11 +15847,37 @@ routes.signin_stamp_new = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Sign-In Stamp","بصمة الحضور"), T("Upload a photo of the iPad clock showing your arrival time.","ارفع صورة لساعة الآيباد تُظهر وقت وصولك.")));
 
-  let branch   = u.branches[0];
+  // Owner may have no branches assigned — they still need both to clock in for staff.
+  const stampBranches = (u.branches && u.branches.length) ? u.branches
+    : (u.role === "owner" ? ["maadi", "zawya"] : []);
+  let branch   = stampBranches[0];
   let note     = "";
 
-  const branchPicker = makeBranchPicker(u.branches, () => branch, b => { branch = b; });
+  // Owner / head barista can clock in on behalf of another barista (e.g. their phone died).
+  // The stamp, lateness penalty and bonuses go to that barista; entered_by records who did it.
+  const canStampForOthers = u.role === "owner" || u.role === "head_barista";
+  let forUserId = u.id;
+  const forSel = canStampForOthers ? el("select", {}) : null;
+  const fillForSel = () => {
+    if (!forSel) return;
+    const staff = staffDir.shiftStaff(branch).filter(x => x.id !== u.id)
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    if (forUserId !== u.id && !staff.some(x => x.id === forUserId)) forUserId = u.id;
+    forSel.innerHTML = "";
+    forSel.appendChild(el("option", { value: u.id }, T(`Myself (${u.name})`, `أنا (${u.name})`)));
+    for (const x of staff) forSel.appendChild(el("option", { value: x.id }, x.name));
+    forSel.value = forUserId;
+  };
+
+  const branchPicker = makeBranchPicker(stampBranches, () => branch, b => { branch = b; fillForSel(); });
   wrap.appendChild(branchPicker);
+
+  if (forSel) {
+    fillForSel();
+    forSel.addEventListener("change", () => { forUserId = forSel.value; });
+    wrap.appendChild(el("label", {}, T("Signing in for","تسجيل الحضور لـ")));
+    wrap.appendChild(forSel);
+  }
 
   wrap.appendChild(el("div", { class: "card", style: { background: "var(--surface-2)", marginBottom: "14px" } }, [
     el("div", { style: { fontWeight: "600", marginBottom: "4px" } }, T("How to stamp in","كيفية تسجيل الحضور")),
@@ -15875,6 +15901,8 @@ routes.signin_stamp_new = function (u) {
         const photoBlobs = stampPhotoField.getBlobs();
         if (!photoBlobs.length) return toast(T("Please attach at least one clock-in photo","أرفق صورة واحدة على الأقل لتسجيل الحضور"), "error");
         const photoNames = photoBlobs.map(f => f.name);
+        const who = forUserId === u.id ? u : (staffDir.resolve(forUserId) || u);
+        const onBehalf = who.id !== u.id;
         const s = stamp();
         const photoIds = photoBlobs.map(() => uuid());
         for (let i = 0; i < photoBlobs.length; i++) {
@@ -15889,7 +15917,8 @@ routes.signin_stamp_new = function (u) {
         const _earlyBonus      = _stampMinsLate <= -15;
 
         state.signin_stamps.push({
-          id: uuid(), at: s.at, by: s.by, by_name: s.by_name, device: s.device,
+          id: uuid(), at: s.at, by: who.id, by_name: who.name, device: s.device,
+          ...(onBehalf ? { entered_by: s.by, entered_by_name: s.by_name } : {}),
           branch,
           photo_id: photoIds[0], photo_name: photoNames[0],
           photo_ids: photoIds, photo_names: photoNames,
@@ -15920,7 +15949,7 @@ routes.signin_stamp_new = function (u) {
             r.branch  === branch.toLowerCase() &&
             r.day     === dayKey &&
             r.shift   === "morning" &&
-            r.user_id === u.id
+            r.user_id === who.id
           );
           if (!morningEntry) {
             // Check if this barista is covering someone else's morning shift
@@ -15935,7 +15964,7 @@ routes.signin_stamp_new = function (u) {
               const lastStamp = state.signin_stamps[state.signin_stamps.length - 1];
               if (lastStamp) lastStamp.substitute_cover = true;
               saveState();
-              toast(T(`⭐ Substitute cover recorded for ${u.name} — +50 punctuality bonus`, `⭐ تم تسجيل تغطية بديلة لـ ${u.name} — +50 نقطة انضباط`), "ok");
+              toast(T(`⭐ Substitute cover recorded for ${who.name} — +50 punctuality bonus`, `⭐ تم تسجيل تغطية بديلة لـ ${who.name} — +50 نقطة انضباط`), "ok");
             }
             return; // not today's assigned morning barista — no late penalty
           }
@@ -15949,25 +15978,25 @@ routes.signin_stamp_new = function (u) {
 
           // Prevent duplicate auto-penalty for same person on same date
           const already = (state.penalties || []).find(p =>
-            p.auto_late && p.user_id === u.id && p.date === todayStr
+            p.auto_late && p.user_id === who.id && p.date === todayStr
           );
           if (already) return;
 
           const lateWhat = noPhotoTime ? "clock-in photo has no readable time" : `${minsLate} min late`;
           notifyLeadershipRole("weekly_schedule",
-            `Late arrival — ${u.name}`,
+            `Late arrival — ${who.name}`,
             `${lateWhat} at ${branch} on ${todayStr}.`
           );
 
           // Penalty tier: 10–60 min = ½ day · 60–120 min = 1 day · >120 min = 2 days · no photo time = 3 days (no show)
           const kind   = noPhotoTime ? "three_days" : minsLate > 120 ? "two_days" : minsLate > 60 ? "full_day" : "half_day";
-          const salary = getSalaryForMonth(u.id, todayStr.slice(0, 7));
+          const salary = getSalaryForMonth(who.id, todayStr.slice(0, 7));
           let amount   = penaltyAmount(kind, salary);
 
           // Doubling rule: 2nd+ late incident from the same barista this month → double the penalty
           const thisMonth      = todayStr.slice(0, 7);
           const priorLateCount = (state.penalties || []).filter(p =>
-            p.auto_late && p.user_id === u.id && p.month === thisMonth
+            p.auto_late && p.user_id === who.id && p.month === thisMonth
           ).length;
           const doubled = !noPhotoTime && priorLateCount >= 1; // no-photo-time is a flat 3 days (no show)
           if (doubled) amount = amount * 2;
@@ -15979,7 +16008,7 @@ routes.signin_stamp_new = function (u) {
           state.penalties = state.penalties || [];
           state.penalties.push({
             id: uuid(), at: s.at, by: s.by, by_name: s.by_name,
-            user_id: u.id, barista: u.name,
+            user_id: who.id, barista: who.name,
             kind, reason: "late",
             date: todayStr,
             month: thisMonth,
@@ -15990,10 +16019,10 @@ routes.signin_stamp_new = function (u) {
             ...(noPhotoTime ? { no_photo_time: true } : {}),
           });
           saveState();
-          toast(T(`⚠ ${lateWhat} — ${kLabel}${doubled ? " ×2" : ""} deducted from ${u.name}'s salary`, `⚠ تأخير ${minsLate} دقيقة — تم خصم ${kLabel}${doubled ? " ×2" : ""} من راتب ${u.name}`), "warn");
+          toast(T(`⚠ ${lateWhat} — ${kLabel}${doubled ? " ×2" : ""} deducted from ${who.name}'s salary`, `⚠ تأخير ${minsLate} دقيقة — تم خصم ${kLabel}${doubled ? " ×2" : ""} من راتب ${who.name}`), "warn");
 
           // ── High-priority in-app notification + email to owner/head barista ──
-          const lateTitle = `🚨 Late Arrival: ${u.name}`;
+          const lateTitle = `🚨 Late Arrival: ${who.name}`;
           const lateBody  = `${lateWhat} at ${branch} — ${kLabel}${doubleNote} deducted`;
           notifyHaidi(lateTitle, lateBody);
           notifyLeadershipRole("head_barista", lateTitle, lateBody);
@@ -16001,16 +16030,16 @@ routes.signin_stamp_new = function (u) {
           (() => {
             const ownerEmail = ((state.settings || {}).owner_email || "coffeebeats@haidiyacoub.com").trim();
             const hbEmail    = ((state.settings || {}).head_barista_email || "").trim();
-            const lateSubj = encodeURIComponent(`[🚨 PRIORITY] [Late Arrival] ${u.name} · ${lateWhat} · ${branch} · ${todayStr}`);
+            const lateSubj = encodeURIComponent(`[🚨 PRIORITY] [Late Arrival] ${who.name} · ${lateWhat} · ${branch} · ${todayStr}`);
             const mailBody = encodeURIComponent(
-              `🚨 High Priority — Late Arrival\n\nBarista: ${u.name}\nBranch: ${branch}\nDate: ${todayStr}\nMinutes late: ${noPhotoTime ? "unknown — photo has no readable time" : minsLate}\nPenalty: ${kLabel}${doubleNote}\n\n— Coffee Beats Operations App`
+              `🚨 High Priority — Late Arrival\n\nBarista: ${who.name}\nBranch: ${branch}\nDate: ${todayStr}\nMinutes late: ${noPhotoTime ? "unknown — photo has no readable time" : minsLate}\nPenalty: ${kLabel}${doubleNote}\n\n— Coffee Beats Operations App`
             );
             if (hbEmail) {
               // Send to both HB (To:) and owner (CC:) with priority flag
               try { window.open(`mailto:${encodeURIComponent(hbEmail)}?cc=${encodeURIComponent(ownerEmail)}&subject=${lateSubj}&body=${mailBody}`, "_blank"); } catch(e) {}
             } else {
               // No HB configured — send to owner only with escalation note
-              const fallbackSubj = encodeURIComponent(`[PRIORITY — No Head Barista] [Late Arrival] ${u.name} · ${minsLate} min late · ${branch} · ${todayStr}`);
+              const fallbackSubj = encodeURIComponent(`[PRIORITY — No Head Barista] [Late Arrival] ${who.name} · ${minsLate} min late · ${branch} · ${todayStr}`);
               try { window.open(`mailto:${encodeURIComponent(ownerEmail)}?subject=${fallbackSubj}&body=${mailBody}`, "_blank"); } catch(e) {}
             }
           })();
@@ -16344,6 +16373,7 @@ routes.signin_stamp_list = function (u) {
         el("div", { class: "grow" }, [
           el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
           el("div", { class: "sub" }, `${fmtDate(stampClockTime(s))} · ${minStr}${s.note ? " · " + s.note : ""}`),
+          s.entered_by_name ? el("div", { class: "muted small" }, T(`✍ entered by ${s.entered_by_name}`, `✍ سجّله ${s.entered_by_name}`)) : null,
           (s.clock_source === "photo" || s.clock_source === "manual") && Math.abs(new Date(s.at) - new Date(s.clock_at)) >= 60000
             ? el("div", { class: "muted small" }, s.clock_source === "manual"
                 ? T(`✎ time set from photo · uploaded ${fmtDate(s.at)}`, `✎ الوقت من الصورة · رُفعت ${fmtDate(s.at)}`)
