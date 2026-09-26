@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260926-163 -->
+<!-- CB_BUILD:20260926-171 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260926-163";
+  var BUILD = "20260926-171";
   (function() {
     function checkFresh() {
       try {
@@ -1223,6 +1223,7 @@ function migrateState(s) {
 
   s.penalties      = s.penalties      || [];
   s.maadi_deposits = s.maadi_deposits || [];
+  s.maadi_cash_log = s.maadi_cash_log || []; // manual Maadi sales-cash movements — [{id,type:"in"|"out"|"count",amount,date,note,by,by_name,at}] (see maadiCashLedger)
   s.overheads     = s.overheads     || [];
   s.overhead_presets        = s.overhead_presets        || {}; // category → default amount
   s.overhead_monthly_amts   = s.overhead_monthly_amts   || {}; // branch|category|month → amount override
@@ -1556,7 +1557,7 @@ const STATE_CHUNKS = {
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
   waste:         ["waste", "deleted_waste"],
-  purchases:     ["purchases", "petty_cash", "bank_ledger", "owner_account", "deleted_purchases"],
+  purchases:     ["purchases", "petty_cash", "bank_ledger", "owner_account", "deleted_purchases", "maadi_cash_log"],
   shifts:        ["shifts"],
   // NOTE: snapshots, shift_closes, cleaning_logs and signin_stamps are NO LONGER
   // single docs here — they are append-only logs that grow without bound and would
@@ -4245,6 +4246,82 @@ function pettyCashLedger(branch) {
     });
 }
 
+// ==============================================================
+// MAADI CASH TRACKER — the physical sales cash held at Maadi.
+// Derived from the source records, so deleting/restoring a purchase, overhead,
+// shift close or deposit moves the balance with no paired ledger row to clean up:
+//   IN  = Maadi shift closes (cash + Talabat cash)
+//   OUT = purchases / overheads paid from "maadi_cash" (either branch — the cash
+//         physically left the Maadi drawer), Maadi ATM deposits
+//   manual state.maadi_cash_log rows: "in" / "out", or "count" = cash physically
+//   counted — the running balance restarts from the counted amount.
+// Movements before MAADI_CASH_START are ignored (tracker went live that day).
+// ==============================================================
+const MAADI_CASH_START = "2026-09-26";
+const MAADI_CASH_PAID_FROM_OPT = { label: "💰 Maadi sales cash (drawer)", value: "maadi_cash" };
+
+function maadiCashMovements() {
+  const mv = [];
+  const push = (r) => { if (r.amount || r.kind === "count") mv.push(r); };
+  for (const c of state.shift_closes || []) {
+    if (!notTest(c) || c.branch !== "maadi") continue;
+    const cash = Number(c.cash) || 0, tal = Number(c.talabat_cash) || 0;
+    push({ id: "sc_" + c.id, date: c.date, at: c.at, amount: cash + tal, kind: "shift_close",
+      label: T(`Shift close${c.closing_barista ? " — " + c.closing_barista : ""}${tal ? ` (incl. Talabat cash ${money(tal)})` : ""}`,
+               `إغلاق شيفت${c.closing_barista ? " — " + c.closing_barista : ""}${tal ? ` (شامل نقدي طلبات ${money(tal)})` : ""}`),
+      by_name: c.by_name });
+  }
+  for (const p of state.purchases || []) {
+    if (!notTest(p) || p.paid_by !== "maadi_cash") continue;
+    push({ id: "pu_" + p.id, date: p.date, at: p.at, amount: -(Number(p.total) || 0), kind: "purchase",
+      label: T(`Purchase — ${p.supplier || "—"}${p.branch !== "maadi" ? ` (${p.branch})` : ""}`, `مشترى — ${p.supplier || "—"}${p.branch !== "maadi" ? ` (${p.branch})` : ""}`),
+      by_name: p.by_name });
+  }
+  for (const o of state.overheads || []) {
+    if (!notTest(o) || o.paid_from !== "maadi_cash") continue;
+    const cat = typeof overheadCatLabel === "function" ? overheadCatLabel(o.category) : o.category;
+    push({ id: "oh_" + o.id, date: o.paid_on || o.date || (o.month ? o.month + "-01" : ""), at: o.at, amount: -(Number(o.amount) || 0), kind: "overhead",
+      label: T(`Overhead — ${cat}${o.label ? " — " + o.label : ""}${o.branch !== "maadi" ? ` (${o.branch})` : ""}`, `مصروف — ${cat}${o.label ? " — " + o.label : ""}${o.branch !== "maadi" ? ` (${o.branch})` : ""}`),
+      by_name: o.by_name });
+  }
+  for (const d of state.maadi_deposits || []) {
+    if (!notTest(d)) continue;
+    push({ id: "dp_" + d.id, date: d.date, at: d.at, amount: -(Number(d.amount) || 0), kind: "deposit",
+      label: T(`🏧 ATM deposit${d.week_of ? " — week of " + d.week_of : ""}`, `🏧 إيداع ماكينة${d.week_of ? " — أسبوع " + d.week_of : ""}`),
+      by_name: d.by_name });
+  }
+  for (const m of state.maadi_cash_log || []) {
+    if (!notTest(m)) continue;
+    const a = Number(m.amount) || 0;
+    if (m.type === "count") {
+      push({ id: m.id, date: m.date, at: m.at, amount: a, kind: "count", manual: true,
+        label: T(`✎ Cash counted${m.note ? " — " + m.note : ""}`, `✎ جرد النقدية${m.note ? " — " + m.note : ""}`), by_name: m.by_name });
+    } else {
+      push({ id: m.id, date: m.date, at: m.at, amount: m.type === "out" ? -a : a, kind: m.type, manual: true,
+        label: (m.type === "out" ? T("Cash out","صرف نقدي") : T("Cash in","إضافة نقدية")) + (m.note ? " — " + m.note : ""), by_name: m.by_name });
+    }
+  }
+  return mv.filter(r => String(r.date || "") >= MAADI_CASH_START)
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || ""))
+                 || String(a.at || "").localeCompare(String(b.at || "")));
+}
+
+// Oldest→newest with a running balance. A "count" row resets the balance to the
+// counted amount and records the gap (diff) against what the app expected.
+function maadiCashLedger() {
+  let bal = 0;
+  const rows = maadiCashMovements().map(r => {
+    if (r.kind === "count") {
+      const diff = r.amount - bal;
+      bal = r.amount;
+      return { ...r, diff, running_balance: bal };
+    }
+    bal += r.amount;
+    return { ...r, running_balance: bal };
+  });
+  return { rows, balance: bal };
+}
+
 // ----- petty cash monthly budget & 60/40 auto-split -----
 // Estimated monthly petty cash across both branches (default 20,000 EGP) and the
 // Zawya share of any auto-split top-up (default 60% Zawya / 40% Maadi). Both are
@@ -4346,7 +4423,7 @@ const ROLE_ACCESS = {
   accountant: "*",    // full access (per Haïdi: "Accountant and owner have all access rights")
   // Per Haïdi: head barista = all barista + salaries + penalties + Maadi deposits + petty cash + roster (edit)
   head_barista: ["home","shifts","snapshot_new","waste_new","waste_list","purchase_new","purchase_list",
-                 "petty_cash","bank","salaries","penalties","maadi_deposits","roster",
+                 "petty_cash","bank","salaries","penalties","maadi_deposits","maadi_cash","roster",
                  "overhead_log_new",
                  "shift_close_new","shift_close_list","cleaning_log_new","cleaning_log_list",
                  "signin_stamp_new","signin_stamp_list",
@@ -4381,7 +4458,7 @@ function canAccess(routeName, u) {
     const BUDGET_INV_ROUTES = [
       "inventory_engine","items_list","supplier_list","reorder_action_list",
       "snapshot_new","waste_new","waste_list","purchase_new","purchase_list",
-      "petty_cash","maadi_deposits"
+      "petty_cash","maadi_deposits","maadi_cash"
     ];
     const isBudgetMgr = _laAssign.budget_inventory === u.id
       || _laAssign.inventory_management === u.id
@@ -4850,6 +4927,11 @@ routes.home = function (u) {
                    : (u.branches && u.branches.length) ? `branches: ${u.branches.join(", ")}`
                    : (["barista","head_barista"].includes(u.role) ? "rotates (Maadi + Zawya)" : "no branches assigned");
   wrap.appendChild(el("div", { class: "banner-arch" }, [ `Signed in as `, el("b", {}, u.name), ` · ${branchInfo}`]));
+
+  // Maadi cash in/out tracker — owner/accountant, Maadi head barista, cash-status lead.
+  if (canAccess("maadi_cash", u) && (u.role === "owner" || u.role === "accountant" || (u.branches || []).includes("maadi"))) {
+    try { wrap.appendChild(maadiCashCard(u)); } catch (e) { console.warn("maadi cash card", e); }
+  }
 
   const tiles = el("div", { id: "home-grid", class: "grid c2" });
 
@@ -6847,6 +6929,7 @@ routes.purchase_new = function (u) {
     const paySel = el("select", {},
       [
         ["petty_cash",T("Petty cash (head barista)","العهدة النقدية (رئيس البريستا)")],
+        ["maadi_cash",T("💰 Maadi sales cash (drawer)","💰 نقدية مبيعات المعادي (الدرج)")],
         ["owner_bank",T("Bank transfer (owner)","تحويل بنكي (المالك)")],
         ["credit_card",T("Credit card","بطاقة ائتمان")],
         ["owner_personal",T("Paid personally (reimburse later)","دُفع شخصياً (يُسدَّد لاحقاً)")],
@@ -6856,6 +6939,9 @@ routes.purchase_new = function (u) {
     paySel.addEventListener("change", () => { paid_by = paySel.value; draw(); });
     form.appendChild(paySel);
 
+    if (paid_by === "maadi_cash") {
+      form.appendChild(el("div", { class: "muted small" }, T(`Maadi cash on hand: ${money(maadiCashLedger().balance)} — this purchase is deducted from it`, `نقدية المعادي الحالية: ${money(maadiCashLedger().balance)} — يُخصم هذا المشترى منها`)));
+    }
     if (paid_by === "petty_cash") {
       if (branch === "both") {
         form.appendChild(el("div", { class: "muted small" }, T(
@@ -9116,6 +9202,155 @@ routes.maadi_deposits = function (u) {
 };
 
 // ==============================================================
+// MAADI CASH TRACKER — home card + full ledger (see maadiCashLedger)
+// ==============================================================
+function maadiCashCanEdit(u) {
+  return u && (u.role === "owner" || (u.role === "head_barista" && (u.branches || []).includes("maadi")));
+}
+
+function maadiCashPrompt(type, onDone) {
+  const titles = {
+    in:    T("Cash in — Maadi drawer","إضافة نقدية — درج المعادي"),
+    out:   T("Cash out — Maadi drawer","صرف نقدي — درج المعادي"),
+    count: T("Count cash — set the real balance","جرد النقدية — ضبط الرصيد الفعلي"),
+  };
+  const expected = maadiCashLedger().balance;
+  const fields = [
+    { key: "amount", label: type === "count"
+        ? T(`Cash physically counted (EGP) — app expects ${money(expected)}`, `النقدية المعدودة فعلياً (جنيه) — التطبيق يتوقع ${money(expected)}`)
+        : T("Amount (EGP)","المبلغ (جنيه)"), type: "number", value: type === "count" ? expected : 0 },
+    { key: "date", label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0, 10) },
+  ];
+  if (type === "out") {
+    fields.push({ key: "reason", label: T("Reason","السبب"), type: "select", value: "handed_owner", options: [
+      { label: T("Handed to owner","سُلّمت للمالك"), value: "handed_owner" },
+      { label: T("Petty cash top-up","شحن العهدة"), value: "petty_topup" },
+      { label: T("Salary / advance paid in cash","راتب / سلفة نقداً"), value: "salary" },
+      { label: T("Other","أخرى"), value: "other" },
+    ] });
+  }
+  fields.push({ key: "note", label: T("Note","ملاحظة"), type: "text", value: "" });
+  openPrompt({
+    title: titles[type],
+    fields,
+    onSubmit: (vals) => {
+      const amt = Number(vals.amount);
+      if (!(amt >= 0) || (type !== "count" && amt <= 0)) return toast(T("Enter a positive amount","أدخل مبلغاً موجباً"), "error");
+      if (!vals.date) return toast(T("Pick a date","اختر تاريخاً"), "error");
+      const reasonLbl = { handed_owner: T("Handed to owner","سُلّمت للمالك"), petty_topup: T("Petty cash top-up","شحن العهدة"), salary: T("Salary / advance","راتب / سلفة"), other: "" }[vals.reason] || "";
+      const note = [reasonLbl, (vals.note || "").trim()].filter(Boolean).join(" · ");
+      const s = stamp();
+      state.maadi_cash_log = state.maadi_cash_log || [];
+      state.maadi_cash_log.push({
+        id: uuid(), type, amount: amt, date: vals.date, note, reason: vals.reason || "",
+        by: s.by, by_name: s.by_name, at: s.at,
+        ...(isTestMode() ? { is_test: true } : {}),
+      });
+      saveState();
+      toast(type === "count"
+        ? T(`Balance set to ${money(amt)} (${amt - expected >= 0 ? "+" : ""}${money(amt - expected)} vs expected)`, `تم ضبط الرصيد على ${money(amt)}`)
+        : T("Saved","تم الحفظ"));
+      onDone && onDone();
+    },
+  });
+}
+
+function _maadiCashRow(r, u, onChange) {
+  const isCount = r.kind === "count";
+  const right = el("div", { class: "v", style: { textAlign: "end" } }, [
+    el("div", { style: { color: isCount ? "var(--ink)" : r.amount < 0 ? "var(--bad)" : "var(--ok)", fontWeight: "600" } },
+      isCount ? "= " + money(r.amount) : (r.amount > 0 ? "+" : "") + money(r.amount)),
+    isCount && r.diff
+      ? el("div", { class: "small", style: { color: r.diff < 0 ? "var(--bad)" : "var(--ok)" } }, T(`${r.diff > 0 ? "over" : "short"} ${money(Math.abs(r.diff))}`, `${r.diff > 0 ? "زيادة" : "عجز"} ${money(Math.abs(r.diff))}`))
+      : null,
+    el("div", { class: "muted small" }, T(`bal ${money(r.running_balance)}`, `الرصيد ${money(r.running_balance)}`)),
+  ]);
+  const del = (r.manual && u && u.role === "owner")
+    ? el("button", { class: "btn ghost", style: { width: "auto", padding: "2px 8px", marginTop: "4px", fontSize: "12px" }, onClick: () => {
+        if (!confirm(T("Delete this cash entry?","حذف هذا القيد؟"))) return;
+        state.maadi_cash_log = (state.maadi_cash_log || []).filter(x => x.id !== r.id);
+        saveState(); toast(T("Deleted","تم الحذف")); onChange && onChange();
+      } }, T("Delete","حذف"))
+    : null;
+  return el("div", { class: "kv" }, [
+    el("div", { class: "k" }, [
+      el("div", {}, r.label),
+      el("div", { class: "muted small" }, `${fmtDay(r.date)}${r.by_name ? " · " + T("by","بواسطة") + " " + r.by_name : ""}`),
+      del,
+    ]),
+    right,
+  ]);
+}
+
+// Landing-page card: current Maadi cash + this month's in/out + latest movements.
+function maadiCashCard(u, onChange) {
+  const card = el("div", { class: "card", style: { borderColor: "var(--accent)", marginBottom: "12px" } });
+  const { rows, balance } = maadiCashLedger();
+  const month = new Date().toISOString().slice(0, 7);
+  const monthRows = rows.filter(r => String(r.date || "").slice(0, 7) === month && r.kind !== "count");
+  const inM  = monthRows.filter(r => r.amount > 0).reduce((a, r) => a + r.amount, 0);
+  const outM = monthRows.filter(r => r.amount < 0).reduce((a, r) => a - r.amount, 0);
+  card.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, T("💰 Maadi cash on hand","💰 نقدية المعادي الحالية")));
+  card.appendChild(el("div", { style: { fontSize: "30px", fontWeight: "700", color: balance < 0 ? "var(--bad)" : "var(--ink)" } }, money(balance)));
+  card.appendChild(el("div", { class: "muted small" }, T(
+    `${fmtYm(month)}: in ${money(inM)} · out ${money(outM)}`,
+    `${fmtYm(month)}: داخل ${money(inM)} · خارج ${money(outM)}`)));
+  const lastCount = rows.filter(r => r.kind === "count").pop();
+  card.appendChild(el("div", { class: "muted small" }, lastCount
+    ? T(`Last counted ${fmtDay(lastCount.date)} by ${lastCount.by_name || "—"}`, `آخر جرد ${fmtDay(lastCount.date)} بواسطة ${lastCount.by_name || "—"}`)
+    : T(`Tracking since ${fmtDay(MAADI_CASH_START)} · count the drawer to set the starting balance`, `التتبع منذ ${fmtDay(MAADI_CASH_START)} · اجرد الدرج لضبط الرصيد الافتتاحي`)));
+  const recent = rows.slice(-4).reverse();
+  if (recent.length) {
+    card.appendChild(el("div", { class: "hr" }));
+    for (const r of recent) card.appendChild(_maadiCashRow(r, null));
+  }
+  const redraw = onChange || (() => go("home"));
+  const btns = el("div", { class: "btn-row", style: { flexWrap: "wrap", gap: "8px", marginTop: "10px" } }, [
+    el("button", { class: "btn secondary", onClick: () => go("maadi_cash") }, T("View all","عرض الكل")),
+  ]);
+  if (maadiCashCanEdit(u)) {
+    btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("count", redraw) }, T("✎ Count cash","✎ جرد")));
+    btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("out", redraw) }, T("− Cash out","− صرف")));
+    btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("in", redraw) }, T("+ Cash in","+ إضافة")));
+  }
+  card.appendChild(btns);
+  return card;
+}
+
+routes.maadi_cash = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header(T("Maadi cash tracker","متابعة نقدية المعادي"),
+    T("Cash in from Maadi shift closes · cash out for purchases, overheads and ATM deposits paid from the Maadi drawer.",
+      "النقدية الداخلة من إغلاقات شيفت المعادي · والخارجة للمشتريات والمصروفات وإيداعات الماكينة المدفوعة من درج المعادي.")));
+  let month = "";
+  const body = el("div", {});
+  const monthInput = el("input", { type: "month", value: month, style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" } });
+  monthInput.addEventListener("change", () => { month = monthInput.value; draw(); });
+  function draw() {
+    body.innerHTML = "";
+    body.appendChild(maadiCashCard(u, draw));
+    const { rows } = maadiCashLedger();
+    const shown = rows.filter(r => !month || String(r.date || "").slice(0, 7) === month).reverse();
+    const inT  = shown.filter(r => r.kind !== "count" && r.amount > 0).reduce((a, r) => a + r.amount, 0);
+    const outT = shown.filter(r => r.kind !== "count" && r.amount < 0).reduce((a, r) => a - r.amount, 0);
+    const list = el("div", { class: "card" }, [
+      el("div", { style: { display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" } }, [
+        monthInput,
+        el("button", { class: "btn ghost", style: { width: "auto" }, onClick: () => { month = ""; monthInput.value = ""; draw(); } }, T("All time","كل الوقت")),
+        el("span", { class: "muted small" }, T(`In ${money(inT)} · Out ${money(outT)} · ${shown.length} entries`, `داخل ${money(inT)} · خارج ${money(outT)} · ${shown.length} قيد`)),
+      ]),
+    ]);
+    if (!shown.length) list.appendChild(el("div", { class: "muted small" }, T("No cash movements yet.","لا توجد حركات نقدية بعد.")));
+    for (const r of shown) list.appendChild(_maadiCashRow(r, u, draw));
+    body.appendChild(list);
+  }
+  wrap.appendChild(body);
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ==============================================================
 // COMPANY LOAN  (never feeds any overhead row or branch-margin calc)
 // ---
 // Originated Sep 2024. Borrowed 600,000 EGP, repaying 750,000 total in 12 equal
@@ -10539,6 +10774,7 @@ routes.overheads = function (u) {
         { key: "paid_from", label: "Paid from", type: "select", value: "", options: [
           { label: "— not tracked (P&L only) —", value: "" },
           { label: "💵 Petty cash", value: "petty_cash" },
+          MAADI_CASH_PAID_FROM_OPT,
           { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
           { label: "💳 Credit card", value: "credit_card" },
           PERSONAL_PAID_FROM_OPT,
@@ -10592,6 +10828,8 @@ routes.overheads = function (u) {
             });
           } else if (paidFrom === "owner_personal") {
             recordPersonalPayment({ amount: amt, date: vals.paid_on, source: "overhead", ref: entry.id, branch: br, label: desc }, s);
+          } else if (paidFrom === "maadi_cash") {
+            // nothing to write — maadiCashLedger() reads the overhead itself
           } else {
             state.bank_ledger.push({
               id: uuid(), date: vals.paid_on, amount: -amt, supplier: desc, ref: entry.id,
@@ -10619,6 +10857,7 @@ routes.overheads = function (u) {
     const paidFromOptions = [
       { label: "— not tracked (P&L only) —", value: "" },
       { label: "💵 Petty cash", value: "petty_cash" },
+      MAADI_CASH_PAID_FROM_OPT,
       { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
       { label: "💳 Credit card", value: "credit_card" },
       PERSONAL_PAID_FROM_OPT,
@@ -10677,6 +10916,8 @@ routes.overheads = function (u) {
             });
           } else if (paidFrom === "owner_personal") {
             recordPersonalPayment({ amount: a, date: entry.date, source: "overhead", ref: entry.id, branch: entry.branch, label: desc }, s);
+          } else if (paidFrom === "maadi_cash") {
+            // nothing to write — maadiCashLedger() reads the overhead itself
           } else {
             state.bank_ledger.push({
               id: uuid(), date: entry.date, amount: -a, supplier: desc, ref: entry.id,
@@ -10813,6 +11054,7 @@ routes.overhead_log_new = function (u) {
     const paidFromOptions = [
       { label: "— not tracked (P&L only) —", value: "" },
       { label: "💵 Petty cash", value: "petty_cash" },
+      { label: T("💰 Maadi sales cash (drawer)","💰 نقدية مبيعات المعادي (الدرج)"), value: "maadi_cash" },
       { label: "💳 Credit card", value: "credit_card" },
       { label: "🙋 Paid personally — reimburse me later", value: "owner_personal" },
     ];
