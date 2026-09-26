@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260926-157 -->
+<!-- CB_BUILD:20260926-161 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260926-157";
+  var BUILD = "20260926-161";
   (function() {
     function checkFresh() {
       try {
@@ -15843,6 +15843,8 @@ routes.cleaning_log_list = function (u) {
 // ==============================================================
 // SIGN-IN STAMP
 // ==============================================================
+// Last day (exclusive) the head barista may clock in on behalf of other baristas.
+const HB_STAMP_FOR_OTHERS_UNTIL = "2026-10-06";
 routes.signin_stamp_new = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Sign-In Stamp","بصمة الحضور"), T("Upload a photo of the iPad clock showing your arrival time.","ارفع صورة لساعة الآيباد تُظهر وقت وصولك.")));
@@ -15855,7 +15857,9 @@ routes.signin_stamp_new = function (u) {
 
   // Owner / head barista can clock in on behalf of another barista (e.g. their phone died).
   // The stamp, lateness penalty and bonuses go to that barista; entered_by records who did it.
-  const canStampForOthers = u.role === "owner" || u.role === "head_barista";
+  // Head barista's right is temporary: 10 days from 26 Sep 2026 (through 5 Oct). After that owner only.
+  const canStampForOthers = u.role === "owner" ||
+    (u.role === "head_barista" && localISODate(new Date()) < HB_STAMP_FOR_OTHERS_UNTIL);
   let forUserId = u.id;
   const forSel = canStampForOthers ? el("select", {}) : null;
   const fillForSel = () => {
