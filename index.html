@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260926-161 -->
+<!-- CB_BUILD:20260926-163 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260926-161";
+  var BUILD = "20260926-163";
   (function() {
     function checkFresh() {
       try {
@@ -15864,7 +15864,8 @@ routes.signin_stamp_new = function (u) {
   const forSel = canStampForOthers ? el("select", {}) : null;
   const fillForSel = () => {
     if (!forSel) return;
-    const staff = staffDir.shiftStaff(branch).filter(x => x.id !== u.id)
+    // Whole team, not just this branch: most baristas rotate and have no branch assigned.
+    const staff = staffDir.shiftStaff().filter(x => x.id !== u.id)
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     if (forUserId !== u.id && !staff.some(x => x.id === forUserId)) forUserId = u.id;
     forSel.innerHTML = "";
@@ -16058,7 +16059,8 @@ routes.signin_stamp_new = function (u) {
         // ─────────────────────────────────────────────────────
 
         showPhotoConfirm({
-          title: T("Clock-in recorded!","تم تسجيل الحضور!"),
+          title: onBehalf ? T(`Clock-in recorded for ${who.name} (by ${u.name})`, `تم تسجيل حضور ${who.name} (بواسطة ${u.name})`)
+                          : T("Clock-in recorded!","تم تسجيل الحضور!"),
           names: photoNames,
           driveIds: stampPhotoField.getDriveIds(),
           onDone: () => go("signin_stamp_list"),
@@ -16377,7 +16379,8 @@ routes.signin_stamp_list = function (u) {
         el("div", { class: "grow" }, [
           el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
           el("div", { class: "sub" }, `${fmtDate(stampClockTime(s))} · ${minStr}${s.note ? " · " + s.note : ""}`),
-          s.entered_by_name ? el("div", { class: "muted small" }, T(`✍ entered by ${s.entered_by_name}`, `✍ سجّله ${s.entered_by_name}`)) : null,
+          s.entered_by_name ? el("div", { class: "muted small", style: { fontWeight: "600" } },
+            T(`✍ Signed in by ${s.entered_by_name} for ${s.by_name} · ${fmtDate(s.at)}`, `✍ سجّله ${s.entered_by_name} نيابةً عن ${s.by_name} · ${fmtDate(s.at)}`)) : null,
           (s.clock_source === "photo" || s.clock_source === "manual") && Math.abs(new Date(s.at) - new Date(s.clock_at)) >= 60000
             ? el("div", { class: "muted small" }, s.clock_source === "manual"
                 ? T(`✎ time set from photo · uploaded ${fmtDate(s.at)}`, `✎ الوقت من الصورة · رُفعت ${fmtDate(s.at)}`)
