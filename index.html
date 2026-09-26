@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260926-171 -->
+<!-- CB_BUILD:20260926-200 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260926-171";
+  var BUILD = "20260926-200";
   (function() {
     function checkFresh() {
       try {
@@ -4928,11 +4928,6 @@ routes.home = function (u) {
                    : (["barista","head_barista"].includes(u.role) ? "rotates (Maadi + Zawya)" : "no branches assigned");
   wrap.appendChild(el("div", { class: "banner-arch" }, [ `Signed in as `, el("b", {}, u.name), ` · ${branchInfo}`]));
 
-  // Maadi cash in/out tracker — owner/accountant, Maadi head barista, cash-status lead.
-  if (canAccess("maadi_cash", u) && (u.role === "owner" || u.role === "accountant" || (u.branches || []).includes("maadi"))) {
-    try { wrap.appendChild(maadiCashCard(u)); } catch (e) { console.warn("maadi cash card", e); }
-  }
-
   const tiles = el("div", { id: "home-grid", class: "grid c2" });
 
   // ── Notifications tile (all roles) ──
@@ -5006,6 +5001,7 @@ routes.home = function (u) {
       tiles.appendChild(tile("📑", T("Purchases Log","سجل المشتريات"), T("View receipts","عرض الفواتير"), () => go("purchase_list")));
       tiles.appendChild(tile("💵", T("Petty Cash","العهدة النقدية"), T("Balance & log","الرصيد والسجل"), () => go("petty_cash")));
       if (u.branches && u.branches.includes("maadi")) {
+        tiles.appendChild(maadiCashTile());
         tiles.appendChild(tile("🏧", T("ATM Deposit","إيداع الصراف"), T("Weekly cash → bank","الإيداع الأسبوعي → البنك"), () => go("maadi_deposits")));
       }
     }
@@ -5057,6 +5053,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("📁", T("Assets","الملفات"), T("Files & documents","الملفات والمستندات"), () => go("assets_list")));
     tiles.appendChild(tile("💵", T("Petty Cash","العهدة النقدية"), T("Balance & log","الرصيد والسجل"), () => go("petty_cash")));
     if (u.branches.includes("maadi")) {
+      tiles.appendChild(maadiCashTile());
       tiles.appendChild(tile("🏧", T("Maadi Deposits","إيداعات المعادي"), T("Weekly cash → bank","الإيداع الأسبوعي → البنك"), () => go("maadi_deposits")));
     }
     tiles.appendChild(tile("🏦", T("Bank Ledger","دفتر البنك"), T("Transfers & card payments","التحويلات ومدفوعات البطاقة"), () => go("bank")));
@@ -5145,6 +5142,7 @@ routes.home = function (u) {
       tiles.appendChild(_t);
     })();
     tiles.appendChild(sectionHeader("Finance"));
+    tiles.appendChild(maadiCashTile());
     tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
     tiles.appendChild(tile("🏧", "ATM Deposit", "Weekly cash → bank", () => go("maadi_deposits")));
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
@@ -9282,7 +9280,20 @@ function _maadiCashRow(r, u, onChange) {
   ]);
 }
 
-// Landing-page card: current Maadi cash + this month's in/out + latest movements.
+// Home Finance tile — previews the cash on hand + this month's cash in.
+function maadiCashTile() {
+  let sub = T("Cash in / out · current status","داخل / خارج · الرصيد الحالي");
+  try {
+    const { rows, balance } = maadiCashLedger();
+    const month = new Date().toISOString().slice(0, 7);
+    const inM = rows.filter(r => r.kind !== "count" && r.amount > 0 && String(r.date || "").slice(0, 7) === month)
+      .reduce((a, r) => a + r.amount, 0);
+    sub = T(`On hand ${money(balance)} · in ${money(inM)} this month`, `الرصيد ${money(balance)} · داخل ${money(inM)} هذا الشهر`);
+  } catch (e) { console.warn("maadi cash tile", e); }
+  return tile("💰", T("Maadi Cash","نقدية المعادي"), sub, () => go("maadi_cash"));
+}
+
+// Summary card (top of the Maadi cash page): current Maadi cash + this month's in/out + latest movements.
 function maadiCashCard(u, onChange) {
   const card = el("div", { class: "card", style: { borderColor: "var(--accent)", marginBottom: "12px" } });
   const { rows, balance } = maadiCashLedger();
@@ -9305,15 +9316,13 @@ function maadiCashCard(u, onChange) {
     for (const r of recent) card.appendChild(_maadiCashRow(r, null));
   }
   const redraw = onChange || (() => go("home"));
-  const btns = el("div", { class: "btn-row", style: { flexWrap: "wrap", gap: "8px", marginTop: "10px" } }, [
-    el("button", { class: "btn secondary", onClick: () => go("maadi_cash") }, T("View all","عرض الكل")),
-  ]);
+  const btns = el("div", { class: "btn-row", style: { flexWrap: "wrap", gap: "8px", marginTop: "10px" } }, []);
   if (maadiCashCanEdit(u)) {
     btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("count", redraw) }, T("✎ Count cash","✎ جرد")));
     btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("out", redraw) }, T("− Cash out","− صرف")));
     btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("in", redraw) }, T("+ Cash in","+ إضافة")));
   }
-  card.appendChild(btns);
+  if (btns.children.length) card.appendChild(btns);
   return card;
 }
 
