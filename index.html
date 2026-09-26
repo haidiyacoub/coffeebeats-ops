@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260923-228 -->
+<!-- CB_BUILD:20260926-091 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260923-228";
+  var BUILD = "20260926-091";
   (function() {
     function checkFresh() {
       try {
@@ -2932,6 +2932,7 @@ async function pullFromFirestore() {
     startConfigSyncListener();   // salary_config, hb_incentive_config, settings
     startHrMetaSyncListener();   // barista dates, salary snapshots, ID uploads
     startEquipmentSyncListener(); // fixed-asset register
+    startOpeningTimesListener();  // attendance opening times (meta chunk)
     return { ok: true };
   } catch (e) {
     return { ok: false, err: String(e) };
@@ -3084,6 +3085,44 @@ const startHrMetaSyncListener      = _makeLiveListener("hr_meta", "hr_meta (date
 // or inventory snapshot is added — one listener covers all four month-sharded arrays.
 const startLogShardSyncListener    = _makeLiveListener("log_shard_index", "logs (shift-close/cleaning/signin/snapshot)");
 const startEquipmentSyncListener   = _makeLiveListener("equipment", "equipment (fixed-asset register)");
+
+// Attendance opening times live in the "meta" chunk, which had no live listener — so a
+// device opened before the owner changed the times kept the OLD ones until a full reload:
+// its clock-ins were scored against them, and any opening-time save from it pushed its
+// stale branch record back over the new one ("the times keep going back"). Pull just this
+// key (newest-edit-wins per branch) whenever it changes remotely, and before it is used.
+function _mergeRemoteOpeningTimes(rem) {
+  if (!_isPlainObj(rem)) return false;
+  const before = JSON.stringify(state.branch_opening_times || {});
+  state.branch_opening_times = _mergeValue(state.branch_opening_times || {}, rem);
+  const changed = JSON.stringify(state.branch_opening_times) !== before;
+  if (changed) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
+  }
+  return changed;
+}
+async function refreshOpeningTimes(timeoutMs = 4000) {
+  try {
+    const snap = await Promise.race([
+      db.collection("state").doc("meta").get(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), timeoutMs)),
+    ]);
+    if (snap.exists) _mergeRemoteOpeningTimes((snap.data() || {}).branch_opening_times);
+  } catch (e) { console.warn("[sync] could not refresh opening times", e); }
+}
+let _openingTimesUnsub = null;
+function startOpeningTimesListener() {
+  if (_openingTimesUnsub) return;
+  try {
+    _openingTimesUnsub = db.collection("state").doc("meta").onSnapshot(snap => {
+      if (!snap.exists || (snap.metadata && snap.metadata.hasPendingWrites)) return;
+      if (_mergeRemoteOpeningTimes((snap.data() || {}).branch_opening_times)) {
+        console.log("[sync] remote opening times changed — updated");
+        if (route.name === "roster") render(); // only the settings card shows them; don't wipe forms elsewhere
+      }
+    }, err => console.warn("[sync] opening-times listener error", err));
+  } catch (e) { console.warn("[sync] could not start opening-times listener", e); }
+}
 
 // Auto-pull on start — flush any unsynced local edits first so they aren't clobbered.
 async function autoPullOnStart() {
@@ -12414,7 +12453,10 @@ routes.roster = function (u) {
       otRow.appendChild(el("div", { class: "k" }, shLabel + " shift start"));
       if (canEdit) {
         const otInp = el("input", { type: "time", value: currentVal, style: { maxWidth: "130px" } });
-        otInp.addEventListener("change", () => {
+        otInp.addEventListener("change", async () => {
+          // Pull the latest first: this record is saved whole (morning + night), so saving
+          // from a device holding stale times would revert the shift that wasn't edited.
+          await refreshOpeningTimes();
           if (!state.branch_opening_times[otBranch]) state.branch_opening_times[otBranch] = {};
           state.branch_opening_times[otBranch][otShift] = otInp.value;
           // Timestamp makes the branch entry a record → newest edit wins in _mergeValue.
@@ -15838,6 +15880,8 @@ routes.signin_stamp_new = function (u) {
         for (let i = 0; i < photoBlobs.length; i++) {
           try { await IDB.put(photoIds[i], photoBlobs[i]); } catch (e) { console.warn(e); }
         }
+        // Score against the owner's latest opening times, not this device's cached copy.
+        await refreshOpeningTimes();
         // Score against the time the clock photo was taken (EXIF), falling back to upload time.
         const _photoTime       = await photoClockTime(photoBlobs, s.at);
         const _clockAt         = _photoTime ? _photoTime.toISOString() : s.at;
@@ -16133,6 +16177,7 @@ function _retierLatePenalty(s, stampedAt) {
 // auto late-penalties are re-tiered or removed; new penalties are never created here.
 // Returns human-readable change lines.
 async function rescoreSigninStamps(fromDate) {
+  await refreshOpeningTimes();
   const log = [];
   const stamps = (state.signin_stamps || [])
     .filter(s => localISODate(new Date(s.at)) >= fromDate)
