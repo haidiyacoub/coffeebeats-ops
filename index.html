@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260926-200 -->
+<!-- CB_BUILD:20260927-769 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260926-200";
+  var BUILD = "20260927-769";
   (function() {
     function checkFresh() {
       try {
@@ -16630,6 +16630,7 @@ routes.signin_stamp_list = function (u) {
         el("div", { class: "grow" }, [
           el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
           el("div", { class: "sub" }, `${fmtDate(stampClockTime(s))} · ${minStr}${s.note ? " · " + s.note : ""}`),
+          s.edit_note ? el("div", { class: "muted small" }, "✎ " + s.edit_note) : null,
           s.entered_by_name ? el("div", { class: "muted small", style: { fontWeight: "600" } },
             T(`✍ Signed in by ${s.entered_by_name} for ${s.by_name} · ${fmtDate(s.at)}`, `✍ سجّله ${s.entered_by_name} نيابةً عن ${s.by_name} · ${fmtDate(s.at)}`)) : null,
           (s.clock_source === "photo" || s.clock_source === "manual") && Math.abs(new Date(s.at) - new Date(s.clock_at)) >= 60000
@@ -16639,6 +16640,10 @@ routes.signin_stamp_list = function (u) {
             : null,
         ]),
         badge,
+        u.role === "owner" ? el("button", {
+          class: "btn ghost", style: { width: "auto", padding: "4px 10px", marginLeft: "6px", fontSize: "12px" },
+          onClick: (e) => { e.stopPropagation(); editSigninStamp(s); },
+        }, T("✎ Edit","✎ تعديل")) : null,
       ]));
     }
   }
@@ -16650,6 +16655,89 @@ routes.signin_stamp_list = function (u) {
   ]));
   return wrap;
 };
+
+// Owner: change which barista / which day a sign-in stamp belongs to (and its clock time),
+// or delete it. A changed day can move the stamp to another month shard, and a per-month
+// union merge would keep the old copy there — so an edit writes a NEW record and
+// tombstones the old id. The matching auto late-penalty follows the stamp.
+function editSigninStamp(s) {
+  const cu = currentUser();
+  if (cu?.role !== "owner") return;
+  const clock = new Date(stampClockTime(s));
+  const pad = n => String(n).padStart(2, "0");
+  const staff = staffDir.shiftStaff().slice().sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  if (!staff.some(x => x.id === s.by)) staff.unshift({ id: s.by, name: s.by_name });
+
+  const whoSel = el("select", {}, staff.map(x => el("option", { value: x.id }, x.name)));
+  whoSel.value = s.by;
+  const dateInp = el("input", { type: "date", value: localISODate(new Date(s.at)) });
+  const timeInp = el("input", { type: "time", value: pad(clock.getHours()) + ":" + pad(clock.getMinutes()) });
+
+  const findPenalty = () => (state.penalties || []).find(x =>
+    x.auto_late && x.user_id === s.by && x.date === localISODate(new Date(s.at)));
+
+  const save = () => {
+    if (!dateInp.value || !timeInp.value) return toast(T("Pick a day and time.","اختر اليوم والوقت."), "error");
+    const who = staffDir.resolve(whoSel.value) || staff.find(x => x.id === whoSel.value);
+    const oldAt = new Date(s.at);
+    const at = new Date(dateInp.value + "T" + pad(oldAt.getHours()) + ":" + pad(oldAt.getMinutes()) + ":" + pad(oldAt.getSeconds()));
+    const clockAt = new Date(dateInp.value + "T" + timeInp.value + ":00");
+    const stampedAt = now();
+    const pen = findPenalty();
+    const ns = {
+      ...s, id: uuid(),
+      by: who.id, by_name: who.name,
+      at: at.toISOString(),
+      clock_at: clockAt.toISOString(),
+      clock_source: clockAt.toISOString() === s.clock_at ? s.clock_source : "manual",
+      last_edited_at: stampedAt, last_edited_by_name: cu.name,
+      edit_note: `Edited by ${cu.name} · ${fmtDate(stampedAt)} (was ${s.by_name} · ${localISODate(oldAt)})`,
+    };
+    ns.mins_late = minsLateAt(ns.branch, ns.clock_at);
+    ns.early_bonus = ns.mins_late <= -15;
+    state.signin_stamps = state.signin_stamps.filter(x => x.id !== s.id);
+    recordDeletion(s.id);
+    state.signin_stamps.push(ns);
+    let penMsg = "";
+    if (pen) {
+      pen.user_id = who.id; pen.barista = who.name;
+      pen.date = localISODate(at); pen.month = pen.date.slice(0, 7);
+      pen.last_edited_at = stampedAt;
+      const log = _retierLatePenalty(ns, stampedAt);
+      penMsg = log.length ? T(" · late penalty updated"," · تم تحديث خصم التأخير") : T(" · late penalty moved"," · تم نقل خصم التأخير");
+    }
+    saveState();
+    toast(T(`Stamp updated → ${who.name} · ${dateInp.value} ${timeInp.value}${penMsg}`, `تم تعديل البصمة → ${who.name}${penMsg}`), "ok");
+    closeSheet();
+    render();
+  };
+
+  const del = () => {
+    if (!confirm(T(`Delete ${s.by_name}'s sign-in stamp from ${fmtDate(s.at)}?`, `حذف بصمة ${s.by_name} بتاريخ ${fmtDate(s.at)}؟`))) return;
+    const pen = findPenalty();
+    if (pen && confirm(T(`Also remove the late penalty (${money(pen.amount)}) linked to this stamp?`, `حذف خصم التأخير (${money(pen.amount)}) المرتبط بهذه البصمة أيضاً؟`))) {
+      state.penalties = state.penalties.filter(x => x.id !== pen.id);
+      state.deleted_penalties = [{ ...pen, deleted_at: now(), deleted_by: cu.name }, ...(state.deleted_penalties || [])].slice(0, 20);
+      recordDeletion(pen.id);
+    }
+    deleteRecordToTrash("signin_stamps", "deleted_signin_stamps", s);
+    recordDeletion(s.id);
+    toast(T("Sign-in stamp deleted","تم حذف البصمة"), "ok");
+    closeSheet();
+    render();
+  };
+
+  openSheet(el("div", {}, [
+    el("h2", {}, T("Edit sign-in stamp","تعديل بصمة الحضور")),
+    el("div", { class: "muted small", style: { marginBottom: "10px" } },
+      `${s.by_name} · ${s.branch} · ${fmtDate(stampClockTime(s))}${s.entered_by_name ? " · ✍ " + s.entered_by_name : ""}`),
+    el("label", {}, T("Barista","الباريستا")), whoSel,
+    el("label", {}, T("Day","اليوم")), dateInp,
+    el("label", {}, T(`Clock-in time (opening ${branchMorningOpen(s.branch)})`, `وقت الحضور (الفتح ${branchMorningOpen(s.branch)})`)), timeInp,
+    el("button", { class: "btn", style: { marginTop: "14px" }, onClick: save }, T("Save changes","حفظ التعديلات")),
+    el("button", { class: "btn ghost", style: { marginTop: "8px", color: "var(--bad)" }, onClick: del }, T("🗑 Delete this stamp","🗑 حذف هذه البصمة")),
+  ]));
+}
 
 // Opens a bottom sheet showing every photo attached to a sign-in stamp.
 // Tries the local IndexedDB blob first (instant, works offline on the device
