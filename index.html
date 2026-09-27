@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260927-769 -->
+<!-- CB_BUILD:20260927-778 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260927-769";
+  var BUILD = "20260927-778";
   (function() {
     function checkFresh() {
       try {
@@ -1223,6 +1223,7 @@ function migrateState(s) {
 
   s.penalties      = s.penalties      || [];
   s.maadi_deposits = s.maadi_deposits || [];
+  s.zawya_cash_received = s.zawya_cash_received || []; // payments Zawya hands over for a sales month — [{id,month,amount,date,note,by,by_name,at}] (see zawyaCashByMonth)
   s.maadi_cash_log = s.maadi_cash_log || []; // manual Maadi sales-cash movements — [{id,type:"in"|"out"|"count",amount,date,note,by,by_name,at}] (see maadiCashLedger)
   s.overheads     = s.overheads     || [];
   s.overhead_presets        = s.overhead_presets        || {}; // category → default amount
@@ -1557,7 +1558,7 @@ const STATE_CHUNKS = {
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
   waste:         ["waste", "deleted_waste"],
-  purchases:     ["purchases", "petty_cash", "bank_ledger", "owner_account", "deleted_purchases", "maadi_cash_log"],
+  purchases:     ["purchases", "petty_cash", "bank_ledger", "owner_account", "deleted_purchases", "maadi_cash_log", "zawya_cash_received"],
   shifts:        ["shifts"],
   // NOTE: snapshots, shift_closes, cleaning_logs and signin_stamps are NO LONGER
   // single docs here — they are append-only logs that grow without bound and would
@@ -5143,6 +5144,7 @@ routes.home = function (u) {
     })();
     tiles.appendChild(sectionHeader("Finance"));
     tiles.appendChild(maadiCashTile());
+    tiles.appendChild(zawyaCashTile());
     tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
     tiles.appendChild(tile("🏧", "ATM Deposit", "Weekly cash → bank", () => go("maadi_deposits")));
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
@@ -9352,6 +9354,151 @@ routes.maadi_cash = function (u) {
     if (!shown.length) list.appendChild(el("div", { class: "muted small" }, T("No cash movements yet.","لا توجد حركات نقدية بعد.")));
     for (const r of shown) list.appendChild(_maadiCashRow(r, u, draw));
     body.appendChild(list);
+  }
+  wrap.appendChild(body);
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ==============================================================
+// ZAWYA CASH RECONCILIATION — the cash Zawya shift closes hand to the venue.
+// Zawya collects the sales and pays Coffee Beats back after taking the 14% VAT
+// and its 10% share (of after-VAT sales), so the monthly expected payout is
+//   shift-close cash ÷ 1.14 × 0.90
+// and it's matched against the payments logged in state.zawya_cash_received
+// ([{id, month:"YYYY-MM", amount, date, note, by, by_name, at}]).
+// ==============================================================
+const ZAWYA_VAT = 0.14, ZAWYA_VENUE_SHARE = 0.10;
+
+function zawyaCashByMonth() {
+  const byM = {};
+  const get = (m) => byM[m] || (byM[m] = { month: m, cash: 0, closes: [], received: 0, payments: [] });
+  for (const c of state.shift_closes || []) {
+    if (!notTest(c) || c.branch !== "zawya") continue;
+    const m = String(normalizeDate(c.date) || "").slice(0, 7);
+    if (!m) continue;
+    const r = get(m); r.cash += Number(c.cash) || 0; r.closes.push(c);
+  }
+  for (const p of state.zawya_cash_received || []) {
+    if (!notTest(p) || !p.month) continue;
+    const r = get(p.month); r.received += Number(p.amount) || 0; r.payments.push(p);
+  }
+  return Object.values(byM).map(r => {
+    const afterVat = r.cash / (1 + ZAWYA_VAT);
+    const vat = r.cash - afterVat;
+    const share = afterVat * ZAWYA_VENUE_SHARE;
+    const expected = afterVat - share;
+    return { ...r, vat, share, expected, diff: r.payments.length ? r.received - expected : null };
+  }).sort((a, b) => b.month.localeCompare(a.month));
+}
+
+function zawyaCashTile() {
+  let sub = T("Shift-close cash vs Zawya payout","نقدي الإغلاق مقابل تحويل زاوية");
+  try {
+    const month = new Date().toISOString().slice(0, 7);
+    const r = zawyaCashByMonth().find(x => x.month === month);
+    if (r) sub = T(`${fmtYm(month)}: cash ${money(r.cash)} · expect ${money(r.expected)}`, `${fmtYm(month)}: نقدي ${money(r.cash)} · المتوقع ${money(r.expected)}`);
+  } catch (e) { console.warn("zawya cash tile", e); }
+  return tile("🎬", T("Zawya Cash","نقدية زاوية"), sub, () => go("zawya_cash"));
+}
+
+function zawyaCashReceivedPrompt(month, expected, onDone) {
+  openPrompt({
+    title: T("Cash received from Zawya","النقدية المستلمة من زاوية"),
+    fields: [
+      { key: "month", label: T("For sales month","عن شهر المبيعات"), type: "month", value: month },
+      { key: "amount", label: T(`Amount received (EGP) — expected ${money(expected)}`, `المبلغ المستلم (جنيه) — المتوقع ${money(expected)}`), type: "number", value: Math.round(expected) },
+      { key: "date", label: T("Received on","تاريخ الاستلام"), type: "date", value: new Date().toISOString().slice(0, 10) },
+      { key: "note", label: T("Note","ملاحظة"), type: "text", value: "" },
+    ],
+    onSubmit: (vals) => {
+      const amt = Number(vals.amount);
+      if (!(amt > 0)) return toast(T("Enter a positive amount","أدخل مبلغاً موجباً"), "error");
+      if (!/^\d{4}-\d{2}$/.test(vals.month || "")) return toast(T("Pick the sales month","اختر شهر المبيعات"), "error");
+      const s = stamp();
+      state.zawya_cash_received = state.zawya_cash_received || [];
+      state.zawya_cash_received.push({
+        id: uuid(), month: vals.month, amount: amt, date: vals.date || "", note: (vals.note || "").trim(),
+        by: s.by, by_name: s.by_name, at: s.at,
+        ...(isTestMode() ? { is_test: true } : {}),
+      });
+      saveState();
+      toast(T("Saved","تم الحفظ"));
+      onDone && onDone();
+    },
+  });
+}
+
+routes.zawya_cash = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header(T("Zawya cash reconciliation","مطابقة نقدية زاوية"),
+    T(`Cash from Zawya shift closes each month, minus ${Math.round(ZAWYA_VAT * 100)}% VAT and Zawya's ${Math.round(ZAWYA_VENUE_SHARE * 100)}% share = what Zawya should pay us. Log what they actually pay to see the gap.`,
+      `النقدي من إغلاقات شيفت زاوية كل شهر، ناقص ضريبة ${Math.round(ZAWYA_VAT * 100)}% ونصيب زاوية ${Math.round(ZAWYA_VENUE_SHARE * 100)}% = ما يجب أن تدفعه زاوية. سجّل المبلغ المستلم فعلياً لمعرفة الفرق.`)));
+  const body = el("div", {});
+  let open = new Date().toISOString().slice(0, 7);
+  const kv = (k, v, style) => el("div", { class: "kv" }, [el("div", { class: "k" }, k), el("div", { class: "v", style: style || {} }, v)]);
+  function draw() {
+    body.innerHTML = "";
+    const months = zawyaCashByMonth();
+    if (!months.length) body.appendChild(el("div", { class: "card muted small" }, T("No Zawya shift closes yet.","لا توجد إغلاقات شيفت لزاوية بعد.")));
+    for (const r of months) {
+      const isOpen = r.month === open;
+      const card = el("div", { class: "card", style: { marginBottom: "10px", ...(isOpen ? { borderColor: "var(--accent)" } : {}) } });
+      const status = r.diff == null
+        ? el("span", { class: "pill" }, T("awaiting payment","بانتظار الدفع"))
+        : Math.abs(r.diff) < 1
+          ? el("span", { class: "pill", style: { color: "var(--ok)" } }, T("✓ matches","✓ مطابق"))
+          : el("span", { class: "pill", style: { color: r.diff < 0 ? "var(--bad)" : "var(--ok)" } },
+              T(`${r.diff < 0 ? "short" : "over"} ${money(Math.abs(r.diff))}`, `${r.diff < 0 ? "عجز" : "زيادة"} ${money(Math.abs(r.diff))}`));
+      card.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", gap: "8px" },
+        onClick: () => { open = isOpen ? "" : r.month; draw(); } }, [
+        el("div", {}, [
+          el("div", { style: { fontWeight: "700" } }, fmtYm(r.month)),
+          el("div", { class: "muted small" }, T(`Cash ${money(r.cash)} · expected ${money(r.expected)} · received ${money(r.received)}`,
+                                               `نقدي ${money(r.cash)} · المتوقع ${money(r.expected)} · المستلم ${money(r.received)}`)),
+        ]),
+        status,
+      ]));
+      if (isOpen) {
+        card.appendChild(el("div", { class: "hr" }));
+        card.appendChild(kv(T(`Shift-close cash (${r.closes.length} closes)`, `نقدي الإغلاق (${r.closes.length} إغلاق)`), money(r.cash)));
+        card.appendChild(kv(T(`− VAT ${Math.round(ZAWYA_VAT * 100)}%`, `− ضريبة ${Math.round(ZAWYA_VAT * 100)}%`), "−" + money(r.vat), { color: "var(--bad)" }));
+        card.appendChild(kv(T(`− Zawya share ${Math.round(ZAWYA_VENUE_SHARE * 100)}%`, `− نصيب زاوية ${Math.round(ZAWYA_VENUE_SHARE * 100)}%`), "−" + money(r.share), { color: "var(--bad)" }));
+        card.appendChild(kv(el("b", {}, T("Expected from Zawya","المتوقع من زاوية")), el("b", {}, money(r.expected))));
+        card.appendChild(kv(T("Received","المستلم"), money(r.received)));
+        if (r.diff != null) card.appendChild(kv(T("Difference","الفرق"), (r.diff > 0 ? "+" : r.diff < 0 ? "−" : "") + money(Math.abs(r.diff)), { color: Math.abs(r.diff) < 1 ? "var(--ok)" : r.diff < 0 ? "var(--bad)" : "var(--ok)", fontWeight: "600" }));
+        for (const p of r.payments) {
+          card.appendChild(el("div", { class: "kv" }, [
+            el("div", { class: "k" }, [
+              el("div", {}, T("💵 Payment from Zawya","💵 دفعة من زاوية") + (p.note ? " — " + p.note : "")),
+              el("div", { class: "muted small" }, `${p.date ? fmtDay(p.date) : "—"}${p.by_name ? " · " + T("by","بواسطة") + " " + p.by_name : ""}`),
+              u.role === "owner" ? el("button", { class: "btn ghost", style: { width: "auto", padding: "2px 8px", marginTop: "4px", fontSize: "12px" }, onClick: (e) => {
+                e.stopPropagation();
+                if (!confirm(T("Delete this payment?","حذف هذه الدفعة؟"))) return;
+                state.zawya_cash_received = (state.zawya_cash_received || []).filter(x => x.id !== p.id);
+                saveState(); toast(T("Deleted","تم الحذف")); draw();
+              } }, T("Delete","حذف")) : null,
+            ]),
+            el("div", { class: "v", style: { color: "var(--ok)", fontWeight: "600" } }, money(Number(p.amount) || 0)),
+          ]));
+        }
+        card.appendChild(el("div", { class: "btn-row", style: { marginTop: "10px" } }, [
+          el("button", { class: "btn ghost", onClick: () => zawyaCashReceivedPrompt(r.month, Math.max(0, r.expected - r.received), draw) }, T("+ Log cash received from Zawya","+ تسجيل نقدية مستلمة من زاوية")),
+        ]));
+        if (r.closes.length) {
+          card.appendChild(el("div", { class: "hr" }));
+          card.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "4px" } }, T("Shift closes","إغلاقات الشيفت")));
+          for (const c of [...r.closes].sort((a, b) => String(b.date).localeCompare(String(a.date)))) {
+            card.appendChild(kv(el("div", {}, [
+              el("div", {}, fmtDay(normalizeDate(c.date)) + (c.closing_barista ? " — " + c.closing_barista : "")),
+              c.by_name ? el("div", { class: "muted small" }, T("by","بواسطة") + " " + c.by_name) : null,
+            ]), money(Number(c.cash) || 0)));
+          }
+        }
+      }
+      body.appendChild(card);
+    }
   }
   wrap.appendChild(body);
   draw();
