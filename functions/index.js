@@ -371,6 +371,252 @@ exports.salesReconciliation = onDocumentUpdated(
   }
 );
 
+// ─── Owner-paid expenses report ───────────────────────────────────────────────
+// Every record paid from the owner — "Company bank / owner transfer" (owner_bank) or
+// "Paid personally — reimburse me later" (owner_personal) — dated within the last
+// OWNER_PAID_WINDOW_DAYS days (Cairo time). Sent weekly, and on demand from Settings.
+// The email always goes out, even with an empty list, so the machine-readable JSON
+// block lets the receiving side reconcile deletions.
+//
+// Sources, all in the state/<chunk> docs the app syncs (see STATE_CHUNKS in index.html):
+//   purchases.purchases         paid_by
+//   overhead.overheads          paid_from   (incl. maintenance / pest control)
+//   equipment.equipment         paid_from
+//   hr.salaries, hr.salary_loans paid_from
+//   purchases.bank_ledger       outflows not tied to one of the records above
+//                               (petty-cash top-ups funded from the bank, manual entries)
+//   purchases.owner_account     personal payments not tied to one of the records above
+//                               (petty-cash top-ups / corrections paid personally)
+// Records tied to a primary record (same ref) are skipped so nothing is counted twice.
+const OWNER_PAID_WINDOW_DAYS = 45;
+const OWNER_PAY_METHODS = new Set(["owner_bank", "owner_personal"]);
+// Bank-ledger outflows that are NOT owner-paid expenses: card payments, and the
+// company repaying the owner (the original personal payment is already listed).
+const BANK_TYPES_NOT_OWNER = new Set([
+  "purchase_credit_card", "overhead_credit_card", "asset_credit_card", "personal_reimbursement",
+]);
+// Mirrors OVERHEAD_CATEGORIES / ASSET_CATEGORIES labels in index.html.
+const OVERHEAD_LABELS = {
+  electricity: "Electricity bill", internet: "Internet bill", cleaner_salary: "Cleaner salary",
+  accountant_salary: "Accountant salary", pos_fees: "POS fees", gardener_salary: "Gardener salary",
+  loan_payment: "Loan payment", marketing_fees: "Marketing fees", sponsorship: "Sponsorship",
+  uniforms: "Uniforms", software: "Software / subscriptions", agency_design: "Agency / design",
+  legal_fees: "Legal fees", equipment_repair: "Equipment repair", misc: "Miscellaneous",
+  maintenance_1: "Maintenance — Cooling (fridges & ice maker)",
+  maintenance_2: "Maintenance — Machines (coffee, water, grinders, blender)",
+  insect_control: "Insect / pest control",
+  maintenance_emergency: "Maintenance — Emergency (unscheduled)",
+};
+const ASSET_LABELS = {
+  machines: "Machines", refrigeration: "Refrigeration", furniture: "Furniture & fixtures",
+  fitout: "Fit-out & renovation", electronics: "Electronics & IT", smallwares: "Smallwares & tools",
+  other: "Other",
+};
+
+// Format a Date as YYYY-MM-DD in Cairo time. Same name/contract as the app's
+// localISODate(); the function runs in UTC, so the zone is set explicitly.
+function localISODate(d) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(d);
+}
+
+function _branchName(b) {
+  const v = String(b || "").toLowerCase();
+  return v === "maadi" ? "Maadi" : v === "zawya" ? "Zawya" : "";
+}
+function _amount(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+// First usable date: a plain YYYY-MM-DD as entered, or a full timestamp (e.g. the
+// record's `at`) converted to its Cairo calendar day.
+function _recDate(...cands) {
+  for (const c of cands) {
+    if (typeof c !== "string") continue;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(c)) return c;
+    if (/^\d{4}-\d{2}-\d{2}T/.test(c)) {
+      const d = new Date(c);
+      if (!isNaN(d)) return localISODate(d);
+    }
+  }
+  return "";
+}
+
+async function _buildOwnerPaidReport() {
+  const db = getDb();
+  const chunkNames = ["purchases", "overhead", "equipment", "hr", "tombstones", "admin_trash"];
+  const snaps = await Promise.all(chunkNames.map(c => db.collection("state").doc(c).get()));
+  const S = {};
+  for (const s of snaps) if (s.exists) Object.assign(S, s.data());
+  const arr = (k) => (Array.isArray(S[k]) ? S[k] : []).filter(r => r && typeof r === "object");
+
+  // Deleted = tombstoned on any device, or sitting in a trash array.
+  const deleted = new Set(arr("deleted_ids").map(t => t.id));
+  for (const [k, v] of Object.entries(S)) {
+    if (k.startsWith("deleted_") && k !== "deleted_ids" && Array.isArray(v)) {
+      for (const r of v) if (r && r.id != null) deleted.add(r.id);
+    }
+  }
+  const live = (r) => r.id != null && !deleted.has(r.id) && !r.is_test && !r._deleted;
+
+  const today       = localISODate(new Date());
+  const windowStart = localISODate(new Date(Date.now() - OWNER_PAID_WINDOW_DAYS * 86400000));
+  const inWindow    = (d) => d && d >= windowStart && d <= today;
+
+  const customCats = {};
+  for (const c of arr("overhead_custom_cats")) if (c.value && c.label) customCats[c.value] = c.label;
+  const catOverrides = (S.overhead_cat_overrides && typeof S.overhead_cat_overrides === "object") ? S.overhead_cat_overrides : {};
+  const overheadLabel = (v) => customCats[v] || (catOverrides[v] || {}).label || OVERHEAD_LABELS[v] || v || "Overhead";
+
+  const rows = [];
+  // Every primary record id (owner-paid or not) — a ledger row pointing at one of
+  // these is that record's mirror, never a separate expense.
+  const primaryIds = new Set();
+  const add = (r, fields) => {
+    if (!inWindow(fields.date)) return;
+    rows.push({
+      id: String(r.id),
+      date: fields.date,
+      amount: _amount(fields.amount),
+      category: fields.category || "",
+      supplier: fields.supplier || "",
+      branch: _branchName(fields.branch),
+      note: fields.note || "",
+      logged_by: r.by_name || r.by || "",
+      _method: fields.method,
+    });
+  };
+
+  for (const p of arr("purchases")) {
+    primaryIds.add(p.id);
+    if (!live(p) || !OWNER_PAY_METHODS.has(p.paid_by)) continue;
+    const items = (p.lines || []).map(l => l.item_name || l.description).filter(Boolean);
+    const noteParts = [];
+    if (items.length) noteParts.push(items.join(", "));
+    if (p.split_group) noteParts.push(`split ${p.split_pct}% with ${p.split_with}`);
+    add(p, {
+      date: _recDate(p.date, p.at), amount: p.total, category: "Purchase",
+      supplier: p.supplier, branch: p.branch, note: noteParts.join(" · "), method: p.paid_by,
+    });
+  }
+
+  for (const o of arr("overheads")) {
+    primaryIds.add(o.id);
+    if (!live(o) || o.paid === false || !OWNER_PAY_METHODS.has(o.paid_from)) continue;
+    add(o, {
+      date: _recDate(o.paid_on, o.date, o.at), amount: o.amount, category: overheadLabel(o.category),
+      supplier: o.label || "", branch: o.branch, note: o.note || "", method: o.paid_from,
+    });
+  }
+
+  for (const a of arr("equipment")) {
+    primaryIds.add(a.id);
+    if (!live(a) || !OWNER_PAY_METHODS.has(a.paid_from)) continue;
+    const shared = a.branch === "shared";
+    add(a, {
+      date: _recDate(a.purchase_date, a.at), amount: a.cost,
+      category: `Equipment — ${ASSET_LABELS[a.category] || a.category || "Other"}`,
+      supplier: a.supplier || "", branch: a.branch,
+      note: [a.name, shared ? "shared by both branches" : "", a.note].filter(Boolean).join(" · "),
+      method: a.paid_from,
+    });
+  }
+
+  for (const s of arr("salaries")) {
+    primaryIds.add(s.id);
+    if (!live(s) || !OWNER_PAY_METHODS.has(s.paid_from)) continue;
+    add(s, {
+      date: _recDate(s.date, s.at), amount: s.amount, category: "Salary",
+      supplier: s.recipient || "", branch: s.branch,
+      note: [s.month ? `for ${s.month}` : "", s.note].filter(Boolean).join(" · "), method: s.paid_from,
+    });
+  }
+
+  for (const l of arr("salary_loans")) {
+    primaryIds.add(l.id);
+    if (!live(l) || !OWNER_PAY_METHODS.has(l.paid_from)) continue;
+    add(l, {
+      date: _recDate(l.date, l.at), amount: l.amount, category: "Loan advance",
+      supplier: l.barista || "", branch: "",
+      note: [l.month ? `deduct ${l.month}` : "", l.note].filter(Boolean).join(" · "), method: l.paid_from,
+    });
+  }
+
+  // Bank outflows not already represented above (e.g. petty-cash top-ups, manual entries).
+  for (const b of arr("bank_ledger")) {
+    if (!live(b) || !(Number(b.amount) < 0) || BANK_TYPES_NOT_OWNER.has(b.type)) continue;
+    if (b.ref && (primaryIds.has(b.ref) || deleted.has(b.ref))) continue;
+    const pc = b.type === "petty_cash_topup";
+    add(b, {
+      date: _recDate(b.date, b.at), amount: Math.abs(Number(b.amount)),
+      category: pc ? "Petty cash top-up" : "Bank payment",
+      supplier: pc ? "" : (b.supplier || ""),
+      branch: pc ? ((/\(([^)]+)\)/.exec(b.supplier || "") || [])[1] || "") : "",
+      note: b.note || "", method: "owner_bank",
+    });
+  }
+
+  // Personal payments not already represented above (petty-cash top-ups / corrections).
+  for (const e of arr("owner_account")) {
+    if (!live(e) || !(Number(e.amount) > 0)) continue;
+    if (e.ref && (primaryIds.has(e.ref) || deleted.has(e.ref))) continue;
+    add(e, {
+      date: _recDate(e.date, e.at), amount: e.amount,
+      category: e.source === "petty_cash" ? "Petty cash top-up" : "Personal payment",
+      supplier: "", branch: e.branch,
+      note: [e.label, e.reimbursed ? "reimbursed" : ""].filter(Boolean).join(" · "), method: "owner_personal",
+    });
+  }
+
+  rows.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  const total = _amount(rows.reduce((s, r) => s + r.amount, 0));
+
+  const methodLabel = { owner_bank: "owner bank", owner_personal: "paid personally" };
+  const lines = [];
+  lines.push("Coffee Beats — Owner-paid expenses");
+  lines.push(`Window: ${windowStart} to ${today} (last ${OWNER_PAID_WINDOW_DAYS} days, Cairo time)`);
+  lines.push("");
+  if (rows.length === 0) {
+    lines.push("No owner-paid expenses in this window.");
+  } else {
+    rows.forEach((r, i) => {
+      lines.push(`${i + 1}. ${r.date} · ${_fmt(r.amount)} · ${r.category}` +
+        ` · ${r.supplier || "—"} · ${r.branch || "—"}` +
+        ` · ${r.note || "—"} · logged by ${r.logged_by || "—"} (${methodLabel[r._method] || r._method})`);
+    });
+  }
+  lines.push("");
+  lines.push(`TOTAL: ${_fmt(total)} (${rows.length} record${rows.length === 1 ? "" : "s"})`);
+  lines.push("");
+  lines.push(`WINDOW_START=${windowStart}`);
+  lines.push("OWNER_PAID_JSON_START");
+  lines.push(JSON.stringify(rows.map(({ _method, ...r }) => r)));
+  lines.push("OWNER_PAID_JSON_END");
+
+  return { subject: `Owner-paid expenses – ${today}`, text: lines.join("\n"), count: rows.length, total, windowStart, today };
+}
+
+async function _sendOwnerPaidReport() {
+  const r = await _buildOwnerPaidReport();
+  await _sendEmail(r.subject, r.text);
+  console.log(`Owner-paid report sent: ${r.count} record(s), total ${r.total}, window ${r.windowStart}..${r.today}`);
+  return r;
+}
+
+// Every Sunday 21:00 Cairo.
+exports.sendOwnerPaidReport = onSchedule(
+  { schedule: "0 21 * * 0", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async () => { await _sendOwnerPaidReport(); }
+);
+
+// Owner-only manual trigger (Settings → "Send owner-paid report now").
+exports.sendOwnerPaidReportNow = onCall(
+  { secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async (request) => {
+    _requireOwner(request);
+    const r = await _sendOwnerPaidReport();
+    return { ok: true, count: r.count, total: r.total, windowStart: r.windowStart };
+  }
+);
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function _requireOwner(request) {
   if (!request.auth || request.auth.token.role !== "owner") {

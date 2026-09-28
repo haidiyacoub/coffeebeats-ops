@@ -16013,6 +16013,28 @@ routes.settings = function (u) {
     wrap.appendChild(mp);
   }
 
+  // ── Owner-paid expenses report — owner-only manual trigger ─────────────────
+  // The same email the sendOwnerPaidReport function sends every Sunday 21:00 Cairo.
+  if (u.role === "owner") {
+    const op = el("div", { class: "card", style: { marginTop: "14px" } });
+    op.appendChild(el("h2", {}, "📧 Owner-paid expenses report"));
+    op.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+      "Emails every expense paid from the owner (company bank / owner transfer, or paid personally) over the last 45 days. Sent automatically every Sunday at 21:00 — use this to send it now."));
+    const opBtn = el("button", { class: "btn secondary" }, "Send owner-paid report now");
+    opBtn.addEventListener("click", async () => {
+      opBtn.disabled = true; opBtn.textContent = "Sending…";
+      try {
+        // The report reads Firestore — push any unsynced local entries first.
+        if (hasPending()) await doSync();
+        const { data } = await functions.httpsCallable("sendOwnerPaidReportNow")({});
+        toast(`Report sent ✓ — ${data.count} record${data.count === 1 ? "" : "s"}, ${money(data.total)}`);
+      } catch (e) { toast(e.message || "Failed to send report", "error"); }
+      opBtn.disabled = false; opBtn.textContent = "Send owner-paid report now";
+    });
+    op.appendChild(opBtn);
+    wrap.appendChild(op);
+  }
+
   // ── Firebase Auth migration (owner only, one-time) ─────────────────────────
   if (u.role === "owner") {
     const migCard = el("div", { class: "card", style: { marginTop: "14px" } });
