@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-561 -->
+<!-- CB_BUILD:20260929-566 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-561";
+  var BUILD = "20260929-566";
   (function() {
     function checkFresh() {
       try {
@@ -8128,6 +8128,7 @@ routes.salaries = function (u) {
     const staff = state.users.filter(x => {
       if (!["barista","head_barista"].includes(x.role)) return false;
       if (x.active) return true;
+      if (wasActiveInMonth(x.id, month)) return true; // left this month → final pay still due
       if (!isPast)  return false;
       return !!(state.salary_config[x.id])
         || state.penalties.some(r => r.user_id === x.id && monthFn(r))
@@ -9976,7 +9977,9 @@ function wasActiveInMonth(uid, month) {
   if (events.length === 0) return null; // no history, caller uses fallback
   const relevant = events.filter(e => e.date.slice(0, 7) <= month);
   if (relevant.length === 0) return false; // not yet hired in this month
-  return relevant[relevant.length - 1].type === "joined";
+  const last = relevant[relevant.length - 1];
+  // Someone who left DURING this month was still employed for part of it (final pay is due)
+  return last.type === "joined" || last.date.slice(0, 7) === month;
 }
 
 function fmtYearMonth(y, m) {
