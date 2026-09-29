@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-554 -->
+<!-- CB_BUILD:20260929-561 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-554";
+  var BUILD = "20260929-561";
   (function() {
     function checkFresh() {
       try {
@@ -9983,6 +9983,27 @@ function fmtYearMonth(y, m) {
   return `${y}-${String(m).padStart(2, "0")}`;
 }
 
+// End of service: 5 carry days (26–30) are added to the final payroll = 5 × salary ÷ 30.
+// One entry per barista per exit month. Also backfills exits dated on/after 2026-09-29
+// (from renderTeam) so a deactivation made before this rule existed still gets paid.
+function ensureEndOfServiceDays(uid, name, date) {
+  if (!uid || !date) return false;
+  const month = date.slice(0, 7);
+  const sal = getSalaryForMonth(uid, month);
+  state.overtime_logs = state.overtime_logs || [];
+  if (sal <= 0 || state.overtime_logs.some(l => l.kind === "end_of_service_days" && l.user_id === uid && l.month === month)) return false;
+  const st = stamp();
+  const amt = Math.round(sal / 30 * 5);
+  state.overtime_logs.push({
+    id: uuid(), user_id: uid, barista: name, kind: "end_of_service_days",
+    hours: 0, amount: amt, month, date,
+    note: "End of service — 5 days (26–30) added to final payroll",
+    by: st.by, by_name: st.by_name, at: st.at, approved: true, approved_by: st.by,
+  });
+  toast(`✅ End of service: +${money(amt)} (5 days) added to ${name}'s ${month} payroll`, "ok");
+  return true;
+}
+
 function getSalaryForMonth(uid, month) {
   const snaps = (state.salary_snapshots || {})[uid] || {};
   const months = Object.keys(snaps).filter(m => m <= month).sort();
@@ -15688,6 +15709,16 @@ routes.settings = function (u) {
     const activeStaff   = allStaff.filter(s => s.active !== false);
     const archivedStaff = allStaff.filter(s => s.active === false);
 
+    // Backfill: archived staff whose exit date is 2026-09-29+ but never got the 5 end-of-service days
+    if ((currentUser() || {}).role === "owner") {
+      let eosAdded = false;
+      for (const a of archivedStaff) {
+        const lv = ((state.barista_dates || {})[a.uid] || []).filter(e => e.type === "left" && e.date).map(e => e.date).sort().pop();
+        if (lv && lv >= "2026-09-29" && ensureEndOfServiceDays(a.uid, a.name, lv)) eosAdded = true;
+      }
+      if (eosAdded) saveState();
+    }
+
     // ── Tab bar: Active team / Archived (exited) ──
     const tabBar = el("div", { style: { display: "flex", gap: "6px", marginBottom: "12px" } });
     const mkTab = (key, label, count) => {
@@ -15862,24 +15893,7 @@ routes.settings = function (u) {
                 state.barista_dates = state.barista_dates || {};
                 state.barista_dates[s.uid] = state.barista_dates[s.uid] || [];
                 state.barista_dates[s.uid].push({ type: isDeactivating ? "left" : "joined", date: v.date, note: v.note || "", at: now() });
-                // End of service: add the 5 carry days (26–30) to the final payroll, 5 × salary ÷ 30
-                if (isDeactivating) {
-                  const eosMonth = v.date.slice(0, 7);
-                  const eosSal = getSalaryForMonth(s.uid, eosMonth);
-                  state.overtime_logs = state.overtime_logs || [];
-                  const already = state.overtime_logs.some(l => l.kind === "end_of_service_days" && l.user_id === s.uid && l.month === eosMonth);
-                  if (eosSal > 0 && !already) {
-                    const st = stamp();
-                    const amt = Math.round(eosSal / 30 * 5);
-                    state.overtime_logs.push({
-                      id: uuid(), user_id: s.uid, barista: s.name, kind: "end_of_service_days",
-                      hours: 0, amount: amt, month: eosMonth, date: v.date,
-                      note: "End of service — 5 days (26–30) added to final payroll",
-                      by: st.by, by_name: st.by_name, at: st.at, approved: true, approved_by: st.by,
-                    });
-                    toast(`✅ End of service: +${money(amt)} (5 days) added to ${s.name}'s ${eosMonth} payroll`, "ok");
-                  }
-                }
+                if (isDeactivating) ensureEndOfServiceDays(s.uid, s.name, v.date);
                 saveState();
               }
               renderTeam();
