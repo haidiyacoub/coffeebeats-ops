@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-581 -->
+<!-- CB_BUILD:20260929-596 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-581";
+  var BUILD = "20260929-596";
   (function() {
     function checkFresh() {
       try {
@@ -10738,6 +10738,19 @@ routes.overheads = function (u) {
       }
     }
 
+    // Staff salaries for this branch — actual payout once ticked paid on Salaries → Total due
+    {
+      const _st = overheadStaff().filter(x => staffSalaryShareForBranch(x.id, br) > 0);
+      const _paidN = _st.filter(x => salaryPaidTickAmount(x.id, month) != null).length;
+      panel.appendChild(el("div", { style:{ borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px", display:"flex", justifyContent:"space-between", alignItems:"center" } }, [
+        el("div", {}, [
+          el("div", { style:{ fontWeight:"500", fontSize:"13px" } }, "👥 Staff salaries"),
+          el("div", { class:"muted small" }, _paidN ? `✅ ${_paidN} of ${_st.length} paid — actual payout after OT/penalties` : "Base salary — not yet marked paid"),
+        ]),
+        el("div", { style:{ fontWeight:"700", fontSize:"14px" } }, money(branchSalaryForMonth(br, month, overheadStaff()))),
+      ]));
+    }
+
     // Mini totals
     panel.appendChild(el("div", { style:{ borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px" } }, [
       el("div", { style:{ display:"flex", justifyContent:"space-between", fontWeight:"700", fontSize:"13px" } }, [
@@ -10888,7 +10901,7 @@ routes.overheads = function (u) {
     }
     // Salary — always counted
     card.appendChild(el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"13px", paddingBottom:"4px", borderTop:"1px solid var(--border)", paddingTop:"6px", marginTop:"4px" } }, [
-      el("div", {}, "Staff salary"),
+      el("div", {}, `Staff salary${_staff.some(x => salaryPaidTickAmount(x.id, month) != null) ? ` (✅ ${_staff.filter(x => salaryPaidTickAmount(x.id, month) != null).length}/${_staff.length} paid)` : ""}`),
       el("div", { style:{textAlign:"right"} }, money(maadiSalary)),
       el("div", { style:{textAlign:"right"} }, money(zawyaSalary)),
     ]));
