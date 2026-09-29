@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-566 -->
+<!-- CB_BUILD:20260929-577 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-566";
+  var BUILD = "20260929-577";
   (function() {
     function checkFresh() {
       try {
@@ -8418,6 +8418,77 @@ routes.salaries = function (u) {
       body.appendChild(hbCard);
     }
 
+  // ---- Paid tick + "Paid from" on the Total due rows ----
+  // Ticking logs a real payout (state.salaries, tick:true) with the same side-effects as
+  // "Log salary payout": bank transfer → bank_ledger outflow; personal → owner_account debt.
+  // Unticking removes the payout and its linked ledger/owner entries.
+  const paidPayoutFor = (uid, m) => state.salaries.find(r => r.user_id === uid && (r.month || (r.date||"").slice(0,7)) === m);
+  const dueMethodChoice = {};   // uid|month → chosen "Paid from" before ticking
+  function clearPayoutFunding(payout) {
+    removePersonalPaymentByRef(payout.id);
+    state.bank_ledger = (state.bank_ledger || []).filter(x => !(x.ref === payout.id && x.type === "salary_payment"));
+  }
+  function applyPayoutFunding(payout, method, s) {
+    clearPayoutFunding(payout);
+    payout.paid_from = method;
+    payout.updated_at = s.at;
+    if (method === "owner_personal") {
+      recordPersonalPayment({ amount: payout.amount, date: payout.date, source: "salary", ref: payout.id, branch: payout.branch, label: `Salary — ${payout.recipient}` }, s);
+    } else if (method === "owner_bank") {
+      state.bank_ledger = state.bank_ledger || [];
+      state.bank_ledger.push({
+        id: uuid(), date: payout.date, amount: -payout.amount, supplier: `Salary — ${payout.recipient}`,
+        type: "salary_payment", ref: payout.id, by: s.by, by_name: s.by_name, at: s.at,
+        note: `Salary payout (${payout.branch})`,
+        ...(isTestMode() ? { is_test: true } : {}),
+      });
+    }
+  }
+  function salaryPaidControls(p, m, due) {
+    const key = p.id + "|" + m;
+    const existing = paidPayoutFor(p.id, m);
+    const method = existing ? (existing.paid_from || "") : (dueMethodChoice[key] || "owner_bank");
+    const cb = el("input", { type: "checkbox", title: T("Mark as paid","تحديد كمدفوع"), style: { width: "20px", height: "20px" } });
+    cb.checked = !!existing;
+    const sel = el("select", { style: { padding: "4px", borderRadius: "6px", border: "1px solid var(--border)", fontSize: "12px" } }, [
+      el("option", { value: "owner_bank" }, T("🏦 Bank transfer","🏦 تحويل بنكي")),
+      el("option", { value: "owner_personal" }, T("🙋 Personal account","🙋 حساب شخصي")),
+    ]);
+    sel.value = method === "owner_personal" ? "owner_personal" : "owner_bank";
+    sel.addEventListener("change", () => {
+      if (!paidPayoutFor(p.id, m)) { dueMethodChoice[key] = sel.value; return; }
+      const cur = paidPayoutFor(p.id, m);
+      applyPayoutFunding(cur, sel.value, stamp());
+      saveState(); toast(T("Payment method updated","تم تحديث طريقة الدفع")); drawBody();
+    });
+    cb.addEventListener("change", () => {
+      const cur = paidPayoutFor(p.id, m);
+      if (cb.checked) {
+        if (cur) return;
+        if (due <= 0) { cb.checked = false; return toast(T("Nothing due","لا يوجد مستحق"), "error"); }
+        const s = stamp();
+        const payout = {
+          id: uuid(), user_id: p.id, recipient: p.name,
+          branch: (p.branches && p.branches[0]) || "maadi",
+          amount: Math.round(due * 100) / 100, month: m, date: new Date().toISOString().slice(0,10),
+          paid_from: "", note: "Marked paid (Total due)", tick: true,
+          by: s.by, by_name: s.by_name, at: s.at, updated_at: s.at,
+        };
+        state.salaries.push(payout);
+        applyPayoutFunding(payout, sel.value, s);
+        saveState(); toast(T(`${p.name} marked paid`,`تم تسجيل دفع ${p.name}`));
+      } else {
+        if (!cur) return;
+        if (!cur.tick) { cb.checked = true; return toast(T("Logged manually — delete it from the payouts list below","سُجّل يدوياً — احذفه من قائمة الصرف أدناه"), "error"); }
+        clearPayoutFunding(cur);
+        state.salaries = state.salaries.filter(r => r.id !== cur.id);
+        saveState(); toast(T("Payment un-marked","تم إلغاء التسجيل"));
+      }
+      drawBody();
+    });
+    return el("span", { style: { display: "inline-flex", alignItems: "center", gap: "6px" } }, [cb, sel]);
+  }
+
     // ---- 3) Total due THIS MONTH (per person + grand total) ----
     const dueCard = el("div", { class: "card", style: { marginTop: "12px" } });
     dueCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, T(`Total due · ${month}`, `الإجمالي المستحق · ${month}`)));
@@ -8443,7 +8514,10 @@ routes.salaries = function (u) {
           el("div", {}, p.name + (p.active ? "" : " (archived)")),
           el("div", { class: "muted small" }, `Salary ${money(salary)}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
         ]),
-        el("div", { class: "v" }, money(due)),
+        el("div", { class: "v", style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } }, [
+          money(due),
+          ...(isOwnerMgr ? [salaryPaidControls(p, month, due)] : (paidPayoutFor(p.id, month) ? [el("span", { class: "muted small" }, "✅ " + T("Paid","مدفوع"))] : [])),
+        ]),
       ]));
     }
     dueCard.appendChild(el("div", { class: "kv", style: { borderTop: "1px solid var(--border)", marginTop: "6px", paddingTop: "6px", fontWeight: "700" } }, [
