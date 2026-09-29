@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-602 -->
+<!-- CB_BUILD:20260929-610 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-602";
+  var BUILD = "20260929-610";
   (function() {
     function checkFresh() {
       try {
@@ -5000,7 +5000,7 @@ routes.home = function (u) {
       tiles.appendChild(tile("📦", T("Inventory Count","جرد المخزون"), T("Monthly snapshot","جرد شهري"), () => go("snapshot_new")));
       tiles.appendChild(tile("🧾", T("Record Purchase","تسجيل مشترى"), T("Upload receipt","رفع الفاتورة"), () => go("purchase_new")));
       tiles.appendChild(tile("📑", T("Purchases Log","سجل المشتريات"), T("View receipts","عرض الفواتير"), () => go("purchase_list")));
-      tiles.appendChild(tile("💵", T("Petty Cash","العهدة النقدية"), T("Balance & log","الرصيد والسجل"), () => go("petty_cash")));
+      tiles.appendChild(pettyCashTile());
       if (u.branches && u.branches.includes("maadi")) {
         tiles.appendChild(maadiCashTile());
         tiles.appendChild(tile("🏧", T("ATM Deposit","إيداع الصراف"), T("Weekly cash → bank","الإيداع الأسبوعي → البنك"), () => go("maadi_deposits")));
@@ -5052,7 +5052,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🕐", T("Sign-In Stamp","بصمة الحضور"), T("Clock-in photo","صورة تسجيل الدخول"), () => go("signin_stamp_new")));
     tiles.appendChild(tile("📷", T("Photo Gallery","معرض الصور"), T("Drive photo repository","مستودع صور Drive"), () => go("photo_gallery")));
     tiles.appendChild(tile("📁", T("Assets","الملفات"), T("Files & documents","الملفات والمستندات"), () => go("assets_list")));
-    tiles.appendChild(tile("💵", T("Petty Cash","العهدة النقدية"), T("Balance & log","الرصيد والسجل"), () => go("petty_cash")));
+    tiles.appendChild(pettyCashTile());
     if (u.branches.includes("maadi")) {
       tiles.appendChild(maadiCashTile());
       tiles.appendChild(tile("🏧", T("Maadi Deposits","إيداعات المعادي"), T("Weekly cash → bank","الإيداع الأسبوعي → البنك"), () => go("maadi_deposits")));
@@ -5145,7 +5145,7 @@ routes.home = function (u) {
     tiles.appendChild(sectionHeader("Finance"));
     tiles.appendChild(maadiCashTile());
     tiles.appendChild(zawyaCashTile());
-    tiles.appendChild(tile("💵", "Petty Cash", "Balance & log", () => go("petty_cash")));
+    tiles.appendChild(pettyCashTile());
     tiles.appendChild(tile("🏧", "ATM Deposit", "Weekly cash → bank", () => go("maadi_deposits")));
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
@@ -9359,6 +9359,27 @@ function _maadiCashRow(r, u, onChange) {
 }
 
 // Home Finance tile — previews the cash on hand + this month's cash in.
+// Home tile: live petty-cash status. Owner/accountant see combined + per-branch;
+// everyone else sees only their own branch(es).
+function pettyCashTile() {
+  let sub = T("Balance & log","الرصيد والسجل");
+  try {
+    const u = currentUser();
+    const all = !u || u.role === "owner" || u.role === "accountant";
+    const brs = all ? ["maadi", "zawya"] : ((u.branches || []).filter(b => b === "maadi" || b === "zawya"));
+    if (brs.length) {
+      const nm = { maadi: T("Maadi","معادي"), zawya: T("Zawya","زاوية") };
+      const parts = brs.map(b => `${nm[b]} ${money(pettyCashBalance(b))}`);
+      const month = new Date().toISOString().slice(0, 7);
+      const total = brs.reduce((a, b) => a + pettyCashBalance(b), 0);
+      const top = brs.reduce((a, b) => a + pettyCashToppedUp(b, month), 0);
+      sub = (brs.length > 1 ? T(`On hand ${money(total)} · `, `الرصيد ${money(total)} · `) : "") + parts.join(" · ")
+        + T(` · topped up ${money(top)} this month`, ` · شحن ${money(top)} هذا الشهر`);
+    }
+  } catch (e) { console.warn("petty cash tile", e); }
+  return tile("💵", T("Petty Cash","العهدة النقدية"), sub, () => go("petty_cash"));
+}
+
 function maadiCashTile() {
   let sub = T("Cash in / out · current status","داخل / خارج · الرصيد الحالي");
   try {
