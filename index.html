@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-537 -->
+<!-- CB_BUILD:20260929-554 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-537";
+  var BUILD = "20260929-554";
   (function() {
     function checkFresh() {
       try {
@@ -8289,6 +8289,7 @@ routes.salaries = function (u) {
           ? el("span", { class: "pill ok", style: { fontSize:"11px" } }, T("✓ Approved","✓ معتمد"))
           : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, T("⏳ Pending","⏳ معلّق"));
         const rateLabel = r.kind === "leadership_bonus" ? "👑 Leadership role bonus"
+          : r.kind === "end_of_service_days" ? "🚪 End of service · 5 days"
           : r.kind === "events_bonus" ? "🎪 Events bonus"
           : r.kind === "double_shift" ? "Double shift · 5h ×1.5"
           : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
@@ -15861,6 +15862,24 @@ routes.settings = function (u) {
                 state.barista_dates = state.barista_dates || {};
                 state.barista_dates[s.uid] = state.barista_dates[s.uid] || [];
                 state.barista_dates[s.uid].push({ type: isDeactivating ? "left" : "joined", date: v.date, note: v.note || "", at: now() });
+                // End of service: add the 5 carry days (26–30) to the final payroll, 5 × salary ÷ 30
+                if (isDeactivating) {
+                  const eosMonth = v.date.slice(0, 7);
+                  const eosSal = getSalaryForMonth(s.uid, eosMonth);
+                  state.overtime_logs = state.overtime_logs || [];
+                  const already = state.overtime_logs.some(l => l.kind === "end_of_service_days" && l.user_id === s.uid && l.month === eosMonth);
+                  if (eosSal > 0 && !already) {
+                    const st = stamp();
+                    const amt = Math.round(eosSal / 30 * 5);
+                    state.overtime_logs.push({
+                      id: uuid(), user_id: s.uid, barista: s.name, kind: "end_of_service_days",
+                      hours: 0, amount: amt, month: eosMonth, date: v.date,
+                      note: "End of service — 5 days (26–30) added to final payroll",
+                      by: st.by, by_name: st.by_name, at: st.at, approved: true, approved_by: st.by,
+                    });
+                    toast(`✅ End of service: +${money(amt)} (5 days) added to ${s.name}'s ${eosMonth} payroll`, "ok");
+                  }
+                }
                 saveState();
               }
               renderTeam();
@@ -22079,6 +22098,7 @@ routes.my_hr = function(u, params) {
       const tb = el("tbody", {});
       otList.forEach(r => {
         const typeLabel = r.kind === "events_bonus" ? "🎪 Events bonus"
+          : r.kind === "end_of_service_days" ? "🚪 End of service · 5 days"
           : r.kind === "double_shift" ? "Double shift · 5h ×1.5"
           : /eid al-fitr/i.test(r.note||"")  ? "×2 Eid Al-Fitr"
           : /eid al-adha/i.test(r.note||"")  ? "×2 Eid Al-Adha"
