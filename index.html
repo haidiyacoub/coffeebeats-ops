@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260927-778 -->
+<!-- CB_BUILD:20260929-537 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260927-778";
+  var BUILD = "20260929-537";
   (function() {
     function checkFresh() {
       try {
@@ -16011,6 +16011,25 @@ routes.settings = function (u) {
 
     mp.appendChild(mpRow);
     wrap.appendChild(mp);
+  }
+
+  // ── Owner-paid expenses report — weekly email (Sun 21:00 Cairo), manual trigger ──
+  if (u.role === "owner") {
+    const opCard = el("div", { class: "card", style: { marginTop: "14px" } });
+    opCard.appendChild(el("h2", {}, "📧 Owner-paid expenses report"));
+    opCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+      "Emailed automatically every Sunday at 21:00 (Cairo): everything paid personally from the owner's funds in the last 45 days. Use this button to send it right now."));
+    const opBtn = el("button", { class: "btn secondary" }, "Send owner-paid report now");
+    opBtn.addEventListener("click", async () => {
+      opBtn.disabled = true; opBtn.textContent = "Sending…";
+      try {
+        const { data } = await functions.httpsCallable("sendOwnerPaidReportNow")({});
+        toast(`Report sent ✓ — ${data.count} record(s), ${money(data.total)}`);
+      } catch (e) { toast(e.message || "Failed to send report", "error"); }
+      opBtn.disabled = false; opBtn.textContent = "Send owner-paid report now";
+    });
+    opCard.appendChild(opBtn);
+    wrap.appendChild(opCard);
   }
 
   // ── Firebase Auth migration (owner only, one-time) ─────────────────────────

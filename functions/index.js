@@ -316,6 +316,134 @@ exports.sendDailyShiftSummary = onSchedule(
   }
 );
 
+// ─── Owner-paid expenses report ───────────────────────────────────────────────
+// Weekly email listing every expense the owner paid from personal funds
+// ("Paid personally — reimburse me later" = paid_by / paid_from "owner_personal")
+// dated within the last 45 days. Trashed / tombstoned / test records are excluded.
+// The machine-readable JSON block at the bottom is meant to be parsed by a
+// downstream reconciler — an EMPTY list is still sent so deletions reconcile.
+const OWNER_PAID_VALUES   = new Set(["owner_personal"]);
+const OWNER_PAID_WINDOW_D = 45;
+
+// Cairo-time YYYY-MM-DD (server counterpart of the app's localISODate()).
+function localISODate(d) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(d);
+}
+
+const OVERHEAD_CAT_LABELS = {
+  electricity: "Electricity bill", internet: "Internet bill", cleaner_salary: "Cleaner salary",
+  accountant_salary: "Accountant salary", pos_fees: "POS fees", gardener_salary: "Gardener salary",
+  loan_payment: "Loan payment", marketing_fees: "Marketing fees", sponsorship: "Sponsorship",
+  uniforms: "Uniforms", software: "Software / subscriptions", agency_design: "Agency / design",
+  legal_fees: "Legal fees", equipment_repair: "Equipment repair", misc: "Miscellaneous",
+  maintenance_1: "Maintenance — Cooling", maintenance_2: "Maintenance — Machines",
+  insect_control: "Insect / pest control", maintenance_emergency: "Maintenance — Emergency",
+};
+
+async function _collectOwnerPaid() {
+  const db = getDb();
+  const names = ["purchases", "overhead", "equipment", "hr", "tombstones"];
+  const snaps = await Promise.all(names.map(n => db.collection("state").doc(n).get()));
+  const d = {};
+  names.forEach((n, i) => { d[n] = snaps[i].exists ? (snaps[i].data() || {}) : {}; });
+  const arr = (doc, k) => (Array.isArray(doc[k]) ? doc[k] : []);
+
+  const tomb = new Set(arr(d.tombstones, "deleted_ids").map(t => (t && typeof t === "object" ? t.id : t)));
+  const live = r => r && r.id != null && !r.is_test && !r.deleted && !r.deleted_at && !tomb.has(r.id);
+  const isOwner = v => OWNER_PAID_VALUES.has(v);
+
+  const now         = new Date();
+  const today       = localISODate(now);
+  const windowStart = localISODate(new Date(now.getTime() - OWNER_PAID_WINDOW_D * 86400000));
+  const rows = [];
+  const add = (r, o) => {
+    if (!o.date || o.date < windowStart) return;
+    rows.push({
+      id: String(r.id), date: o.date,
+      amount: Math.round((Number(o.amount) || 0) * 100) / 100,
+      category: o.category || "", supplier: o.supplier || "",
+      branch: o.branch ? String(o.branch).charAt(0).toUpperCase() + String(o.branch).slice(1).toLowerCase() : "",
+      note: o.note || "", logged_by: r.by_name || o.by_name || "",
+    });
+  };
+
+  for (const p of arr(d.purchases, "purchases")) {
+    if (!live(p) || !isOwner(p.paid_by)) continue;
+    const cats = [...new Set((p.lines || []).map(l => l.category || (l.kind === "inventory" ? "Inventory" : (l.description || "Other"))))];
+    add(p, { date: p.date, amount: p.total, category: cats.join(", ") || "Purchase", supplier: p.supplier, branch: p.branch, note: p.note || "" });
+  }
+  for (const o of arr(d.overhead, "overheads")) {
+    if (!live(o) || o.paid === false || !isOwner(o.paid_from)) continue;
+    add(o, { date: o.paid_on || o.date, amount: o.amount, category: OVERHEAD_CAT_LABELS[o.category] || o.category,
+             supplier: o.supplier || "", branch: o.branch, note: [o.label, o.note].filter(Boolean).join(" — ") });
+  }
+  // Petty-cash top-ups/corrections funded personally are recorded on owner_account with
+  // ref = the petty_cash entry id; report the petty_cash record itself (and only if it still exists).
+  const pettyById = new Map(arr(d.purchases, "petty_cash").filter(live).map(r => [r.id, r]));
+  for (const e of arr(d.purchases, "owner_account")) {
+    if (!live(e) || e.source !== "petty_cash") continue;
+    const pc = pettyById.get(e.ref);
+    if (!pc) continue;
+    add(pc, { date: pc.date || e.date, amount: e.amount, category: "Petty cash top-up", supplier: "Petty cash",
+              branch: pc.branch || e.branch, note: pc.note || e.label, by_name: e.by_name });
+  }
+  for (const l of arr(d.hr, "salary_loans")) {
+    if (!live(l) || !isOwner(l.paid_from)) continue;
+    add(l, { date: l.date, amount: l.amount, category: "Loan advance", supplier: l.barista, branch: l.branch, note: l.note });
+  }
+  for (const sp of arr(d.hr, "salaries")) {
+    if (!live(sp) || !isOwner(sp.paid_from)) continue;
+    add(sp, { date: sp.date, amount: sp.amount, category: "Salary", supplier: sp.recipient, branch: sp.branch, note: sp.note });
+  }
+  for (const a of arr(d.equipment, "equipment")) {
+    if (!live(a) || !isOwner(a.paid_from)) continue;
+    add(a, { date: a.purchase_date || a.date, amount: a.cost, category: "Equipment" + (a.category ? ` — ${a.category}` : ""),
+             supplier: a.supplier || a.name, branch: a.branch, note: a.name });
+  }
+
+  rows.sort((x, y) => x.date.localeCompare(y.date) || x.id.localeCompare(y.id));
+  return { rows, today, windowStart };
+}
+
+async function _sendOwnerPaidReport() {
+  const { rows, today, windowStart } = await _collectOwnerPaid();
+  const total = Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+  const lines = [];
+  lines.push(`Owner-paid expenses — last ${OWNER_PAID_WINDOW_D} days (${windowStart} to ${today})`);
+  lines.push("");
+  if (!rows.length) lines.push("(none)");
+  for (const r of rows) {
+    lines.push(`${r.date} | ${r.amount} EGP | ${r.category || "-"} | ${r.supplier || "-"} | ${r.branch || "-"} | ${r.note || "-"} | by ${r.logged_by || "-"}`);
+  }
+  lines.push("");
+  lines.push(`TOTAL: ${total} EGP (${rows.length} record${rows.length === 1 ? "" : "s"})`);
+  lines.push("");
+  lines.push(`WINDOW_START=${windowStart}`);
+  lines.push("OWNER_PAID_JSON_START");
+  lines.push(JSON.stringify(rows));
+  lines.push("OWNER_PAID_JSON_END");
+  await _sendEmail(`Owner-paid expenses – ${today}`, lines.join("\n"));
+  console.log(`Owner-paid report sent for ${today}: ${rows.length} records, ${total} EGP`);
+  return { count: rows.length, total, windowStart, date: today };
+}
+
+// Every Sunday 21:00 Cairo time.
+exports.sendOwnerPaidReport = onSchedule(
+  { schedule: "0 21 * * 0", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async () => { await _sendOwnerPaidReport(); }
+);
+
+// Owner-only manual trigger (Settings → "Send owner-paid report now").
+exports.sendOwnerPaidReportNow = onCall(
+  { secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async (request) => {
+    _requireOwner(request);
+    return { ok: true, ...(await _sendOwnerPaidReport()) };
+  }
+);
+
 // ─── salesReconciliation ──────────────────────────────────────────────────────
 // Fires whenever sales data is saved to Firestore (i.e. when you upload a sales file).
 // Compares each month present in the new sales data against shift closes totals.
