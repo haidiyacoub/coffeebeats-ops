@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-577 -->
+<!-- CB_BUILD:20260929-581 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-577";
+  var BUILD = "20260929-581";
   (function() {
     function checkFresh() {
       try {
@@ -10129,7 +10129,18 @@ function branchSalaryForMonth(branch, month, staffList) {
   const staff = staffList || (state.users || []).filter(x =>
     ["barista", "head_barista"].includes(x.role) && (x.active || !!(state.salary_config || {})[x.id]));
   return Math.round(staff.reduce((s, p) =>
-    s + getSalaryForMonth(p.id, month) * staffSalaryShareForBranch(p.id, branch), 0));
+    s + salaryCostForMonth(p.id, month) * staffSalaryShareForBranch(p.id, branch), 0));
+}
+// Actual cost of a person's salary for a month: once the owner ticks them paid on
+// Salaries → Total due, the real payout (base + OT − penalties/loans/leave) replaces
+// the flat base salary everywhere overheads / P&L use it. Until then, base salary.
+function salaryPaidTickAmount(uid, month) {
+  const rows = (state.salaries || []).filter(r => r.tick && r.user_id === uid && (r.month || (r.date||"").slice(0,7)) === month);
+  return rows.length ? rows.reduce((s, r) => s + (Number(r.amount) || 0), 0) : null;
+}
+function salaryCostForMonth(uid, month) {
+  const paid = salaryPaidTickAmount(uid, month);
+  return paid != null ? paid : getSalaryForMonth(uid, month);
 }
 
 // ── End-of-month worked-days payroll cross-check (info only) ──
@@ -10748,7 +10759,7 @@ routes.overheads = function (u) {
 
   function drawSalaryCard() {
     const staff = overheadStaff();
-    const totalSalary = staff.reduce((s, p) => s + getSalaryForMonth(p.id, month), 0);
+    const totalSalary = staff.reduce((s, p) => s + salaryCostForMonth(p.id, month), 0);
     const maadiTotal  = branchSalaryForMonth("maadi", month, staff);
     const zawyaTotal  = branchSalaryForMonth("zawya", month, staff);
     const canEdit = u.role === "owner";
@@ -10774,7 +10785,8 @@ routes.overheads = function (u) {
     }
 
     for (const p of staff.slice().sort((a,b) => a.name.localeCompare(b.name))) {
-      const sal = getSalaryForMonth(p.id, month);
+      const sal = salaryCostForMonth(p.id, month);
+      const paidTick = salaryPaidTickAmount(p.id, month) != null;
       const cur = getStaffSalaryBranch(p.id);
       const isDerived = !["maadi","zawya","split"].includes(((state.salary_config || {})[p.id] || {}).salary_branch);
       const curLabel = cur === "split" ? "Rotating · split 50/50" : cur === "maadi" ? "→ Maadi" : "→ Zawya";
@@ -10782,7 +10794,7 @@ routes.overheads = function (u) {
       const row = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr auto", gap:"10px", alignItems:"center", marginBottom:"7px" } });
       row.appendChild(el("div", {}, [
         el("div", { style:{ fontWeight:"500", fontSize:"13px" } }, p.name + (p.role === "head_barista" ? " · HB" : "")),
-        el("div", { class:"muted small" }, `${money(sal)}/mo · ${curLabel}${isDerived ? " (from profile)" : ""}`),
+        el("div", { class:"muted small" }, `${paidTick ? "✅ paid " + money(sal) + " (after OT/penalties)" : money(sal) + "/mo"} · ${curLabel}${isDerived ? " (from profile)" : ""}`),
       ]));
 
       if (canEdit) {
@@ -15427,7 +15439,7 @@ routes.dashboard = function (u, params) {
         const _perPerson = _activeStaff.map(p => {
           const share = staffSalaryShareForBranch(p.id, _salaryBranch);
           if (share <= 0) return null;
-          const amt = rangeMonths.reduce((s, m) => s + getSalaryForMonth(p.id, m) * share, 0);
+          const amt = rangeMonths.reduce((s, m) => s + salaryCostForMonth(p.id, m) * share, 0);
           return amt > 0 ? { name: p.name, amt: Math.round(amt), rotating: getStaffSalaryBranch(p.id) === "split" } : null;
         }).filter(Boolean).sort((a, b) => b.amt - a.amt);
         card.appendChild(el("div", { class: "kv" }, [
