@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-596 -->
+<!-- CB_BUILD:20260929-602 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-596";
+  var BUILD = "20260929-602";
   (function() {
     function checkFresh() {
       try {
@@ -10767,7 +10767,9 @@ routes.overheads = function (u) {
 
   // Active staff whose salary feeds branch overhead. Shared by the salary card and totals card.
   function overheadStaff() {
-    return state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
+    // Include someone who left mid-month: their final pay still belongs to that month's overheads.
+    return state.users.filter(x => (x.role === "barista" || x.role === "head_barista") &&
+      (x.active || wasActiveInMonth(x.id, month) === true || salaryPaidTickAmount(x.id, month) != null));
   }
 
   function drawSalaryCard() {
