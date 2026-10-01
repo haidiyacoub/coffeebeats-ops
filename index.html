@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20260929-610 -->
+<!-- CB_BUILD:20261001-569 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20260929-610";
+  var BUILD = "20261001-569";
   (function() {
     function checkFresh() {
       try {
@@ -12456,9 +12456,10 @@ routes.sales_import = function (u) {
 
 function detectBranchSalesFilename(filename) {
   const MONTHS = { january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
-    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12" };
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12",
+    jan:"01",feb:"02",mar:"03",apr:"04",jun:"06",jul:"07",aug:"08",sep:"09",sept:"09",oct:"10",nov:"11",dec:"12" };
   const base = filename.replace(/\.[^.]+$/, "").toLowerCase().trim();
-  const m = base.match(/^(.+?)\s+sales\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})$/);
+  const m = base.match(/^(.+?)\s+sales\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\s+(\d{4})$/);
   if (!m) return null;
   const rawBranch = m[1].trim();
   const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
@@ -12466,8 +12467,17 @@ function detectBranchSalesFilename(filename) {
   return { branch, isoMonth };
 }
 
+// Data rows after the header row. Exports with a 5-row preamble have the header at row 5;
+// plain exports have it at row 0. Find it by its first-cell label, fall back to the old slice(6).
+function _rowsAfterHeader(raw, firstCellLabel) {
+  for (let i = 0; i < Math.min(raw.length, 10); i++) {
+    if (String((raw[i] || [])[0] || "").replace(/^\uFEFF/, "").trim().toLowerCase() === firstCellLabel) return raw.slice(i + 1);
+  }
+  return raw.slice(6);
+}
+
 function parseBranchSalesSheet(raw, branch, isoMonth) {
-  const dataRows = raw.slice(6); // rows 0–4 preamble, row 5 header, data at row 6+
+  const dataRows = _rowsAfterHeader(raw, "product"); // header row found by label (preamble optional)
   const fbDate = isoMonth + "-15";
   const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
   const rows = [];
@@ -12487,9 +12497,10 @@ function parseBranchSalesSheet(raw, branch, isoMonth) {
 // Returns { branch, isoMonth } if filename matches "{Branch} order items {Month} {Year}"
 function detectOrderItemsFilename(filename) {
   const MONTHS = { january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
-    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12" };
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12",
+    jan:"01",feb:"02",mar:"03",apr:"04",jun:"06",jul:"07",aug:"08",sep:"09",sept:"09",oct:"10",nov:"11",dec:"12" };
   const base = filename.replace(/\.[^.]+$/, "").toLowerCase().trim();
-  const m = base.match(/^(.+?)\s+order\s+items\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})$/);
+  const m = base.match(/^(.+?)\s+order\s+items\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\s+(\d{4})$/);
   if (!m) return null;
   const rawBranch = m[1].trim();
   const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
@@ -12499,9 +12510,10 @@ function detectOrderItemsFilename(filename) {
 // Returns { branch, isoMonth } if filename matches "{Branch} orders {Month} {Year}"
 function detectOrdersFilename(filename) {
   const MONTHS = { january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
-    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12" };
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12",
+    jan:"01",feb:"02",mar:"03",apr:"04",jun:"06",jul:"07",aug:"08",sep:"09",sept:"09",oct:"10",nov:"11",dec:"12" };
   const base = filename.replace(/\.[^.]+$/, "").toLowerCase().trim();
-  const m = base.match(/^(.+?)\s+orders\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})$/);
+  const m = base.match(/^(.+?)\s+orders\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\s+(\d{4})$/);
   if (!m) return null;
   const rawBranch = m[1].trim();
   const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
@@ -12532,7 +12544,7 @@ function extractDateFromOrderRef(orderRef, isoMonth) {
 
 // A(0)=order_reference, D(3)=order_type, H(7)=name, J(9)=unit_price, L(11)=qty, O(14)=discount, P(15)=discount_name, U(20)=date
 function parseOrderItemsSheet(raw, branch, isoMonth) {
-  const dataRows = raw.slice(6);
+  const dataRows = _rowsAfterHeader(raw, "order_reference");
   const toNum = (x) => { const n = Number(String(x||"").replace(/[,\s]/g,"")); return isNaN(n) ? 0 : n; };
   const parseColDate = (v) => {
     if (!v) return null;
@@ -12564,7 +12576,7 @@ function parseOrderItemsSheet(raw, branch, isoMonth) {
 // Rows 0–4 preamble, row 5 header, data at row 6+.
 // A(0)=order_reference, J(9)=date, X(23)=barista_name
 function parseOrdersSheet(raw, branch, isoMonth) {
-  const dataRows = raw.slice(6);
+  const dataRows = _rowsAfterHeader(raw, "reference");
   const parseColDate = (v) => {
     if (!v) return null;
     if (v instanceof Date) return v.toISOString().slice(0,10);
