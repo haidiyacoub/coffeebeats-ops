@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261001-569 -->
+<!-- CB_BUILD:20261001-573 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261001-569";
+  var BUILD = "20261001-573";
   (function() {
     function checkFresh() {
       try {
@@ -751,6 +751,7 @@ const ZAWYA_EXCLUDED_ITEM_PATTERNS = [
 // non-Zawya version IS a genuine Coffee Beats product. Currently just "water": Maadi's
 // water is Coffee Beats' own; Zawya's is the venue's third-party concession.
 const ZAWYA_ONLY_ITEM_PATTERNS = new Set(["water"]);
+const ZAWYA_ONLY_CATEGORIES = new Set(["snacks","snack"]);
 async function readFileAsCSV(file) {
   if (/\.(xlsx|xls)$/i.test(file.name)) {
     const buf = await file.arrayBuffer();
@@ -781,6 +782,8 @@ function isConcessionExcluded(category, item) {
   const n = String(item || "").trim().toLowerCase();
   if (!c && !n) return false;
   for (const ex of ZAWYA_EXCLUDED_CATEGORIES) {
+    // "snacks" is a Zawya-venue concession category; at Maadi, "Gourmet Snacks"/"HaLo Snacks" are Coffee Beats' own food.
+    if (ZAWYA_ONLY_CATEGORIES.has(ex)) continue;
     if (c === ex || c.includes(ex)) return true;
   }
   for (const ex of ZAWYA_EXCLUDED_ITEM_PATTERNS) {
