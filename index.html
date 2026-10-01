@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261001-573 -->
+<!-- CB_BUILD:20261001-574 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261001-573";
+  var BUILD = "20261001-574";
   (function() {
     function checkFresh() {
       try {
@@ -751,7 +751,6 @@ const ZAWYA_EXCLUDED_ITEM_PATTERNS = [
 // non-Zawya version IS a genuine Coffee Beats product. Currently just "water": Maadi's
 // water is Coffee Beats' own; Zawya's is the venue's third-party concession.
 const ZAWYA_ONLY_ITEM_PATTERNS = new Set(["water"]);
-const ZAWYA_ONLY_CATEGORIES = new Set(["snacks","snack"]);
 async function readFileAsCSV(file) {
   if (/\.(xlsx|xls)$/i.test(file.name)) {
     const buf = await file.arrayBuffer();
@@ -773,23 +772,9 @@ function isZawyaExcluded(category, item) {
   }
   return false;
 }
-// True for third-party concession items (popcorn, soft drinks, candy, merchandise) whose
-// cost and revenue belong entirely to the venue operator, never Coffee Beats — regardless
-// of which branch the sales row happens to be tagged with. Unlike isZawyaExcluded(), this
-// excludes "water" from the check since Maadi's water is Coffee Beats' own product.
+// Third-party concession exclusion applies to Zawya only (see isZawyaExcluded). Everything sold at
+// Maadi (or any other Coffee Beats branch) is Coffee Beats' own sale, so nothing is excluded there.
 function isConcessionExcluded(category, item) {
-  const c = String(category || "").trim().toLowerCase();
-  const n = String(item || "").trim().toLowerCase();
-  if (!c && !n) return false;
-  for (const ex of ZAWYA_EXCLUDED_CATEGORIES) {
-    // "snacks" is a Zawya-venue concession category; at Maadi, "Gourmet Snacks"/"HaLo Snacks" are Coffee Beats' own food.
-    if (ZAWYA_ONLY_CATEGORIES.has(ex)) continue;
-    if (c === ex || c.includes(ex)) return true;
-  }
-  for (const ex of ZAWYA_EXCLUDED_ITEM_PATTERNS) {
-    if (ZAWYA_ONLY_ITEM_PATTERNS.has(ex)) continue;
-    if (n.includes(ex)) return true;
-  }
   return false;
 }
 
