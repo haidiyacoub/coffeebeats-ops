@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261011-141 -->
+<!-- CB_BUILD:20261011-167 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261011-141";
+  var BUILD = "20261011-167";
   (function() {
     function checkFresh() {
       try {
@@ -6210,11 +6210,13 @@ routes.snapshot_new = function (u) {
     const byKey = {};
     if (latest) for (const e of latest.entries) byKey[e.branch + "|" + e.item_id] = Number(e.qty) || 0;
     let counted = 0;
+    const countedIds = [];
     for (const it of state.items) {
       const inp = inputs[it.id];
       if (inp && String(inp.value).trim() !== "") {
         byKey[branch + "|" + it.id] = Number(inp.value) || 0;
         counted++;
+        countedIds.push(it.id);
       }
     }
     if (counted === 0) { toast(T("Type at least one count first","أدخل عدداً واحداً على الأقل"), "error"); return; }
@@ -6226,6 +6228,7 @@ routes.snapshot_new = function (u) {
     state.snapshots.push({
       id: snapId, as_of: asOf, branch, created_at: s.at, created_by: s.by, created_by_name: s.by_name, device: s.device,
       entries,
+      counted_item_ids: countedIds,   // which items were actually typed in (entries also carries over uncounted values)
       notes: `${branch} count`,
       image_url: "",
     });
@@ -7698,9 +7701,9 @@ function checkNoStampAlert() {
 
   const now      = new Date();
   const todayStr = localISODate(now);
-  const dayIndex = (now.getDay() + 6) % 7;
+  const dayIndex = now.getDay();
   const dayKey   = ROSTER_DAYS[dayIndex];
-  const weekOf   = mondayOf(todayStr);
+  const weekOf   = sundayOf(todayStr);
 
   const morning = (state.rosters || []).filter(r =>
     r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
@@ -16672,9 +16675,9 @@ routes.signin_stamp_new = function (u) {
         if (!isTestMode()) (function() {
           const submitTime = new Date(s.at);
           const todayStr   = localISODate(submitTime); // local date, not UTC
-          const dayIndex   = (submitTime.getDay() + 6) % 7; // 0=Mon … 6=Sun
+          const dayIndex   = submitTime.getDay(); // 0=Sun … 6=Sat (matches ROSTER_DAYS)
           const dayKey     = ROSTER_DAYS[dayIndex];
-          const weekOf     = mondayOf(todayStr);
+          const weekOf     = sundayOf(todayStr);
 
           // Sign-in stamp = morning shift only.
           // Only penalise if this barista is currently assigned to the morning shift
@@ -20881,9 +20884,9 @@ function kpiPunctualityScore(userId, cutoff) {
   for (let d = new Date(cutoffDate); ; d.setDate(d.getDate() + 1)) {
     const dateStr = localISODate(d);
     if (dateStr >= todayStr) break;
-    const dayIndex = (d.getDay() + 6) % 7;
+    const dayIndex = d.getDay();
     const dayKey   = ROSTER_DAYS[dayIndex];
-    const weekOf   = mondayOf(dateStr);
+    const weekOf   = sundayOf(dateStr);
     const entries  = (state.rosters||[]).filter(r =>
       r.week_of === weekOf && r.day === dayKey &&
       r.shift === "morning" && r.user_id === userId
@@ -20937,9 +20940,9 @@ function kpiPunctualityScore(userId, cutoff) {
 // Applies 3-day no-stamp (no show) deductions for morning-shift baristas who submitted no stamp on a given date.
 // Returns the number of new penalties created.
 function applyMissingStampPenalties(dateStr, appliedBy) {
-  const dayIndex = (new Date(dateStr + "T12:00:00").getDay() + 6) % 7;
+  const dayIndex = new Date(dateStr + "T12:00:00").getDay();
   const dayKey   = ROSTER_DAYS[dayIndex];
-  const weekOf   = mondayOf(dateStr);
+  const weekOf   = sundayOf(dateStr);
   const morning  = (state.rosters||[]).filter(r =>
     r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
   );
@@ -21042,9 +21045,9 @@ function kpiWasteScore(userId, cutoff) {
   for (let d = new Date(cutoff); ; d.setDate(d.getDate() + 1)) {
     const dateStr = localISODate(d);
     if (dateStr >= today) break;
-    const dayIndex = (d.getDay() + 6) % 7;
+    const dayIndex = d.getDay();
     const dayKey   = ROSTER_DAYS[dayIndex];
-    const weekOf   = mondayOf(dateStr);
+    const weekOf   = sundayOf(dateStr);
     const onMorning = (state.rosters||[]).some(r =>
       r.week_of === weekOf && r.day === dayKey && r.shift === "morning" && r.user_id === userId
     );
@@ -21264,9 +21267,9 @@ function kpiLeadershipScore(userId, month) {
     let deductions = 0;
     for (let d = new Date(monthStart); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
       const dateStr  = localISODate(d);
-      const dayIndex = (d.getDay() + 6) % 7;
+      const dayIndex = d.getDay();
       const dayKey   = ROSTER_DAYS[dayIndex];
-      const weekOf   = mondayOf(dateStr);
+      const weekOf   = sundayOf(dateStr);
       const morningEntries = (state.rosters || []).filter(r =>
         r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
       );

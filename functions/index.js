@@ -263,7 +263,7 @@ function _rowTotal(s) { return s.cash + s.instapay + s.cc + s.talabat_credit + s
 function _fmt(n)      { return `EGP ${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function _cap(s)      { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
-async function _sendEmail(subject, text) {
+async function _sendEmail(subject, text, { urgent = false } = {}) {
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: { user: GMAIL_USER.value(), pass: GMAIL_PASS.value() },
@@ -273,6 +273,7 @@ async function _sendEmail(subject, text) {
     to:   NOTIFY_TO.value(),
     subject,
     text,
+    ...(urgent ? { priority: "high", headers: { "X-Priority": "1", Importance: "high" } } : {}),
   });
 }
 
@@ -560,3 +561,126 @@ async function _createUser({ name, role, branches, pin, legacyId, emergency_numb
 
   return { uid };
 }
+
+// ─── inventoryMonthEndCheck ───────────────────────────────────────────────────
+// Daily 20:00 Cairo, 25th → 1st. "Done" = a snapshot dated the month's last day (same
+// test as the Budget & Inventory Manager KPI) for BOTH branches, maadi and zawya.
+//  • ONE summary email per month — items updated vs not updated, per branch — sent as
+//    soon as both branches are counted, or on the 1st with whatever is there.
+//  • Short "not done yet" reminders (no item detail) on the last 2 days only.
+exports.inventoryMonthEndCheck = onSchedule(
+  { schedule: "0 20 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async () => {
+    const db  = getDb();
+    const now = new Date(Date.now() + 2 * 60 * 60 * 1000);           // Cairo wall-clock
+    const iso = d => d.toISOString().slice(0, 10);
+    const day = now.getUTCDate();
+    const target  = day === 1 ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
+                              : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const ym      = iso(target).slice(0, 7);
+    const lastDay = iso(new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)));
+    const lastN   = Number(lastDay.slice(8));
+    if (day !== 1 && day < Math.min(25, lastN - 2)) return;           // outside the window
+
+    const flagRef = db.collection("system_flags").doc(`inv_eom_${ym}`);
+    const flag    = (await flagRef.get()).data() || {};
+    if (flag.summarySent) return;
+
+    const [shard, itemsDoc] = await Promise.all([
+      db.collection("state").doc(`snap__${ym}`).get(),
+      db.collection("state").doc("users_items").get(),
+    ]);
+    const rows       = (shard.exists ? shard.data().snapshots : null) || [];
+    const activeIds  = ((itemsDoc.exists ? itemsDoc.data().items : null) || []).filter(i => i.active).map(i => i.id);
+    const BRANCHES   = ["maadi", "zawya"];
+    const countsFor  = b => rows.filter(s => s.as_of === lastDay && s.branch === b);
+    const missing    = BRANCHES.filter(b => countsFor(b).length === 0);
+
+    if (missing.length === 0 || day === 1) {
+      const lines = [`End-of-month inventory count — ${ym} (as of ${lastDay})`, ""];
+      for (const b of BRANCHES) {
+        const snaps = countsFor(b);
+        if (!snaps.length) { lines.push(`${_cap(b)}: NO COUNT SUBMITTED`); continue; }
+        const counted = new Set();
+        for (const s of snaps) {
+          // Older snapshots have no counted_item_ids; fall back to every item they hold for this branch.
+          const ids = s.counted_item_ids || (s.entries || []).filter(e => e.branch === b).map(e => e.item_id);
+          ids.forEach(id => counted.add(id));
+        }
+        const updated = activeIds.filter(id => counted.has(id)).length;
+        lines.push(`${_cap(b)}: ${updated} items updated, ${activeIds.length - updated} not updated (of ${activeIds.length})`);
+      }
+      if (missing.length) lines.push("", `Missing: ${missing.map(_cap).join(" and ")} — the ½-day Budget & Inventory Manager penalty applies unless added.`);
+      await _sendEmail(`${missing.length ? "❌" : "✅"} Inventory count summary — ${ym}`, lines.join("\n"));
+      await flagRef.set({ summarySent: true, at: new Date().toISOString() }, { merge: true });
+    } else if (day >= lastN - 1) {
+      await _sendEmail(`⚠️ Inventory count not done yet — ${ym}`,
+        `No inventory count dated ${lastDay} has been submitted for: ${missing.map(_cap).join(" and ")}. ${lastN - day + 1} day(s) left.`);
+    }
+  }
+);
+
+// ─── dailyComplianceCheck ─────────────────────────────────────────────────────
+// Two runs a day (Cairo): 15:00 checks roster + sign-in stamps; 23:45 also checks shift
+// closes. Anything missing → ONE high-urgency email per run (flag doc de-dupes, so an item
+// already reported at 15:00 is not repeated at 23:45; next day starts fresh).
+// NOTHING here depends on the roster except the roster check itself:
+//  • Stamp  = every branch (maadi, zawya) needs at least one sign-in stamp dated today.
+//  • Close  = every branch needs at least one shift close dated today.
+//  • Roster = the current week (Sunday-based week_of) needs rows for every branch.
+const COMPLIANCE_BRANCHES = ["maadi", "zawya"];
+
+async function _runComplianceCheck({ checkCloses }) {
+  const db    = getDb();
+  const today = localISODate(new Date());
+  const noon  = new Date(today + "T12:00:00Z");
+  const sunday = new Date(noon.getTime() - noon.getUTCDay() * 86400000).toISOString().slice(0, 10);
+  const ym = today.slice(0, 7);
+
+  // Month-shard docs are keyed by month; today's rows are always in this month's doc.
+  const [rosterDoc, tombDoc, ssDoc, scDoc, flagDoc] = await Promise.all([
+    db.collection("state").doc("roster").get(),
+    db.collection("state").doc("tombstones").get(),
+    db.collection("state").doc(`ss__${ym}`).get(),
+    db.collection("state").doc(`sc__${ym}`).get(),
+    db.collection("system_flags").doc(`daily_check_${today}`).get(),
+  ]);
+  const arr = (d, k) => (d.exists && Array.isArray(d.data()[k]) ? d.data()[k] : []);
+  const tomb = new Set(arr(tombDoc, "deleted_ids").map(t => (t && typeof t === "object" ? t.id : t)));
+  const live = r => r && !r.is_test && !r.deleted && !r.deleted_at && !tomb.has(r.id);
+  const reported = new Set((flagDoc.exists ? flagDoc.data().reported : null) || []);
+  const branchOf = r => String(r.branch || "").toLowerCase();
+
+  const stamps = arr(ssDoc, "signin_stamps").filter(live).filter(s => localISODate(new Date(s.at)) === today);
+  const closes = arr(scDoc, "shift_closes").filter(live).filter(c => c.date === today);
+  const roster = arr(rosterDoc, "rosters").filter(r => r.week_of === sunday);
+
+  const problems = [];   // { key, text }
+  for (const b of COMPLIANCE_BRANCHES) {
+    if (!roster.some(r => branchOf(r) === b))
+      problems.push({ key: `roster:${sunday}:${b}`, text: `SCHEDULE NOT UPDATED — ${_cap(b)} has no roster for the week starting ${sunday}` });
+    if (!stamps.some(s => branchOf(s) === b))
+      problems.push({ key: `stamp:${b}`, text: `NO SIGN-IN STAMP — ${_cap(b)} has no sign-in stamp today` });
+    if (checkCloses && !closes.some(c => branchOf(c) === b))
+      problems.push({ key: `close:${b}`, text: `NO SHIFT CLOSE — ${_cap(b)} has no shift close today` });
+  }
+
+  const fresh = problems.filter(p => !reported.has(p.key));
+  if (!fresh.length) { console.log(`Compliance check ${today}: nothing new to report`); return; }
+
+  const lines = [`Coffee Beats — missing items for ${today}`, "", ...fresh.map(p => `❌ ${p.text}`), "",
+                 "A missing stamp means no one signed in; a missing shift close means that day's takings are unrecorded."];
+  await _sendEmail(`🚨 URGENT: ${fresh.length} missing — ${today}`, lines.join("\n"), { urgent: true });
+  await db.collection("system_flags").doc(`daily_check_${today}`)
+    .set({ reported: [...reported, ...fresh.map(p => p.key)], at: new Date().toISOString() }, { merge: true });
+  console.log(`Compliance alert sent for ${today}: ${fresh.length} item(s)`);
+}
+
+exports.dailyComplianceCheck = onSchedule(
+  { schedule: "0 15 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async () => { await _runComplianceCheck({ checkCloses: false }); }
+);
+exports.dailyComplianceCheckNight = onSchedule(
+  { schedule: "45 23 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async () => { await _runComplianceCheck({ checkCloses: true }); }
+);
