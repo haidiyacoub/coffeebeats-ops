@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261011-123 -->
+<!-- CB_BUILD:20261011-141 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261011-123";
+  var BUILD = "20261011-141";
   (function() {
     function checkFresh() {
       try {
@@ -8618,8 +8618,10 @@ routes.salaries = function (u) {
     let grandDue = 0;
     for (const p of staff) {
       const salary  = getSalaryForMonth(p.id, month);
-      const penSum  = state.penalties.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
-                                     .reduce((s,r)=>s+(Number(r.amount)||0),0);
+      const penRows = state.penalties.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month);
+      const lateRows = penRows.filter(x => x.auto_late || x.reason === "late");
+      const lateSum = lateRows.reduce((s,r)=>s+(Number(r.amount)||0),0);
+      const penSum  = penRows.reduce((s,r)=>s+(Number(r.amount)||0),0) - lateSum; // other (non-late) penalties
       const loanSum = state.salary_loans.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
                                         .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const sickSum = (state.sick_leave_deductions || []).filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
@@ -8629,13 +8631,13 @@ routes.salaries = function (u) {
       const annualOver  = annualLeaveOverage(p.id, month, salary);
       const annualSum   = annualOver.amount;
       const hbIncentive = p.role === "head_barista" ? calcHBIncentive(p, month).total : 0;
-      const due = Math.max(0, salary + otSum + hbIncentive - penSum - loanSum - sickSum - annualSum);
+      const due = Math.max(0, salary + otSum + hbIncentive - lateSum - penSum - loanSum - sickSum - annualSum);
       grandDue += due;
       const incentivePart = hbIncentive > 0 ? ` + Incentive ${money(hbIncentive)}` : "";
       dueCard.appendChild(el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
         el("div", { class: "k" }, [
           el("div", {}, p.name + (p.active ? "" : " (archived)")),
-          el("div", { class: "muted small" }, `Salary ${money(salary)}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
+          el("div", { class: "muted small" }, `Salary ${money(salary)}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
         ]),
         el("div", { class: "v", style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } }, [
           money(due),
@@ -22294,13 +22296,17 @@ routes.my_hr = function(u, params) {
     const penList  = state.penalties.filter(x => x.user_id === uid && monthFn(x));
     const otList   = state.overtime_logs.filter(x => x.user_id === uid && monthFn(x));
     const loanList = state.salary_loans.filter(x => x.user_id === uid && monthFn(x));
-    const penSum   = penList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const isLatePen = x => x.auto_late || x.reason === "late";
+    const penTot   = penList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const lateSum  = penList.filter(isLatePen).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const lateCnt  = penList.filter(isLatePen).length;
+    const penSum   = penTot - lateSum;
     const otSum    = otList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const otHrs    = otList.reduce((s, r) => s + (Number(r.hours) || 0), 0);
     const loanSum  = loanList.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const annualOver = annualLeaveOverage(uid, selMonth, salary);
     const annualSum   = annualOver.amount;
-    const netDue   = Math.max(0, salary + otSum - penSum - loanSum - annualSum);
+    const netDue   = Math.max(0, salary + otSum - penTot - loanSum - annualSum);
     const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
 
     // Section A — Pay Summary
@@ -22309,7 +22315,8 @@ routes.my_hr = function(u, params) {
     const rows = [
       [isAR ? "الراتب الأساسي" : "Base Salary", money(salary), ""],
       [isAR ? `أوفرتايم (${otHrs}h)` : `Overtime (${otHrs}h)`, "+" + money(otSum), "var(--ok)"],
-      [isAR ? "الخصومات" : "Penalties", "−" + money(penSum), penSum > 0 ? "var(--bad)" : ""],
+      [isAR ? `خصومات التأخير (${lateCnt})` : `Late penalties (${lateCnt})`, "−" + money(lateSum), lateSum > 0 ? "var(--bad)" : ""],
+      [isAR ? "الخصومات الأخرى" : "Other penalties", "−" + money(penSum), penSum > 0 ? "var(--bad)" : ""],
       [isAR ? "سلف" : "Loans", "−" + money(loanSum), loanSum > 0 ? "var(--warn)" : ""],
     ];
     if (annualSum > 0) {
@@ -22364,8 +22371,8 @@ routes.my_hr = function(u, params) {
       const tb = el("tbody", {});
       penList.forEach(r => tb.appendChild(el("tr", {}, [
         el("td", {}, r.date || ""),
-        el("td", {}, r.reason || r.note || "—"),
-        el("td", {}, r.type || "—"),
+        el("td", {}, isLatePen(r) ? "⏰ " + (r.note || "Late arrival") : (r.reason || r.note || "—")),
+        el("td", {}, isLatePen(r) ? (({ half_day: "Half day", full_day: "Full day", two_days: "2 days", three_days: "3 days (no show)" })[r.kind] || r.kind || "Late") : (r.type || "—")),
         el("td", { class: "num", style: { color: "var(--bad)" } }, "−" + money(r.amount)),
       ])));
       t.appendChild(tb);
@@ -22551,15 +22558,18 @@ routes.staff_hr = function(u) {
     const archivedCount = staff.filter(x => !x.active).length;
 
     // Summary stat cards
-    let totalPayroll = 0, totalPen = 0, totalOT = 0;
+    let totalPayroll = 0, totalPen = 0, totalOT = 0, totalLate = 0;
     const staffData = staff.map(p => {
       const salary  = getSalaryForMonth(p.id, selMonth);
-      const penSum  = state.penalties.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const penAll  = state.penalties.filter(x => x.user_id === p.id && monthFn(x));
+      const lateSum = penAll.filter(x => x.auto_late || x.reason === "late").reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const penTot  = penAll.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const penSum  = penTot - lateSum; // other (non-late) penalties — late shown in its own column
       const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const loanSum = state.salary_loans.filter(x => x.user_id === p.id && monthFn(x)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const annualOver = annualLeaveOverage(p.id, selMonth, salary);
       const annualSum  = annualOver.amount;
-      const netDue  = Math.max(0, salary + otSum - penSum - loanSum - annualSum);
+      const netDue  = Math.max(0, salary + otSum - penTot - loanSum - annualSum);
       const scores  = kpiGetUserScores(p.id);
       const kpiTotal = scores ? kpiCalcTotal(scores) : 0;
       const thisYear = selMonth.slice(0, 4);
@@ -22568,15 +22578,17 @@ routes.staff_hr = function(u) {
         .reduce((s, x) => s + Math.round((new Date(x.to_date) - new Date(x.from_date)) / 86400000) + 1, 0);
       totalPayroll += netDue;
       totalPen     += penSum;
+      totalLate    += lateSum;
       totalOT      += otSum;
-      return { p, salary, penSum, otSum, loanSum, annualSum, annualOver, netDue, kpiTotal, lvDays };
+      return { p, salary, penSum, lateSum, otSum, loanSum, annualSum, annualOver, netDue, kpiTotal, lvDays };
     });
 
     const statsRow = el("div", { class: "grid c2", style: { gap: "8px", marginBottom: "12px" } });
     [
       [T("👥 Staff","👥 الموظفون") + (archivedCount ? T(` (${archivedCount} archived)`, ` (${archivedCount} مؤرشف)`) : ""), String(staff.length)],
       [T("💰 Total Payroll","💰 إجمالي الرواتب"), money(totalPayroll)],
-      [T("⚖ Total Penalties","⚖ إجمالي الخصومات"), money(totalPen)],
+      [T("⏰ Total Late Penalties","⏰ إجمالي خصومات التأخير"), money(totalLate)],
+      [T("⚖ Total Other Penalties","⚖ إجمالي الخصومات الأخرى"), money(totalPen)],
       [T("⏱ Total Overtime","⏱ إجمالي الأوفرتايم"), money(totalOT)],
     ].forEach(([k, v]) => {
       const c = el("div", { class: "card", style: { padding: "12px", textAlign: "center" } });
@@ -22594,6 +22606,7 @@ routes.staff_hr = function(u) {
       el("th", {}, T("Role","الدور")),
       el("th", { style: { textAlign: "right" } }, T("Base","الأساسي")),
       el("th", { style: { textAlign: "right" } }, T("OT","أوفرتايم")),
+      el("th", { style: { textAlign: "right" } }, T("Late","التأخير")),
       el("th", { style: { textAlign: "right" } }, T("Penalties","الخصومات")),
       el("th", { style: { textAlign: "right" } }, T("Loans","السلف")),
       el("th", { style: { textAlign: "right" } }, T("Net Due","الصافي المستحق")),
@@ -22601,9 +22614,9 @@ routes.staff_hr = function(u) {
       el("th", { style: { textAlign: "center" } }, T("Leave Days","أيام الإجازة")),
     ])]));
     const tb = el("tbody", {});
-    let grandBase = 0, grandOT = 0, grandPen = 0, grandLoan = 0, grandNet = 0;
-    staffData.forEach(({ p, salary, penSum, otSum, loanSum, annualSum, annualOver, netDue, kpiTotal, lvDays }) => {
-      grandBase += salary; grandOT += otSum; grandPen += penSum; grandLoan += loanSum; grandNet += netDue;
+    let grandBase = 0, grandOT = 0, grandPen = 0, grandLate = 0, grandLoan = 0, grandNet = 0;
+    staffData.forEach(({ p, salary, penSum, lateSum, otSum, loanSum, annualSum, annualOver, netDue, kpiTotal, lvDays }) => {
+      grandBase += salary; grandOT += otSum; grandPen += penSum; grandLate += lateSum; grandLoan += loanSum; grandNet += netDue;
       const netColor = netDue >= salary ? "var(--ok)" : netDue >= salary * 0.85 ? "var(--warn)" : "var(--bad)";
       const archivedStyle = p.active ? "" : "opacity:.55;font-style:italic";
       const tr = el("tr", { style: { cursor: "pointer" + (archivedStyle ? ";" + archivedStyle : "") }, onClick: () => go("my_hr", { user_id: p.id }) }, [
@@ -22611,6 +22624,7 @@ routes.staff_hr = function(u) {
         el("td", { class: "muted small" }, T(p.role === "head_barista" ? "Head" : "Barista", p.role === "head_barista" ? "رئيس" : "بريستا")),
         el("td", { class: "num" }, money(salary)),
         el("td", { class: "num", style: { color: "var(--ok)" } }, otSum ? "+" + money(otSum) : "—"),
+        el("td", { class: "num", style: { color: lateSum ? "var(--bad)" : "" } }, lateSum ? "−" + money(lateSum) : "—"),
         el("td", { class: "num", style: { color: penSum ? "var(--bad)" : "" } }, penSum ? "−" + money(penSum) : "—"),
         el("td", { class: "num", style: { color: loanSum ? "var(--warn)" : "" } }, loanSum ? "−" + money(loanSum) : "—"),
         el("td", { class: "num", style: { fontWeight: "700", color: netColor } }, money(netDue)),
@@ -22627,6 +22641,7 @@ routes.staff_hr = function(u) {
       el("td", { colspan: "2", style: { fontWeight: "800" } }, T("Total","الإجمالي")),
       el("td", { class: "num" }, money(grandBase)),
       el("td", { class: "num" }, money(grandOT)),
+      el("td", { class: "num" }, money(grandLate)),
       el("td", { class: "num" }, money(grandPen)),
       el("td", { class: "num" }, money(grandLoan)),
       el("td", { class: "num", style: { color: "var(--ok)" } }, money(grandNet)),
