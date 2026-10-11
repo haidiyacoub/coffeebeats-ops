@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261011-122 -->
+<!-- CB_BUILD:20261011-123 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261011-122";
+  var BUILD = "20261011-123";
   (function() {
     function checkFresh() {
       try {
@@ -4365,6 +4365,84 @@ function maadiCashLedger() {
   return { rows, balance: bal };
 }
 
+
+// ==============================================================
+// MONTH-END CLOSING LINES — shared by the petty cash, Maadi cash and bank ledgers.
+// Display-only (nothing stored, so nothing to sync): every ledger gets a ruled
+// line at the end of each month stating what was in the account, and the next
+// month's in/out columns start again from 0. `rows` = chronological
+// [{date, amount, kind?, running_balance}]; running_balance is the cumulative
+// figure the ledger already shows, so closing lines always agree with it.
+// ==============================================================
+function monthCloseData(rows) {
+  const by = {};
+  let prev = 0;
+  for (const r of rows) {
+    const ym = String(r.date || "").slice(0, 7);
+    if (!ym) continue;
+    const m = by[ym] || (by[ym] = { ym, opening: prev, in: 0, out: 0, closing: prev });
+    if (r.kind !== "count" && r.type !== "count") {
+      if (r.amount > 0) m.in += r.amount; else m.out -= r.amount;
+    }
+    m.closing = r.running_balance;
+    prev = r.running_balance;
+  }
+  return by;
+}
+// The ruled "end of month" line shown between months in a ledger list.
+function monthCloseLine(ym, closing) {
+  return el("div", { style: { margin: "10px 0", padding: "8px 10px", borderTop: "2px solid var(--ink)", borderBottom: "1px dashed var(--border)", background: "rgba(127,127,127,0.07)", display: "flex", justifyContent: "space-between", gap: "8px", flexWrap: "wrap", fontWeight: "700", fontSize: "13px" } }, [
+    el("span", {}, T(`📕 End of ${fmtYm(ym)} — in the account`, `📕 نهاية ${fmtYm(ym)} — الرصيد في الحساب`)),
+    el("span", { style: { color: closing < 0 ? "var(--bad)" : "var(--ink)" } }, money(closing)),
+    el("span", { class: "muted", style: { width: "100%", fontWeight: "400", fontSize: "12px" } }, T("Next month's in/out start from 0", "حركة الشهر التالي تبدأ من صفر")),
+  ]);
+}
+// Interleave closing lines into a NEWEST-FIRST list of elements. `items` = [{date, el}].
+// A line goes above the first row of every earlier month (and above everything if the
+// newest row is already from a closed month).
+function withMonthCloseLines(items, closeByMonth) {
+  const out = [];
+  const curMonth = new Date().toISOString().slice(0, 7);
+  let last = null;
+  for (const it of items) {
+    const ym = String(it.date || "").slice(0, 7);
+    if (ym && ym !== last && closeByMonth[ym] && (last !== null || ym < curMonth)) out.push(monthCloseLine(ym, closeByMonth[ym].closing));
+    if (ym) last = ym;
+    out.push(it.el);
+  }
+  return out;
+}
+// Month-by-month statement card: opening, in, out, closing — latest 6 months.
+function monthStatementCard(title, rows) {
+  const by = monthCloseData(rows);
+  const months = Object.keys(by).sort().reverse().slice(0, 6);
+  const curMonth = new Date().toISOString().slice(0, 7);
+  const card = el("div", { class: "card", style: { marginBottom: "12px" } });
+  card.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, title));
+  if (!months.length) { card.appendChild(el("div", { class: "muted small" }, T("No movements yet.", "لا توجد حركات بعد."))); return card; }
+  for (const ym of months) {
+    const m = by[ym], open = ym === curMonth;
+    card.appendChild(el("div", { class: "kv" }, [
+      el("div", { class: "k" }, [
+        el("div", { style: { fontWeight: "600" } }, fmtYm(ym) + (open ? T(" (so far)", " (حتى الآن)") : "")),
+        el("div", { class: "muted small" }, T(`In ${money(m.in)} · Out ${money(m.out)}`, `داخل ${money(m.in)} · خارج ${money(m.out)}`)),
+      ]),
+      el("div", { class: "v", style: { textAlign: "end" } }, [
+        el("div", { style: { fontWeight: "700", color: m.closing < 0 ? "var(--bad)" : "var(--ink)" } }, money(m.closing)),
+        el("div", { class: "muted small" }, open ? T("in the account now", "الرصيد الحالي") : T("closed — in the account", "أُغلق — في الحساب")),
+      ]),
+    ]));
+  }
+  return card;
+}
+// Bank ledger → chronological rows with a cumulative balance (all non-test entries).
+function bankLedgerRows() {
+  let run = 0;
+  return (state.bank_ledger || []).filter(notTest)
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.at || "").localeCompare(String(b.at || "")))
+    .map(r => { run += Number(r.amount) || 0; return { ...r, amount: Number(r.amount) || 0, running_balance: run }; });
+}
+
 // ----- petty cash monthly budget & 60/40 auto-split -----
 // Estimated monthly petty cash across both branches (default 20,000 EGP) and the
 // Zawya share of any auto-split top-up (default 60% Zawya / 40% Maadi). Both are
@@ -7835,6 +7913,8 @@ routes.petty_cash = function (u) {
     if (rows.length === 0) {
       card.appendChild(el("div", { class: "muted small" }, T("No entries yet.","لا توجد سجلات بعد.")));
     } else {
+      const _pcClose = monthCloseData(pettyCashLedger(b));
+      const _pcEls = [];
       for (const r of rows) {
         const label = r.type === "expense" ? T(`Expense — ${r.note || ""}`, `مصروف — ${r.note || ""}`)
                     : r.type === "topup" ? T(`Top-up — ${r.note || ""}`, `شحن — ${r.note || ""}`)
@@ -7842,7 +7922,7 @@ routes.petty_cash = function (u) {
                     : r.type === "month_end_deposit" ? T(`🏦 Banked to bank — ${r.note || ""}`, `🏦 أُودِع في البنك — ${r.note || ""}`)
                     : `${r.type} — ${r.note || ""}`;
         const runBal = runningById[r.id];
-        card.appendChild(el("div", { class: "kv", style: r.is_test ? { opacity: "0.65" } : {} }, [
+        _pcEls.push({ date: r.date || (r.at || "").slice(0, 10), el: el("div", { class: "kv", style: r.is_test ? { opacity: "0.65" } : {} }, [
           el("div", { class: "k" }, [
             el("div", {}, [label, r.is_test ? el("span", { style: { marginInlineStart: "6px" } }, testBadge()) : null]),
             el("div", { class: "muted small" }, T(`${fmtDate(r.at)} · by ${r.by_name || r.by || "—"}`, `${fmtDate(r.at)} · بواسطة ${r.by_name || r.by || "—"}`)),
@@ -7851,8 +7931,9 @@ routes.petty_cash = function (u) {
             el("div", { style: { color: r.amount < 0 ? "var(--bad)" : "var(--ok)" } }, money(r.amount)),
             runBal == null ? null : el("div", { class: "muted small" }, T(`bal ${money(runBal)}`, `الرصيد ${money(runBal)}`)),
           ]),
-        ]));
+        ]) });
       }
+      for (const e of withMonthCloseLines(_pcEls, _pcClose)) card.appendChild(e);
     }
     wrap.appendChild(card);
   }
@@ -9491,7 +9572,8 @@ routes.maadi_cash = function (u) {
       ]),
     ]);
     if (!shown.length) list.appendChild(el("div", { class: "muted small" }, T("No cash movements yet.","لا توجد حركات نقدية بعد.")));
-    for (const r of shown) list.appendChild(_maadiCashRow(r, u, draw));
+    for (const e of withMonthCloseLines(shown.map(r => ({ date: r.date, el: _maadiCashRow(r, u, draw) })), monthCloseData(rows))) list.appendChild(e);
+    body.appendChild(monthStatementCard(T("📅 Month-end statements — Maadi cash","📅 كشف نهاية الشهر — نقدية المعادي"), rows));
     body.appendChild(list);
   }
   wrap.appendChild(body);
@@ -12017,7 +12099,9 @@ routes.bank = function (u) {
   }
 
   const bankList = el("div", { class: "list" });
-  for (const r of bankRows) bankList.appendChild(makeEntryRow(r));
+  const _bankAll = bankLedgerRows();
+  wrap.appendChild(monthStatementCard("📅 Month-end statements — bank account (all entries)", _bankAll));
+  for (const e of withMonthCloseLines(bankRows.map(r => ({ date: r.date, el: makeEntryRow(r) })), monthCloseData(_bankAll))) bankList.appendChild(e);
   if (bankRows.length === 0) bankList.appendChild(el("div", { class: "muted" }, "No bank entries yet."));
   wrap.appendChild(bankList);
 
