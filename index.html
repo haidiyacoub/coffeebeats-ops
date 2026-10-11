@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261011-182 -->
+<!-- CB_BUILD:20261011-218 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261011-182";
+  var BUILD = "20261011-218";
   (function() {
     function checkFresh() {
       try {
@@ -1229,6 +1229,7 @@ function migrateState(s) {
   s.suppliers           = s.suppliers       || {}; // inv_item_id → [{ id, name, contact, notes }]
   s.reorder_actions     = s.reorder_actions || []; // per-alert action records logged by baristas
   s.rosters             = s.rosters || []; // weekly shift rosters
+  s.branch_closures     = s.branch_closures || []; // [{id,date,branch,by,by_name,at}] days a branch was closed → no penalties/alerts
   s.roaster_schedules   = s.roaster_schedules || []; // weekly roaster — head barista posts to whole team
   s.kpi_logs      = s.kpi_logs      || []; // kept for migration only — scores now derived from source tiles
   // Global deletion tombstones: ids of records deleted on ANY device. Synced (unioned,
@@ -1553,7 +1554,7 @@ const STATE_CHUNKS = {
   // eventually blow the 1 MB Firestore doc limit and fail every sync. They are now
   // month-sharded (see MONTH_SHARDED / _syncMonthShards / the pull migration below).
   suggestions:   ["suggestions", "deleted_suggestions"],
-  roster:        ["rosters", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
+  roster:        ["rosters", "branch_closures", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves", "deleted_salary_loans", "deleted_sick_leave_deductions", "deleted_leaves", "deleted_salaries"],
   hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "overhead_custom_cats", "overhead_cat_overrides", "maintenance_config", "loan_payments"],
@@ -5060,17 +5061,18 @@ function headBaristaMissingAlert(u) {
   const nm = b => b.charAt(0).toUpperCase() + b.slice(1);
   const items = [];   // { en, ar, go }
   for (const b of mine) {
+    const closedToday = isBranchClosed(b, today), closedYest = isBranchClosed(b, yesterday);
     if (!(state.rosters || []).some(r => bOf(r) === b && r.week_of === sunday))
       items.push({ en: `Weekly schedule NOT updated — ${nm(b)} (week of ${sunday})`, ar: `الجدول الأسبوعي لم يُحدَّث — ${nm(b)} (أسبوع ${sunday})`, go: "roster" });
-    if (!stamps.some(r => bOf(r) === b && day(r) === today))
+    if (!closedToday && !stamps.some(r => bOf(r) === b && day(r) === today))
       items.push({ en: `No sign-in stamp today — ${nm(b)}`, ar: `لا توجد بصمة حضور اليوم — ${nm(b)}`, go: "signin_stamp_new" });
-    if (!stamps.some(r => bOf(r) === b && day(r) === yesterday))
+    if (!closedYest && !stamps.some(r => bOf(r) === b && day(r) === yesterday))
       items.push({ en: `No sign-in stamp YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا توجد بصمة حضور أمس (${yesterday}) — ${nm(b)}`, go: "signin_stamp_new" });
-    if (!closes.some(r => bOf(r) === b && r.date === yesterday))
+    if (!closedYest && !closes.some(r => bOf(r) === b && r.date === yesterday))
       items.push({ en: `No shift close YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا يوجد إغلاق شيفت أمس (${yesterday}) — ${nm(b)}`, go: "shift_close_new" });
-    if (!wastes.some(r => bOf(r) === b && day(r) === yesterday))
+    if (!closedYest && !wastes.some(r => bOf(r) === b && day(r) === yesterday))
       items.push({ en: `No waste log YESTERDAY (${yesterday}) — ${nm(b)} (log "No waste" if none)`, ar: `لا يوجد سجل هدر أمس (${yesterday}) — ${nm(b)} (سجّل «لا يوجد هدر» إن لم يكن)`, go: "waste_new" });
-    if (now.getHours() >= 20) {
+    if (!closedToday && now.getHours() >= 20) {
       if (!closes.some(r => bOf(r) === b && r.date === today))
         items.push({ en: `No shift close today — ${nm(b)}`, ar: `لا يوجد إغلاق شيفت اليوم — ${nm(b)}`, go: "shift_close_new" });
       if (!wastes.some(r => bOf(r) === b && day(r) === today))
@@ -7828,6 +7830,7 @@ function checkNoStampAlert() {
     const branch  = (entry.branch || "maadi").toLowerCase();
     const user    = (state.users || []).find(u => u.id === entry.user_id);
     if (!user) continue;
+    if (isBranchClosed(branch, todayStr)) continue;
 
     const openStr  = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
     const openMs   = new Date(todayStr + "T" + openStr + ":00").getTime();
@@ -13033,6 +13036,12 @@ function sundayOf(dateStr) {
 const ROSTER_DAYS = ["sun","mon","tue","wed","thu","fri","sat"];
 const ROSTER_DAY_LABELS = { sun:"Sun", mon:"Mon", tue:"Tue", wed:"Wed", thu:"Thu", fri:"Fri", sat:"Sat" };
 const ROSTER_DAY_LABELS_AR = { sun:"الأحد", mon:"الإثنين", tue:"الثلاثاء", wed:"الأربعاء", thu:"الخميس", fri:"الجمعة", sat:"السبت" };
+// A branch marked "closed" on the weekly schedule for a date: nothing is expected that day —
+// no stamp, shift close, waste log, late/no-show penalty or KPI deduction.
+function isBranchClosed(branch, dateStr) {
+  const b = String(branch || "").toLowerCase();
+  return (state.branch_closures || []).some(c => c.date === dateStr && String(c.branch || "").toLowerCase() === b);
+}
 function rosterDayLabel(day) { return T(ROSTER_DAY_LABELS[day], ROSTER_DAY_LABELS_AR[day]); }
 const ROSTER_SHIFTS = ["morning","night"];
 
@@ -13741,7 +13750,46 @@ routes.roster = function (u) {
           branchLabel = T(branch[0].toUpperCase() + branch.slice(1), branch === "maadi" ? "معادي" : "زاوية");
           shiftsForBranch = ROSTER_SHIFTS;
         }
-        card.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", marginTop: "8px", marginBottom: "4px" } }, branchLabel));
+        const closedRec = branch === "events" ? null : (state.branch_closures || []).find(c => c.date === dayDateStr && c.branch === branch);
+        const branchHdr = el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", marginTop: "8px", marginBottom: "4px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } }, [el("span", {}, branchLabel)]);
+        if (branch !== "events") {
+          if (canEdit) {
+            const cb = el("input", { type: "checkbox" });
+            cb.checked = !!closedRec;
+            cb.addEventListener("change", () => {
+              state.branch_closures = state.branch_closures || [];
+              if (cb.checked) {
+                if (!confirm(T(`Mark ${branchLabel} as CLOSED on ${dayDateStr}? Its shift assignments that day are cleared and no stamp, shift close, waste log, penalty or KPI deduction will be expected.`, `تأكيد: ${branchLabel} مغلق يوم ${dayDateStr}؟ سيتم مسح تعيينات الشيفتات ولن يُطلب أي بصمة أو إغلاق شيفت أو سجل هدر ولن تُطبَّق خصومات.`))) { cb.checked = false; return; }
+                const sc = stamp();
+                state.branch_closures.push({ id: uuid(), date: dayDateStr, branch, by: sc.by, by_name: sc.by_name, at: sc.at });
+                const gone = state.rosters.filter(r => r.week_of === weekOf && r.branch === branch && r.day === day);
+                state.rosters = state.rosters.filter(r => !gone.includes(r));
+                const goneIds = new Set(gone.map(r => r.user_id));
+                state.overtime_logs = (state.overtime_logs || []).filter(x => !(x.kind === "double_shift" && x.date === dayDateStr && goneIds.has(x.user_id)));
+                // Remove any penalty already auto-applied for that day at this branch
+                state.penalties = (state.penalties || []).filter(p => {
+                  const hit = (p.auto_late || p.auto_no_stamp) && p.date === dayDateStr && String(p.branch || "").toLowerCase() === branch;
+                  if (hit && typeof recordDeletion === "function") recordDeletion(p.id);
+                  return !hit;
+                });
+              } else {
+                const gone = state.branch_closures.filter(c => c.date === dayDateStr && c.branch === branch);
+                state.branch_closures = state.branch_closures.filter(c => !gone.includes(c));
+                recordDeletion(...gone.map(c => c.id));
+              }
+              saveState(); draw();
+            });
+            branchHdr.appendChild(el("label", { style: { display: "inline-flex", alignItems: "center", gap: "5px", textTransform: "none", letterSpacing: "0", cursor: "pointer" } }, [cb, T("🔒 Branch closed","🔒 الفرع مغلق")]));
+          } else if (closedRec) {
+            branchHdr.appendChild(el("span", { class: "pill warn" }, T("🔒 Branch closed","🔒 الفرع مغلق")));
+          }
+        }
+        card.appendChild(branchHdr);
+        if (closedRec) {
+          card.appendChild(el("div", { class: "muted small", style: { marginLeft: "4px" } },
+            T(`Closed — no penalties or calculations expected. Marked by ${closedRec.by_name || "?"}.`, `مغلق — لا خصومات ولا حسابات. بواسطة ${closedRec.by_name || "?"}.`)));
+          continue;
+        }
         for (const shift of shiftsForBranch) {
           const entry = rosterEntry(branch, shift, day);
           const shiftLabel = T(shift[0].toUpperCase() + shift.slice(1), shift === "morning" ? "الصباح" : "المساء");
@@ -16785,6 +16833,7 @@ routes.signin_stamp_new = function (u) {
           const dayIndex   = submitTime.getDay(); // 0=Sun … 6=Sat (matches ROSTER_DAYS)
           const dayKey     = ROSTER_DAYS[dayIndex];
           const weekOf     = sundayOf(todayStr);
+          if (isBranchClosed(branch, todayStr)) return; // branch closed that day — nothing expected
 
           // Sign-in stamp = morning shift only.
           // Only penalise if this barista is currently assigned to the morning shift
@@ -21062,6 +21111,7 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
     const branch = (entry.branch||"").toLowerCase();
     const user   = (state.users||[]).find(u => u.id === uid);
     if (!user) continue;
+    if (isBranchClosed(branch, dateStr)) continue; // branch closed — not a no-show
     // Check for existing stamp that day+branch
     const hasStamp = (state.signin_stamps||[]).some(s =>
       notTest(s) && s.by === uid && localISODate(new Date(s.at)) === dateStr &&
@@ -21156,7 +21206,8 @@ function kpiWasteScore(userId, cutoff) {
     const dayKey   = ROSTER_DAYS[dayIndex];
     const weekOf   = sundayOf(dateStr);
     const onMorning = (state.rosters||[]).some(r =>
-      r.week_of === weekOf && r.day === dayKey && r.shift === "morning" && r.user_id === userId
+      r.week_of === weekOf && r.day === dayKey && r.shift === "morning" && r.user_id === userId &&
+      !isBranchClosed(r.branch, dateStr)
     );
     if (onMorning) morningShiftDays.add(dateStr);
   }
@@ -21382,6 +21433,7 @@ function kpiLeadershipScore(userId, month) {
       );
       for (const entry of morningEntries) {
         const branch  = (entry.branch || "maadi").toLowerCase();
+        if (isBranchClosed(branch, dateStr)) continue;
         const openStr = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
         const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
         const stamp = (state.signin_stamps || []).find(s =>

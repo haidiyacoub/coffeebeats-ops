@@ -667,6 +667,8 @@ async function _runComplianceCheck({ checkCloses }) {
   const stamps = arr(ssDoc, "signin_stamps").filter(live).filter(s => localISODate(new Date(s.at)) === today);
   const closes = arr(scDoc, "shift_closes").filter(live).filter(c => c.date === today);
   const roster = arr(rosterDoc, "rosters").filter(r => r.week_of === sunday);
+  // Days a branch was marked "closed" on the weekly schedule: nothing is expected there.
+  const closedToday = new Set(arr(rosterDoc, "branch_closures").filter(c => c.date === today && !tomb.has(c.id)).map(c => String(c.branch || "").toLowerCase()));
   // Waste log: any entry counts, including the "— No waste —" clear-shift entry.
   const wastes = arr(wasteDoc, "waste").filter(live).filter(w => localISODate(new Date(w.at)) === today);
 
@@ -674,6 +676,7 @@ async function _runComplianceCheck({ checkCloses }) {
   for (const b of COMPLIANCE_BRANCHES) {
     if (!roster.some(r => branchOf(r) === b))
       problems.push({ key: `roster:${sunday}:${b}`, text: `SCHEDULE NOT UPDATED — ${_cap(b)} has no roster for the week starting ${sunday}` });
+    if (closedToday.has(b)) continue;
     if (!stamps.some(s => branchOf(s) === b))
       problems.push({ key: `stamp:${b}`, text: `NO SIGN-IN STAMP — ${_cap(b)} has no sign-in stamp today` });
     if (checkCloses && !closes.some(c => branchOf(c) === b))
