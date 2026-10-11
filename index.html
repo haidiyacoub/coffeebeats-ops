@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261001-574 -->
+<!-- CB_BUILD:20261011-122 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261001-574";
+  var BUILD = "20261011-122";
   (function() {
     function checkFresh() {
       try {
@@ -4248,6 +4248,60 @@ function pettyCashLedger(branch) {
 // ==============================================================
 const MAADI_CASH_START = "2026-09-26";
 const MAADI_CASH_PAID_FROM_OPT = { label: "💰 Maadi sales cash (drawer)", value: "maadi_cash" };
+
+// How an overhead was paid, as a short note shown next to every paid overhead line.
+const PAID_FROM_NOTES = {
+  petty_cash:     "💵 Cash (petty cash)",
+  maadi_cash:     "💵 Cash (Maadi drawer)",
+  owner_bank:     "🏦 Bank transfer",
+  credit_card:    "💳 Credit card",
+  owner_personal: "🙋 Owner account (owed back)",
+};
+function paidFromNote(o) {
+  if (!o || !o.paid) return "";
+  return PAID_FROM_NOTES[o.paid_from] || "— how paid not recorded";
+}
+// <select> for the maintenance forms; same values/ledger behaviour as the other overhead forms.
+function paidFromSelectEl() {
+  const sel = document.createElement("select");
+  for (const [v, l] of [
+    ["", "— not tracked —"], ["petty_cash", "💵 Cash (petty cash)"], ["maadi_cash", "💵 Cash (Maadi drawer)"],
+    ["owner_bank", "🏦 Bank transfer"], ["credit_card", "💳 Credit card"], ["owner_personal", "🙋 Owner account (reimburse me later)"],
+  ]) { const op = document.createElement("option"); op.value = v; op.textContent = l; sel.appendChild(op); }
+  return sel;
+}
+// Mirror a paid overhead into petty cash / bank / owner account, keyed by ref = entry.id.
+function mirrorOverheadPayment(entry, s) {
+  const paidFrom = entry.paid_from, a = Number(entry.amount) || 0;
+  if (!paidFrom || a <= 0) return;
+  const desc = overheadCatLabel(entry.category) + (entry.label ? " — " + entry.label : "");
+  if (paidFrom === "petty_cash") {
+    state.petty_cash.push({
+      id: uuid(), branch: entry.branch, date: entry.date, type: "expense", amount: -a,
+      balance_after: pettyCashBalance(entry.branch) - a, ref: entry.id,
+      by: s.by, by_name: s.by_name, at: s.at, note: `Overhead — ${desc}`,
+      ...(isTestMode() ? { is_test: true } : {}),
+    });
+  } else if (paidFrom === "owner_personal") {
+    recordPersonalPayment({ amount: a, date: entry.date, source: "overhead", ref: entry.id, branch: entry.branch, label: desc }, s);
+  } else if (paidFrom === "maadi_cash") {
+    // nothing to write — maadiCashLedger() reads the overhead itself
+  } else {
+    state.bank_ledger.push({
+      id: uuid(), date: entry.date, amount: -a, supplier: desc, ref: entry.id,
+      type: paidFrom === "credit_card" ? "overhead_credit_card" : "overhead_payment",
+      by: s.by, by_name: s.by_name, at: s.at, note: `Overhead (${entry.branch})`,
+      ...(isTestMode() ? { is_test: true } : {}),
+    });
+  }
+}
+// Delete a maintenance overhead plus any petty-cash / bank / owner-account row it created.
+function deleteMaintenanceEntry(id) {
+  state.overheads     = state.overheads.filter(x => x.id !== id);
+  state.petty_cash    = (state.petty_cash   || []).filter(x => x.ref !== id);
+  state.bank_ledger   = (state.bank_ledger  || []).filter(x => x.ref !== id);
+  state.owner_account = (state.owner_account || []).filter(x => !(x.ref === id && !x.reimbursed));
+}
 
 function maadiCashMovements() {
   const mv = [];
@@ -9806,10 +9860,10 @@ function renderMaintenanceCard(month, redraw, branches) {
           cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--ok)", fontSize:"14px" } }, `✓ ${money(total)}`));
           for (const o of logged) {
             cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
-              el("div", { class:"muted small", style:{ flex:"1" } }, (o.paid_on || (o.date||"").slice(0,10)) + (o.equipment && o.equipment.length ? ` · ${o.equipment.length} item${o.equipment.length>1?"s":""}` : "")),
+              el("div", { class:"muted small", style:{ flex:"1" } }, (o.paid_on || (o.date||"").slice(0,10)) + (o.equipment && o.equipment.length ? ` · ${o.equipment.length} item${o.equipment.length>1?"s":""}` : "") + ` · ${paidFromNote(o)}`),
               el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
                 if (!confirm("Delete this maintenance entry?")) return;
-                state.overheads = state.overheads.filter(x => x.id !== o.id);
+                deleteMaintenanceEntry(o.id);
                 saveState(); toast("Deleted"); redraw();
               }}, "🗑"),
             ]));
@@ -9845,10 +9899,10 @@ function renderMaintenanceCard(month, redraw, branches) {
         cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--warn)", fontSize:"14px" } }, `✓ ${money(total)}`));
         for (const o of logged) {
           cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
-            el("div", { class:"muted small", style:{ flex:"1" } }, `${o.paid_on || (o.date||"").slice(0,10)}${o.label ? " · " + o.label : ""}`),
+            el("div", { class:"muted small", style:{ flex:"1" } }, `${o.paid_on || (o.date||"").slice(0,10)}${o.label ? " · " + o.label : ""} · ${paidFromNote(o)}`),
             el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
               if (!confirm("Delete this maintenance entry?")) return;
-              state.overheads = state.overheads.filter(x => x.id !== o.id);
+              deleteMaintenanceEntry(o.id);
               saveState(); toast("Deleted"); redraw();
             }}, "🗑"),
           ]));
@@ -9903,6 +9957,9 @@ function renderMaintenanceCard(month, redraw, branches) {
     body.appendChild(el("label", {}, "Amount (EGP)"));
     const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
     body.appendChild(amountInp);
+    body.appendChild(el("label", {}, "Paid from"));
+    const paidFromInp = paidFromSelectEl();
+    body.appendChild(paidFromInp);
     body.appendChild(el("label", {}, "Date"));
     const dateInp = el("input", { type:"date", value: today });
     body.appendChild(dateInp);
@@ -9919,7 +9976,7 @@ function renderMaintenanceCard(month, redraw, branches) {
       const equipment = checks.filter(c => c.checked).map(c => c.dataset.equip);
       const s = stamp();
       const engN = (engName.value || "").trim();
-      state.overheads.push({
+      const entry = ({
         id: uuid(),
         branch: br, category: "maintenance_emergency",
         label: issue,
@@ -9931,9 +9988,12 @@ function renderMaintenanceCard(month, redraw, branches) {
         date: dateInp.value || today,
         paid: true,
         paid_on: dateInp.value || today,
+        paid_from: paidFromInp.value || "",
         note: (noteInp.value || "").trim(),
         by: s.by, by_name: s.by_name, at: s.at,
       });
+      state.overheads.push(entry);
+      mirrorOverheadPayment(entry, s);
       $("#modal-root").innerHTML = "";
       saveState(); toast("Emergency maintenance logged"); redraw();
     } }, "Save"));
@@ -9979,6 +10039,9 @@ function renderMaintenanceCard(month, redraw, branches) {
     body.appendChild(el("label", {}, "Amount (EGP)"));
     const amountInp = el("input", { type:"number", min:"0", step:"1", value:"" });
     body.appendChild(amountInp);
+    body.appendChild(el("label", {}, "Paid from"));
+    const paidFromInp = paidFromSelectEl();
+    body.appendChild(paidFromInp);
     body.appendChild(el("label", {}, "Date"));
     const dateInp = el("input", { type:"date", value: today });
     body.appendChild(dateInp);
@@ -9996,7 +10059,7 @@ function renderMaintenanceCard(month, redraw, branches) {
       }
       const s = stamp();
       const engN = (engName.value || "").trim();
-      state.overheads.push({
+      const entry = ({
         id: uuid(),
         branch: br, category: planValue,
         label: engN,
@@ -10008,9 +10071,12 @@ function renderMaintenanceCard(month, redraw, branches) {
         date: dateInp.value || today,
         paid: true,
         paid_on: dateInp.value || today,
+        paid_from: paidFromInp.value || "",
         note: (noteInp.value || "").trim(),
         by: s.by, by_name: s.by_name, at: s.at,
       });
+      state.overheads.push(entry);
+      mirrorOverheadPayment(entry, s);
       // Persist any engineer edits as the new default for this plan.
       state.maintenance_config = state.maintenance_config || {};
       state.maintenance_config.engineers = state.maintenance_config.engineers || {};
@@ -10697,7 +10763,7 @@ routes.overheads = function (u) {
       cb.style.cssText = "width:16px;height:16px;cursor:pointer;accent-color:var(--ok)";
       cb.addEventListener("change", () => togglePaid(br, cat, preset, existing, monthlyOverride));
       cbLabel.appendChild(cb);
-      cbLabel.appendChild(document.createTextNode(isPaid ? `Paid${paidOn ? " · " + paidOn : ""}` : "Mark as paid"));
+      cbLabel.appendChild(document.createTextNode(isPaid ? `Paid${paidOn ? " · " + paidOn : ""} · ${paidFromNote(existing)}` : "Mark as paid"));
       rowDiv.appendChild(el("div", { style:{ display:"flex", gap:"4px", marginTop:"5px", flexWrap:"wrap", alignItems:"center" } }, [
         cbLabel,
         el("button", {
@@ -10725,7 +10791,10 @@ routes.overheads = function (u) {
         const catLabel = overheadCatLabel(r.category);
         const shared = !!r.link_id;   // one half of a "Both branches" split
         panel.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"12px", marginBottom:"4px" } }, [
-          el("div", { style:{ flex:"1" } }, `${shared ? "🔀 " : ""}${catLabel}${r.label ? " — "+r.label : ""}`),
+          el("div", { style:{ flex:"1" } }, [
+            `${shared ? "🔀 " : ""}${catLabel}${r.label ? " — "+r.label : ""}`,
+            el("div", { class:"muted small", style:{ fontSize:"11px" } }, paidFromNote(r)),
+          ]),
           el("div", { style:{ fontWeight:"700", marginRight:"6px" } }, money(r.amount)),
           el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"2px 6px", minHeight:"22px" }, onClick:() => {
             if (shared) {
