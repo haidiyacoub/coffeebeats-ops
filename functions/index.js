@@ -263,16 +263,27 @@ function _rowTotal(s) { return s.cash + s.instapay + s.cc + s.talabat_credit + s
 function _fmt(n)      { return `EGP ${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function _cap(s)      { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
-async function _sendEmail(subject, text, { urgent = false } = {}) {
+// Head barista's address lives in state/config → settings.head_barista_email (set in Settings).
+async function _headBaristaEmail() {
+  try {
+    const d = await getDb().collection("state").doc("config").get();
+    const e = d.exists ? ((d.data().settings || {}).head_barista_email || "").trim() : "";
+    return e || null;
+  } catch (e) { console.warn("head barista email lookup failed", e); return null; }
+}
+const PENALTY_NOTE = "\n\n⚠ Missing items will result in penalties.";
+
+async function _sendEmail(subject, text, { urgent = false, toHeadBarista = false } = {}) {
+  const hb = toHeadBarista ? await _headBaristaEmail() : null;
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: { user: GMAIL_USER.value(), pass: GMAIL_PASS.value() },
   });
   await transporter.sendMail({
     from: `"Coffee Beats" <${GMAIL_USER.value()}>`,
-    to:   NOTIFY_TO.value(),
+    to:   hb ? `${NOTIFY_TO.value()}, ${hb}` : NOTIFY_TO.value(),
     subject,
-    text,
+    text: toHeadBarista ? text + PENALTY_NOTE : text,
     ...(urgent ? { priority: "high", headers: { "X-Priority": "1", Importance: "high" } } : {}),
   });
 }
@@ -611,22 +622,23 @@ exports.inventoryMonthEndCheck = onSchedule(
         lines.push(`${_cap(b)}: ${updated} items updated, ${activeIds.length - updated} not updated (of ${activeIds.length})`);
       }
       if (missing.length) lines.push("", `Missing: ${missing.map(_cap).join(" and ")} — the ½-day Budget & Inventory Manager penalty applies unless added.`);
-      await _sendEmail(`${missing.length ? "❌" : "✅"} Inventory count summary — ${ym}`, lines.join("\n"));
+      await _sendEmail(`${missing.length ? "❌" : "✅"} Inventory count summary — ${ym}`, lines.join("\n"), { toHeadBarista: missing.length > 0 });
       await flagRef.set({ summarySent: true, at: new Date().toISOString() }, { merge: true });
     } else if (day >= lastN - 1) {
       await _sendEmail(`⚠️ Inventory count not done yet — ${ym}`,
-        `No inventory count dated ${lastDay} has been submitted for: ${missing.map(_cap).join(" and ")}. ${lastN - day + 1} day(s) left.`);
+        `No inventory count dated ${lastDay} has been submitted for: ${missing.map(_cap).join(" and ")}. ${lastN - day + 1} day(s) left.`, { toHeadBarista: true });
     }
   }
 );
 
 // ─── dailyComplianceCheck ─────────────────────────────────────────────────────
 // Two runs a day (Cairo): 15:00 checks roster + sign-in stamps; 23:45 also checks shift
-// closes. Anything missing → ONE high-urgency email per run (flag doc de-dupes, so an item
+// closes + waste log. Anything missing → ONE high-urgency email per run (flag doc de-dupes, so an item
 // already reported at 15:00 is not repeated at 23:45; next day starts fresh).
 // NOTHING here depends on the roster except the roster check itself:
 //  • Stamp  = every branch (maadi, zawya) needs at least one sign-in stamp dated today.
 //  • Close  = every branch needs at least one shift close dated today.
+//  • Waste  = every branch needs a waste-log entry today — "No waste" counts, silence doesn't.
 //  • Roster = the current week (Sunday-based week_of) needs rows for every branch.
 const COMPLIANCE_BRANCHES = ["maadi", "zawya"];
 
@@ -638,11 +650,12 @@ async function _runComplianceCheck({ checkCloses }) {
   const ym = today.slice(0, 7);
 
   // Month-shard docs are keyed by month; today's rows are always in this month's doc.
-  const [rosterDoc, tombDoc, ssDoc, scDoc, flagDoc] = await Promise.all([
+  const [rosterDoc, tombDoc, ssDoc, scDoc, wasteDoc, flagDoc] = await Promise.all([
     db.collection("state").doc("roster").get(),
     db.collection("state").doc("tombstones").get(),
     db.collection("state").doc(`ss__${ym}`).get(),
     db.collection("state").doc(`sc__${ym}`).get(),
+    db.collection("state").doc("waste").get(),
     db.collection("system_flags").doc(`daily_check_${today}`).get(),
   ]);
   const arr = (d, k) => (d.exists && Array.isArray(d.data()[k]) ? d.data()[k] : []);
@@ -654,6 +667,8 @@ async function _runComplianceCheck({ checkCloses }) {
   const stamps = arr(ssDoc, "signin_stamps").filter(live).filter(s => localISODate(new Date(s.at)) === today);
   const closes = arr(scDoc, "shift_closes").filter(live).filter(c => c.date === today);
   const roster = arr(rosterDoc, "rosters").filter(r => r.week_of === sunday);
+  // Waste log: any entry counts, including the "— No waste —" clear-shift entry.
+  const wastes = arr(wasteDoc, "waste").filter(live).filter(w => localISODate(new Date(w.at)) === today);
 
   const problems = [];   // { key, text }
   for (const b of COMPLIANCE_BRANCHES) {
@@ -663,14 +678,16 @@ async function _runComplianceCheck({ checkCloses }) {
       problems.push({ key: `stamp:${b}`, text: `NO SIGN-IN STAMP — ${_cap(b)} has no sign-in stamp today` });
     if (checkCloses && !closes.some(c => branchOf(c) === b))
       problems.push({ key: `close:${b}`, text: `NO SHIFT CLOSE — ${_cap(b)} has no shift close today` });
+    if (checkCloses && !wastes.some(w => branchOf(w) === b))
+      problems.push({ key: `waste:${b}`, text: `NO WASTE LOG — ${_cap(b)} has no waste log today (not even "No waste")` });
   }
 
   const fresh = problems.filter(p => !reported.has(p.key));
   if (!fresh.length) { console.log(`Compliance check ${today}: nothing new to report`); return; }
 
   const lines = [`Coffee Beats — missing items for ${today}`, "", ...fresh.map(p => `❌ ${p.text}`), "",
-                 "A missing stamp means no one signed in; a missing shift close means that day's takings are unrecorded."];
-  await _sendEmail(`🚨 URGENT: ${fresh.length} missing — ${today}`, lines.join("\n"), { urgent: true });
+                 "A missing stamp means no one signed in; a missing shift close means that day's takings are unrecorded; a missing waste log means nobody confirmed waste (log \"No waste\" if there was none)."];
+  await _sendEmail(`🚨 URGENT: ${fresh.length} missing — ${today}`, lines.join("\n"), { urgent: true, toHeadBarista: true });
   await db.collection("system_flags").doc(`daily_check_${today}`)
     .set({ reported: [...reported, ...fresh.map(p => p.key)], at: new Date().toISOString() }, { merge: true });
   console.log(`Compliance alert sent for ${today}: ${fresh.length} item(s)`);

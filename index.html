@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261011-167 -->
+<!-- CB_BUILD:20261011-182 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261011-167";
+  var BUILD = "20261011-182";
   (function() {
     function checkFresh() {
       try {
@@ -5042,12 +5042,75 @@ routes.data_management = function (u) {
   return wrap;
 };
 
+// Mirrors the server-side dailyComplianceCheck + inventoryMonthEndCheck emails so the head
+// barista sees the same misses the moment they sign in. Yesterday's stamp / shift close /
+// waste log are final; today's stamp + roster are due now; today's close + waste log from 20:00.
+function headBaristaMissingAlert(u) {
+  const mine = ["maadi", "zawya"].filter(b => !(u.branches || []).length || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
+  const now = new Date();
+  const today = localISODate(now);
+  const yd = new Date(now); yd.setDate(yd.getDate() - 1);
+  const yesterday = localISODate(yd);
+  const sunday = sundayOf(today);
+  const bOf = r => String(r.branch || "").toLowerCase();
+  const day = r => localISODate(new Date(r.at));
+  const stamps = (state.signin_stamps || []).filter(notTest);
+  const closes = (state.shift_closes || []).filter(notTest);
+  const wastes = (state.waste || []).filter(notTest);
+  const nm = b => b.charAt(0).toUpperCase() + b.slice(1);
+  const items = [];   // { en, ar, go }
+  for (const b of mine) {
+    if (!(state.rosters || []).some(r => bOf(r) === b && r.week_of === sunday))
+      items.push({ en: `Weekly schedule NOT updated — ${nm(b)} (week of ${sunday})`, ar: `الجدول الأسبوعي لم يُحدَّث — ${nm(b)} (أسبوع ${sunday})`, go: "roster" });
+    if (!stamps.some(r => bOf(r) === b && day(r) === today))
+      items.push({ en: `No sign-in stamp today — ${nm(b)}`, ar: `لا توجد بصمة حضور اليوم — ${nm(b)}`, go: "signin_stamp_new" });
+    if (!stamps.some(r => bOf(r) === b && day(r) === yesterday))
+      items.push({ en: `No sign-in stamp YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا توجد بصمة حضور أمس (${yesterday}) — ${nm(b)}`, go: "signin_stamp_new" });
+    if (!closes.some(r => bOf(r) === b && r.date === yesterday))
+      items.push({ en: `No shift close YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا يوجد إغلاق شيفت أمس (${yesterday}) — ${nm(b)}`, go: "shift_close_new" });
+    if (!wastes.some(r => bOf(r) === b && day(r) === yesterday))
+      items.push({ en: `No waste log YESTERDAY (${yesterday}) — ${nm(b)} (log "No waste" if none)`, ar: `لا يوجد سجل هدر أمس (${yesterday}) — ${nm(b)} (سجّل «لا يوجد هدر» إن لم يكن)`, go: "waste_new" });
+    if (now.getHours() >= 20) {
+      if (!closes.some(r => bOf(r) === b && r.date === today))
+        items.push({ en: `No shift close today — ${nm(b)}`, ar: `لا يوجد إغلاق شيفت اليوم — ${nm(b)}`, go: "shift_close_new" });
+      if (!wastes.some(r => bOf(r) === b && day(r) === today))
+        items.push({ en: `No waste log today — ${nm(b)} (log "No waste" if none)`, ar: `لا يوجد سجل هدر اليوم — ${nm(b)} (سجّل «لا يوجد هدر» إن لم يكن)`, go: "waste_new" });
+    }
+  }
+  // End-of-month inventory count: last 3 days of the month, and the 1st (for the month just ended).
+  const dom = now.getDate();
+  const lastOfThis = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  if (dom === 1 || dom >= lastOfThis - 2) {
+    const t = dom === 1 ? new Date(now.getFullYear(), now.getMonth(), 0) : new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const eom = localISODate(t);
+    for (const b of mine) {
+      if (!(state.snapshots || []).some(sn => bOf(sn) === b && sn.as_of === eom))
+        items.push({ en: `End-of-month inventory count NOT done — ${nm(b)} (as of ${eom})`, ar: `جرد نهاية الشهر لم يتم — ${nm(b)} (بتاريخ ${eom})`, go: "snapshot_new" });
+    }
+  }
+  if (!items.length) return el("div", { style: { display: "none" } });
+  const card = el("div", { style: { margin: "12px 0", padding: "14px", borderRadius: "12px", background: "#fee2e2", border: "3px solid #dc2626", boxShadow: "0 0 0 4px rgba(220,38,38,.18)" } });
+  card.appendChild(el("div", { style: { color: "#991b1b", fontWeight: "800", fontSize: "17px", marginBottom: "4px" } },
+    `🚨 ${T(items.length + " item(s) MISSING", items.length + " عنصر ناقص")}`));
+  card.appendChild(el("div", { style: { color: "#991b1b", fontWeight: "700", fontSize: "13px", marginBottom: "8px" } },
+    T("⚠ Missing items will result in penalties. Fix them now.", "⚠ العناصر الناقصة ستؤدي إلى خصومات. صحّحها الآن.")));
+  for (const it of items) {
+    const row = el("div", { style: { padding: "7px 0", borderTop: "1px solid #fca5a5", color: "#7f1d1d", fontWeight: "600", fontSize: "14px", cursor: "pointer" } }, "❌ " + T(it.en, it.ar) + " →");
+    row.addEventListener("click", () => go(it.go));
+    card.appendChild(row);
+  }
+  return card;
+}
+
 routes.home = function (u) {
   const wrap = el("div", {});
   const branchInfo = u.role === "accountant" ? "all branches (accountant)"
                    : (u.branches && u.branches.length) ? `branches: ${u.branches.join(", ")}`
                    : (["barista","head_barista"].includes(u.role) ? "rotates (Maadi + Zawya)" : "no branches assigned");
   wrap.appendChild(el("div", { class: "banner-arch" }, [ `Signed in as `, el("b", {}, u.name), ` · ${branchInfo}`]));
+
+  // ── Head barista: highly visible missing-items alert ──
+  if (u.role === "head_barista") { try { wrap.appendChild(headBaristaMissingAlert(u)); } catch (e) { console.warn(e); } }
 
   const tiles = el("div", { id: "home-grid", class: "grid c2" });
 
@@ -5545,6 +5608,44 @@ routes.waste_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Recent waste","الهدر الأخير"), T("Signed entries. Tap + to add.","سجلات موقّعة. اضغط + للإضافة.")));
 
+  // ── Daily coverage by branch (last 14 days) ─────────────────────
+  // A waste entry is expected every day per branch, even if it's just "No waste".
+  // ✓ = real waste logged · ○ = "No waste" logged · ✗ = nothing logged (daily email flags today).
+  {
+    const _day = (w) => localISODate(new Date(w.at));
+    const viewAll = u.role === "owner" || u.role === "accountant";
+    const branches = ["maadi", "zawya"].filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
+    const live = state.waste.filter(w => notTest(w) && !w.deleted);
+    const days = [];
+    for (let i = 0; i < 14; i++) { const d = new Date(); d.setDate(d.getDate() - i); days.push(localISODate(d)); }
+    if (branches.length) {
+      const card = el("div", { class: "card", style: { marginBottom: "14px" } });
+      card.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } }, T("Daily waste log by branch","سجل الهدر اليومي حسب الفرع")));
+      card.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } }, T("✓ waste logged · ○ no waste logged · ✗ nothing logged. A log is required every day, even with no waste.","✓ تم تسجيل هدر · ○ لا يوجد هدر · ✗ لا يوجد سجل. السجل مطلوب كل يوم حتى بدون هدر.")));
+      for (const b of branches) {
+        const byDay = {};
+        live.filter(w => String(w.branch || "").toLowerCase() === b).forEach(w => {
+          const k = _day(w); const real = w.item_name !== "— No waste —";
+          byDay[k] = byDay[k] === "real" ? "real" : (real ? "real" : "none");
+        });
+        const missing = days.filter((d, i) => !byDay[d] && i > 0).length;   // today still open
+        card.appendChild(el("div", { style: { fontWeight: "600", margin: "8px 0 4px", textTransform: "capitalize" } },
+          `${b}  ·  ${missing ? "❌ " + missing + " " + T("missed day(s)","يوم ناقص") : "✅ " + T("no missed days","لا أيام ناقصة")}`));
+        const grid = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "4px" } });
+        days.slice().reverse().forEach(d => {
+          const st = byDay[d];
+          const mark = st === "real" ? "✓" : st === "none" ? "○" : "✗";
+          const col = st ? "var(--ok)" : "var(--danger, #b91c1c)";
+          grid.appendChild(el("div", { title: d, style: { minWidth: "38px", textAlign: "center", fontSize: "11px", padding: "3px 2px", border: "1px solid var(--border)", borderRadius: "6px", color: col } }, [
+            el("div", {}, d.slice(8) + "/" + d.slice(5, 7)), el("div", { style: { fontWeight: "700" } }, mark),
+          ]));
+        });
+        card.appendChild(grid);
+      }
+      wrap.appendChild(card);
+    }
+  }
+
   const list = el("div", { class: "list" });
   // Always show entries the viewer personally submitted, regardless of branch —
   // stale JWT claims (branches only refresh on token renewal) can otherwise hide
@@ -5552,7 +5653,13 @@ routes.waste_list = function (u) {
   const mine = state.waste.filter(w => u.role === "owner" || u.role === "accountant" || w.by === u.id || (u.branches||[]).includes(w.branch))
     .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
   if (mine.length === 0) list.appendChild(el("div", { class: "muted" }, T("No entries yet.","لا توجد سجلات بعد.")));
+  mine.sort((a, b) => String(a.branch || "").localeCompare(String(b.branch || "")) || b.at.localeCompare(a.at));
+  let _lastBranch = null;
   for (const w of mine) {
+    if (w.branch !== _lastBranch) {
+      _lastBranch = w.branch;
+      list.appendChild(el("div", { style: { fontWeight: "700", textTransform: "capitalize", margin: "10px 0 4px" } }, "📍 " + (w.branch || "—")));
+    }
     const photoCount = (w.photos || []).length;
     const titleNode = el("div", { class: "title" });
     titleNode.appendChild(document.createTextNode(`${w.item_name} — ${fmtQty(w.qty_canonical, w.unit)}`));
