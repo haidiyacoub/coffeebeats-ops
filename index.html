@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261011-218 -->
+<!-- CB_BUILD:20261012-187 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261011-218";
+  var BUILD = "20261012-187";
   (function() {
     function checkFresh() {
       try {
@@ -7881,7 +7881,7 @@ function checkNoStampAlert() {
 
 function startNoStampCheck() {
   if (_noStampCheckInterval) return;
-  const run = () => { checkNoStampAlert(); try { autoApplyMissingStamps(); } catch (e) { console.warn("autoApplyMissingStamps", e); } };
+  const run = () => { checkNoStampAlert(); try { autoApplyMissingStamps(); } catch (e) { console.warn("autoApplyMissingStamps", e); } try { autoApplyMissingSchedulePenalties(); } catch (e) { console.warn("autoApplyMissingSchedulePenalties", e); } };
   run();
   _noStampCheckInterval = setInterval(run, 5 * 60 * 1000); // every 5 min
 }
@@ -9095,6 +9095,7 @@ const PENALTY_REASONS = [
   { label: "Not following the rules / not updating the site", value: "rules_break", defaultKind: "half_day" },
   { label: "Not wearing the uniform",                      value: "no_uniform",   defaultKind: "half_day" },
   { label: "Personal hygiene",                             value: "hygiene",      defaultKind: "half_day" },
+  { label: "Weekly schedule not submitted",                value: "schedule_not_submitted", defaultKind: "half_day" },
   { label: "Other",                                        value: "other",        defaultKind: null },
 ];
 // Repeat-offender doubling for MANUALLY recorded penalties (mirrors the automatic
@@ -10542,9 +10543,100 @@ function annualLeaveOverage(uid, month, salary) {
       if (iso(d).slice(0, 7) === month) usedDays++;
     }
   }
+  // Days the barista simply isn't on the submitted weekly schedule count as annual days off too.
+  const scheduleDays = scheduleDayOffs(uid, month);
+  usedDays += scheduleDays.length;
   const excessDays = Math.max(0, usedDays - FREE_DAYS);
   const amount = Math.round((Number(salary) || 0) / 30 * excessDays * 100) / 100;
-  return { freeDays: FREE_DAYS, usedDays, excessDays, amount };
+  return { freeDays: FREE_DAYS, usedDays, excessDays, amount, scheduleDays };
+}
+
+// Schedule-derived days off. Rules start the week of 2026-10-11 so nothing earlier is touched.
+// When a week's schedule HAS been submitted for a barista's branch(es) and that barista has no
+// shift on a past day, that day is an automatic day off (counts toward the 4 free annual days,
+// then deducts a day's pay each). Nothing is derived for weeks with no schedule — that week
+// penalises the head barista instead (see autoApplyMissingSchedulePenalties). Skipped: days the
+// barista already has a leave on, no-show days (already penalised), days every one of their
+// branches is closed, and days outside their employment dates. Derived on the fly, never stored,
+// so it needs no sync and follows later schedule edits.
+const SCHEDULE_RULES_START = "2026-10-11";
+function _schedBranches(user) {
+  const b = (user.branches || []).map(x => String(x).toLowerCase()).filter(x => x === "maadi" || x === "zawya");
+  return b.length ? b : ["maadi", "zawya"];
+}
+function scheduleDayOffs(uid, month) {
+  const user = (state.users || []).find(x => x.id === uid);
+  if (!user || user.role !== "barista") return [];
+  const branches = _schedBranches(user);
+  const hist  = ((state.barista_dates || {})[uid] || []);
+  const joins = hist.filter(e => e.type === "joined" && e.date).map(e => e.date).sort();
+  const lefts = hist.filter(e => e.type === "left"   && e.date).map(e => e.date).sort();
+  const hire = joins.length ? joins[joins.length - 1] : null;
+  const exit = lefts.length ? lefts[lefts.length - 1] : null;
+  const todayStr = localISODate(new Date());
+  const [y, m] = month.split("-").map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const out = [];
+  for (let dn = 1; dn <= lastDay; dn++) {
+    const ds = `${month}-${String(dn).padStart(2, "0")}`;
+    if (ds < SCHEDULE_RULES_START || ds >= todayStr) continue;
+    if (hire && ds < hire) continue;
+    if (exit && ds > exit) continue;
+    const weekRows = (state.rosters || []).filter(r => r.week_of === sundayOf(ds));
+    if (!weekRows.some(r => branches.includes(String(r.branch || "").toLowerCase()))) continue; // week not submitted
+    const dayKey = ROSTER_DAYS[new Date(ds + "T12:00:00").getDay()];
+    if (weekRows.some(r => r.user_id === uid && r.day === dayKey)) continue;                  // scheduled to work
+    if (branches.every(b => isBranchClosed(b, ds))) continue;
+    if ((state.leaves || []).some(l => l.user_id === uid && (l.status === "approved" || l.status === "pending") &&
+        l.from_date <= ds && (l.to_date || l.from_date) >= ds)) continue;                      // real leave already covers it
+    if ((state.penalties || []).some(p => p.user_id === uid && p.date === ds &&
+        (p.reason === "no_show" || p.reason_code === "no_show" || p.auto_no_stamp))) continue;
+    out.push(ds);
+  }
+  return out;
+}
+
+// Head barista owes half a day for every completed week (Sun–Sat) in which a branch they run
+// has no schedule at all. Owner/head-barista devices run it; deterministic id keeps it to one
+// penalty per head barista per week across devices and lets a deleted one stay deleted.
+function autoApplyMissingSchedulePenalties() {
+  const cu = typeof currentUser === "function" ? currentUser() : null;
+  if (!state._auth || !cu || !["owner", "head_barista"].includes(cu.role)) return 0;
+  if (!_pulledThisSession) return 0;
+  const todayStr = localISODate(new Date());
+  const heads = (state.users || []).filter(x => x.role === "head_barista" && x.active);
+  if (!heads.length) return 0;
+  state.penalties = state.penalties || [];
+  const tomb = _tombstoneSet();
+  let created = 0;
+  for (let i = 1; i <= 6; i++) {
+    const wd = new Date(); wd.setDate(wd.getDate() - 7 * i);
+    const weekOf = sundayOf(localISODate(wd));
+    const sat = new Date(weekOf + "T12:00:00"); sat.setDate(sat.getDate() + 6);
+    if (weekOf < SCHEDULE_RULES_START || localISODate(sat) >= todayStr) continue; // week not over yet
+    const missing = b => !(state.rosters || []).some(r => r.week_of === weekOf && String(r.branch || "").toLowerCase() === b);
+    const wholeWeekClosed = b => ROSTER_DAYS.every((_, di) => { const d = new Date(weekOf + "T12:00:00"); d.setDate(d.getDate() + di); return isBranchClosed(b, localISODate(d)); });
+    for (const hb of heads) {
+      const bad = _schedBranches(hb).filter(b => missing(b) && !wholeWeekClosed(b));
+      if (!bad.length) continue;
+      const pid = `sched_${hb.id}_${weekOf}`;
+      if (tomb.has(pid) || state.penalties.some(p => p.id === pid)) continue;
+      const salary = getSalaryForMonth(hb.id, weekOf.slice(0, 7));
+      state.penalties.push({
+        id: pid, at: now(), by: cu.id, by_name: "Auto (weekly schedule)",
+        user_id: hb.id, barista: hb.name,
+        kind: "half_day", reason: "schedule_not_submitted", reason_code: "schedule_not_submitted",
+        date: weekOf, month: weekOf.slice(0, 7), branch: bad.join("+"),
+        amount: penaltyAmount("half_day", salary),
+        note: `Auto: weekly schedule not submitted (${bad.join(", ")}) for the week of ${weekOf} — half day deducted`,
+        auto_schedule: true,
+      });
+      notifyHaidi(`Weekly schedule not submitted — ${hb.name}`, `No schedule for ${bad.join(", ")} for the week of ${weekOf}. Half day deducted from ${hb.name}.`);
+      created++;
+    }
+  }
+  if (created) saveState();
+  return created;
 }
 
 function calcHBBaseSalary(month) {
@@ -18146,11 +18238,12 @@ routes.leave_list = function (u) {
 
       const rows = activeStaff.map(p => {
         const own = approved.filter(l => l.user_id === p.id);
-        const annualDays = own.filter(l => l.type === "annual").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0);
+        const schedDays = scheduleDayOffs(p.id, summaryMonth);
+        const annualDays = own.filter(l => l.type === "annual").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0) + schedDays.length;
         const sickDays   = own.filter(l => l.type === "sick").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0);
         const salary = getSalaryForMonth(p.id, summaryMonth);
         const over = annualLeaveOverage(p.id, summaryMonth, salary); // { freeDays, usedDays, excessDays, amount }
-        return { name: p.name, annualDays, sickDays, totalDays: annualDays + sickDays,
+        return { name: p.name, schedDays, annualDays, sickDays, totalDays: annualDays + sickDays,
                  freeDays: over.freeDays, excessDays: over.excessDays, deduction: over.amount };
       }).sort((a,b) => b.totalDays - a.totalDays || a.name.localeCompare(b.name));
 
@@ -18184,6 +18277,8 @@ routes.leave_list = function (u) {
             annualLine.appendChild(el("span", {}, T(`🌴 ${r.annualDays} of ${r.freeDays} free used`, `🌴 ${r.annualDays} من ${r.freeDays} مجانية مستخدمة`)));
           }
           annualLine.appendChild(el("span", {}, T(` · 🤒 ${r.sickDays} sick`, ` · 🤒 ${r.sickDays} مرضية`)));
+          if (r.schedDays.length) annualLine.appendChild(el("div", { class: "muted small" },
+            T(`📅 ${r.schedDays.length} not on the schedule: ${r.schedDays.map(d => d.slice(8)).join(", ")}`, `📅 ${r.schedDays.length} غير مُدرج في الجدول: ${r.schedDays.map(d => d.slice(8)).join("، ")}`)));
 
           list.appendChild(el("div", { class: "kv", style: { alignItems: "center" } }, [
             el("div", { class: "k" }, [
