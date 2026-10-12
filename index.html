@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261012-199 -->
+<!-- CB_BUILD:20261012-714 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261012-199";
+  var BUILD = "20261012-714";
   (function() {
     function checkFresh() {
       try {
@@ -16882,9 +16882,13 @@ routes.signin_stamp_new = function (u) {
   wrap.appendChild(el("div", { class: "sticky-actions" }, [
     el("button", {
       class: "btn",
-      onClick: async () => {
+      onClick: async (ev) => {
         const photoBlobs = stampPhotoField.getBlobs();
         if (!photoBlobs.length) return toast(T("Please attach at least one clock-in photo","أرفق صورة واحدة على الأقل لتسجيل الحضور"), "error");
+        // Saving is slow (photo store + EXIF read + opening-times refresh); without this guard
+        // every extra tap while it runs pushed another duplicate stamp.
+        if (ev && ev.currentTarget && ev.currentTarget.disabled) return;
+        if (ev && ev.currentTarget) ev.currentTarget.disabled = true;
         const photoNames = photoBlobs.map(f => f.name);
         const who = forUserId === u.id ? u : (staffDir.resolve(forUserId) || u);
         const onBehalf = who.id !== u.id;
@@ -17400,6 +17404,8 @@ function editSigninStamp(s) {
 
   const whoSel = el("select", {}, staff.map(x => el("option", { value: x.id }, x.name)));
   whoSel.value = s.by;
+  const branchSel = el("select", {}, ["maadi", "zawya"].map(b => el("option", { value: b }, b[0].toUpperCase() + b.slice(1))));
+  branchSel.value = String(s.branch || "maadi").toLowerCase();
   const dateInp = el("input", { type: "date", value: localISODate(new Date(s.at)) });
   const timeInp = el("input", { type: "time", value: pad(clock.getHours()) + ":" + pad(clock.getMinutes()) });
 
@@ -17417,11 +17423,12 @@ function editSigninStamp(s) {
     const ns = {
       ...s, id: uuid(),
       by: who.id, by_name: who.name,
+      branch: branchSel.value,
       at: at.toISOString(),
       clock_at: clockAt.toISOString(),
       clock_source: clockAt.toISOString() === s.clock_at ? s.clock_source : "manual",
       last_edited_at: stampedAt, last_edited_by_name: cu.name,
-      edit_note: `Edited by ${cu.name} · ${fmtDate(stampedAt)} (was ${s.by_name} · ${localISODate(oldAt)})`,
+      edit_note: `Edited by ${cu.name} · ${fmtDate(stampedAt)} (was ${s.by_name} · ${localISODate(oldAt)}${String(s.branch || "").toLowerCase() !== branchSel.value ? " · " + s.branch : ""})`,
     };
     ns.mins_late = minsLateAt(ns.branch, ns.clock_at);
     ns.early_bonus = ns.mins_late <= -15;
@@ -17430,7 +17437,7 @@ function editSigninStamp(s) {
     state.signin_stamps.push(ns);
     let penMsg = "";
     if (pen) {
-      pen.user_id = who.id; pen.barista = who.name;
+      pen.user_id = who.id; pen.barista = who.name; pen.branch = ns.branch;
       pen.date = localISODate(at); pen.month = pen.date.slice(0, 7);
       pen.last_edited_at = stampedAt;
       const log = _retierLatePenalty(ns, stampedAt);
@@ -17462,8 +17469,9 @@ function editSigninStamp(s) {
     el("div", { class: "muted small", style: { marginBottom: "10px" } },
       `${s.by_name} · ${s.branch} · ${fmtDate(stampClockTime(s))}${s.entered_by_name ? " · ✍ " + s.entered_by_name : ""}`),
     el("label", {}, T("Barista","الباريستا")), whoSel,
+    el("label", {}, T("Branch","الفرع")), branchSel,
     el("label", {}, T("Day","اليوم")), dateInp,
-    el("label", {}, T(`Clock-in time (opening ${branchMorningOpen(s.branch)})`, `وقت الحضور (الفتح ${branchMorningOpen(s.branch)})`)), timeInp,
+    el("label", {}, T(`Clock-in time (opening ${branchMorningOpen(branchSel.value)})`, `وقت الحضور (الفتح ${branchMorningOpen(branchSel.value)})`)), timeInp,
     el("button", { class: "btn", style: { marginTop: "14px" }, onClick: save }, T("Save changes","حفظ التعديلات")),
     el("button", { class: "btn ghost", style: { marginTop: "8px", color: "var(--bad)" }, onClick: del }, T("🗑 Delete this stamp","🗑 حذف هذه البصمة")),
   ]));
