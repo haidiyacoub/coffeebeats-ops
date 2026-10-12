@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261012-723 -->
+<!-- CB_BUILD:20261012-731 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261012-723";
+  var BUILD = "20261012-731";
   (function() {
     function checkFresh() {
       try {
@@ -8753,6 +8753,8 @@ routes.salaries = function (u) {
         el("div", { class: "k" }, [
           el("div", {}, p.name + (p.active ? "" : " (archived)")),
           el("div", { class: "muted small" }, `Salary ${money(salary)}${hireCalc.prorated ? ` (joined ${hireCalc.hire}: ${hireCalc.days}/30 days of ${money(fullSalary)})` : ""}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
+          ...(penRows.length ? [el("div", { class: "muted small", style: { marginTop: "4px", fontStyle: "italic", lineHeight: "1.5" } },
+            "* " + T("Penalty reasons","أسباب الخصم") + ": " + penRows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText).join(" · "))] : []),
         ]),
         el("div", { class: "v", style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } }, [
           money(due),
@@ -9120,6 +9122,13 @@ function penaltyAmount(kind, monthlySalary) {
   return Math.round(day * k.days);
 }
 
+function penaltyReasonText(r) {
+  const lbl = (PENALTY_REASONS.find(x => x.value === (r.reason_code || r.reason)) || {}).label
+    || (r.reason === "late" ? "Late arrival" : r.reason === "no_show" ? "No stamp (no show)" : r.reason_code || r.reason || "Penalty");
+  const d = (r.date || (r.at || "").slice(0, 10) || "").slice(5);
+  return `${d ? d + " — " : ""}${lbl}${r.note ? " (" + String(r.note).replace(/^Auto:\s*/, "") + ")" : ""}: ${money(r.amount)}`;
+}
+
 routes.penalties = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Penalties","الخصومات"), T("Auto-calculated from each barista's monthly salary.","تُحسب تلقائياً من الراتب الشهري لكل بريستا.")));
@@ -9305,11 +9314,7 @@ routes.penalties = function (u) {
           el("div", {}, g.name), el("div", {}, money(gTotal)),
         ]));
         for (const r of g.rows) box.appendChild(renderPenaltyRow(r));
-        const notes = g.rows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(r => {
-          const reasonLabel = (PENALTY_REASONS.find(x => x.value === r.reason_code) || {}).label || r.reason_code || r.reason || "—";
-          const d = (r.date || (r.at || "").slice(0, 10) || "").slice(5);
-          return `${d ? d + " — " : ""}${reasonLabel}${r.note ? " (" + r.note + ")" : ""}: ${money(r.amount)}`;
-        });
+        const notes = g.rows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText);
         box.appendChild(el("div", { class: "muted small", style: { marginTop: "6px", fontStyle: "italic", lineHeight: "1.5" } },
           `* ${T("Reasons","الأسباب")}: ` + notes.join(" · ")));
         list.appendChild(box);
