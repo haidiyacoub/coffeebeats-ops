@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261012-187 -->
+<!-- CB_BUILD:20261012-199 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261012-187";
+  var BUILD = "20261012-199";
   (function() {
     function checkFresh() {
       try {
@@ -10566,7 +10566,7 @@ function _schedBranches(user) {
 }
 function scheduleDayOffs(uid, month) {
   const user = (state.users || []).find(x => x.id === uid);
-  if (!user || user.role !== "barista") return [];
+  if (!user || (user.role !== "barista" && user.role !== "head_barista")) return [];
   const branches = _schedBranches(user);
   const hist  = ((state.barista_dates || {})[uid] || []);
   const joins = hist.filter(e => e.type === "joined" && e.date).map(e => e.date).sort();
