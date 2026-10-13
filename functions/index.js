@@ -704,8 +704,8 @@ exports.dailyComplianceCheck = onSchedule(
 // ─── dailyComplianceRecap ─────────────────────────────────────────────────────
 // 01:00 Cairo every day: re-checks the PREVIOUS day (after midnight, so closes/waste logged
 // late — dated to the previous day — still count; the old 23:45 check raised false alarms) and emails the owner which branch
-// missed what. Covers sign-in stamp, shift close, waste log and cleaning log. Owner only —
-// the head barista already gets the same-day alerts above. Branches marked closed that
+// missed what. Covers sign-in stamp, shift close, waste log and cleaning log. Also copied to the
+// head barista when anything was missed. Branches marked closed that
 // day are skipped. Always sends, so a quiet inbox never means "the check didn't run".
 exports.dailyComplianceRecap = onSchedule(
   { schedule: "0 1 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
@@ -747,7 +747,7 @@ exports.dailyComplianceRecap = onSchedule(
     const subject = missedItems
       ? `❌ ${missedNames.join(" + ")} missed daily tasks — ${day}`
       : `✅ All daily tasks done — ${day}`;
-    await _sendEmail(subject, lines.join("\n"));
+    await _sendEmail(subject, lines.join("\n"), { urgent: missedItems > 0, toHeadBarista: missedItems > 0 });   // head barista gets the same list (with penalty note) only when something was missed
     console.log(`Compliance recap ${day}: ${missedItems} missing item(s)`);
   }
 );
