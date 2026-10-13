@@ -632,8 +632,8 @@ exports.inventoryMonthEndCheck = onSchedule(
 );
 
 // ─── dailyComplianceCheck ─────────────────────────────────────────────────────
-// Two runs a day (Cairo): 15:00 checks roster + sign-in stamps; 23:45 also checks shift
-// closes + waste log. Anything missing → ONE high-urgency email per run (flag doc de-dupes, so an item
+// 15:00 Cairo checks roster + sign-in stamps; shift closes + waste log + cleaning are checked
+// by dailyComplianceRecap at 01:00 the next day. Anything missing → ONE high-urgency email per run (flag doc de-dupes, so an item
 // already reported at 15:00 is not repeated at 23:45; next day starts fresh).
 // NOTHING here depends on the roster except the roster check itself:
 //  • Stamp  = every branch (maadi, zawya) needs at least one sign-in stamp dated today.
@@ -700,7 +700,54 @@ exports.dailyComplianceCheck = onSchedule(
   { schedule: "0 15 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
   async () => { await _runComplianceCheck({ checkCloses: false }); }
 );
-exports.dailyComplianceCheckNight = onSchedule(
-  { schedule: "45 23 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
-  async () => { await _runComplianceCheck({ checkCloses: true }); }
+
+// ─── dailyComplianceRecap ─────────────────────────────────────────────────────
+// 01:00 Cairo every day: re-checks the PREVIOUS day (after midnight, so closes/waste logged
+// late — dated to the previous day — still count; the old 23:45 check raised false alarms) and emails the owner which branch
+// missed what. Covers sign-in stamp, shift close, waste log and cleaning log. Owner only —
+// the head barista already gets the same-day alerts above. Branches marked closed that
+// day are skipped. Always sends, so a quiet inbox never means "the check didn't run".
+exports.dailyComplianceRecap = onSchedule(
+  { schedule: "0 1 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async () => {
+    const db    = getDb();
+    const now   = new Date();
+    const today = localISODate(now);
+    const day   = localISODate(new Date(now.getTime() - 24 * 3600 * 1000));   // yesterday (Cairo)
+    const yms   = [...new Set([day.slice(0, 7), today.slice(0, 7)])];         // shards the day's rows can sit in
+
+    const get = id => db.collection("state").doc(id).get();
+    const [rosterDoc, tombDoc, wasteDoc, ...shards] = await Promise.all([
+      get("roster"), get("tombstones"), get("waste"),
+      ...yms.flatMap(m => [get(`ss__${m}`), get(`sc__${m}`), get(`cl__${m}`)]),
+    ]);
+    const arr = (d, k) => (d.exists && Array.isArray(d.data()[k]) ? d.data()[k] : []);
+    const fromShards = (offset, k) => shards.filter((_, i) => i % 3 === offset).flatMap(d => arr(d, k));
+    const tomb = new Set(arr(tombDoc, "deleted_ids").map(t => (t && typeof t === "object" ? t.id : t)));
+    const live = r => r && !r.is_test && !r.deleted && !r.deleted_at && !tomb.has(r.id);
+    const branchOf = r => String(r.branch || "").toLowerCase();
+
+    const stamps  = fromShards(0, "signin_stamps").filter(live).filter(s => localISODate(new Date(s.at)) === day);
+    const closes  = fromShards(1, "shift_closes").filter(live).filter(c => c.date === day);
+    const cleans  = fromShards(2, "cleaning_logs").filter(live).filter(c => c.date === day);
+    const wastes  = arr(wasteDoc, "waste").filter(live).filter(w => localISODate(new Date(w.at)) === day);
+    const closedD = new Set(arr(rosterDoc, "branch_closures").filter(c => c.date === day && !tomb.has(c.id)).map(branchOf));
+
+    const checks = [
+      ["Sign-in stamp", stamps], ["Shift close", closes], ["Waste log", wastes], ["Cleaning log", cleans],
+    ];
+    const lines = [`Coffee Beats — daily recap for ${day} (checked ${today} 01:00)`, ""];
+    const missedNames = []; let missedItems = 0;
+    for (const b of COMPLIANCE_BRANCHES) {
+      if (closedD.has(b)) { lines.push(`${_cap(b)}: closed that day — nothing expected`); continue; }
+      const missing = checks.filter(([, rows]) => !rows.some(r => branchOf(r) === b)).map(([name]) => name);
+      if (missing.length) { missedNames.push(_cap(b)); missedItems += missing.length; lines.push(`❌ ${_cap(b)} MISSED: ${missing.join(", ")}`); }
+      else lines.push(`✅ ${_cap(b)}: all done`);
+    }
+    const subject = missedItems
+      ? `❌ ${missedNames.join(" + ")} missed daily tasks — ${day}`
+      : `✅ All daily tasks done — ${day}`;
+    await _sendEmail(subject, lines.join("\n"));
+    console.log(`Compliance recap ${day}: ${missedItems} missing item(s)`);
+  }
 );

@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261012-731 -->
+<!-- CB_BUILD:20261013-540 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261012-731";
+  var BUILD = "20261013-540";
   (function() {
     function checkFresh() {
       try {
@@ -5606,10 +5606,67 @@ routes.waste_new = function (u) {
   return wrap;
 };
 
+// ── Monthly missing-days calendar (waste / shift close / sign-in stamp / cleaning log) ──
+// One calendar per branch for the chosen month. Green = at least one entry that day,
+// red = nothing logged on a past day, grey = today/future, before the branch's first entry,
+// or a day the branch was marked closed. Header shows how many days were missed.
+function missingDaysCard(u, { title, rows, dayOf }) {
+  const viewAll = u.role === "owner" || u.role === "accountant";
+  const branches = ["maadi", "zawya"].filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
+  const card = el("div", { class: "card", style: { marginBottom: "14px" } });
+  if (!branches.length) return card;
+  const live = (rows || []).filter(r => notTest(r) && !r.deleted);
+  const bOf = r => String(r.branch || "").toLowerCase();
+  const byBranch = {};
+  branches.forEach(b => { const set = new Set(); live.filter(r => bOf(r) === b).forEach(r => { try { const d = dayOf(r); if (d) set.add(d); } catch (e) {} }); byBranch[b] = set; });
+  const closed = new Set((state.branch_closures || []).map(c => bOf(c) + "|" + c.date));
+  const todayISO = localISODate(new Date());
+  let month = todayISO.slice(0, 7);
+  const body = el("div", {});
+  const label = el("div", { style: { fontWeight: "700", minWidth: "110px", textAlign: "center" } });
+  const shift = n => { const [y, m] = month.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); month = d.toISOString().slice(0, 7); draw(); };
+  const navBtn = (t, n) => el("button", { class: "btn ghost", style: { padding: "2px 10px" }, onClick: () => shift(n) }, t);
+  function draw() {
+    body.innerHTML = "";
+    label.textContent = month;
+    const [y, m] = month.split("-").map(Number);
+    const n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const lead = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+    for (const b of branches) {
+      const set = byBranch[b];
+      const first = set.size ? [...set].sort()[0] : null;
+      let missed = 0;
+      const grid = el("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "3px", marginBottom: "6px" } });
+      for (let i = 0; i < lead; i++) grid.appendChild(el("div", {}));
+      for (let d = 1; d <= n; d++) {
+        const iso = `${month}-${String(d).padStart(2, "0")}`;
+        const has = set.has(iso);
+        const counts = first && iso >= first && iso < todayISO && !closed.has(b + "|" + iso);
+        const miss = !has && counts;
+        if (miss) missed++;
+        const bg = has ? "rgba(34,160,90,.18)" : miss ? "rgba(200,40,40,.28)" : "transparent";
+        const col = has ? "var(--ok)" : miss ? "var(--danger, #b91c1c)" : "var(--muted, #888)";
+        grid.appendChild(el("div", { title: iso + (has ? " ✓" : miss ? " ✗ missing" : ""), style: { textAlign: "center", fontSize: "12px", padding: "5px 0", borderRadius: "6px", border: "1px solid var(--border)", background: bg, color: col, fontWeight: miss ? "700" : "500" } }, String(d)));
+      }
+      body.appendChild(el("div", { style: { fontWeight: "600", margin: "8px 0 4px", textTransform: "capitalize" } },
+        `${b}  ·  ${missed ? "❌ " + missed + " " + T("missed day(s)", "يوم ناقص") : "✅ " + T("no missed days", "لا أيام ناقصة")}`));
+      body.appendChild(grid);
+    }
+  }
+  card.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" } }, [
+    el("div", { style: { fontWeight: "700" } }, title),
+    el("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, [navBtn("‹", -1), label, navBtn("›", 1)]),
+  ]));
+  card.appendChild(el("div", { class: "muted small", style: { margin: "4px 0 2px" } }, T("Green = logged · Red = missed day · Grey = not counted (today, future, closed, or before first entry).", "أخضر = تم · أحمر = يوم ناقص · رمادي = غير محسوب.")));
+  card.appendChild(body);
+  draw();
+  return card;
+}
+
 routes.waste_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Recent waste","الهدر الأخير"), T("Signed entries. Tap + to add.","سجلات موقّعة. اضغط + للإضافة.")));
-
+  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — waste log","الأيام الناقصة — سجل الهدر"), rows: state.waste, dayOf: w => localISODate(new Date(w.at)) }));
   // ── Daily coverage by branch (last 14 days) ─────────────────────
   // A waste entry is expected every day per branch, even if it's just "No waste".
   // ✓ = real waste logged · ○ = "No waste" logged · ✗ = nothing logged (daily email flags today).
@@ -6002,7 +6059,7 @@ routes.shift_close_new = function (u) {
 routes.shift_close_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Shift Closes","إغلاقات الشيفت"), T("End-of-shift reports, every day of the month. Tap + to add today's.","تقارير نهاية الشيفت لكل يوم في الشهر. اضغط + لإضافة تقرير اليوم.")));
-
+  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — shift close","الأيام الناقصة — إغلاق الشيفت"), rows: state.shift_closes, dayOf: c => c.date }));
   let month = new Date().toISOString().slice(0, 7); // default: current month, so every day shows
   const monthInput = el("input", { type: "month", value: month, style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" } });
   monthInput.addEventListener("change", () => { month = monthInput.value; draw(); });
@@ -16850,7 +16907,7 @@ routes.cleaning_log_new = function (u) {
 routes.cleaning_log_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Cleaning Logs","سجلات النظافة"), T("Daily checklist photos. Tap + to add.","صور قوائم التحقق اليومية. اضغط + للإضافة.")));
-
+  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — cleaning log","الأيام الناقصة — سجل النظافة"), rows: state.cleaning_logs, dayOf: c => c.date }));
   const mine = state.cleaning_logs
     .filter(c => u.role === "owner" || u.role === "accountant" || c.by === u.id || (u.branches||[]).includes(c.branch))
     .sort((a, b) => b.at.localeCompare(a.at))
@@ -17310,7 +17367,7 @@ async function rescoreSigninStamps(fromDate) {
 routes.signin_stamp_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Sign-In Stamps","بصمات الحضور"), T("Attendance record — every clock-in, color-coded by punctuality.","سجل الحضور — كل تسجيل دخول، مع ترميز لوني حسب الانضباط.")));
-
+  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — sign-in stamp","الأيام الناقصة — بصمة الحضور"), rows: state.signin_stamps, dayOf: s => localISODate(new Date(s.at)) }));
   const isAdmin = u.role === "owner" || u.role === "accountant";
   const all = state.signin_stamps
     .filter(s => isAdmin || s.by === u.id || (u.branches||[]).includes(s.branch));
