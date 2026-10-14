@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261014-012 -->
+<!-- CB_BUILD:20261014-022 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261014-012";
+  var BUILD = "20261014-022";
   (function() {
     function checkFresh() {
       try {
@@ -8820,7 +8820,7 @@ routes.salaries = function (u) {
           ...(penRows.length ? [el("div", { class: "muted small", style: { marginTop: "4px", fontStyle: "italic", lineHeight: "1.5" } },
             "* " + T("Penalty reasons","أسباب الخصم") + ": " + penRows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText).join(" · "))] : []),
         ]),
-        el("div", { class: "v", style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } }, [
+        el("div", { class: "v", style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px", flexShrink: "0" } }, [
           el("span", { style: { fontSize: "18px", fontWeight: "800", color: due > 0 ? "#2e7d32" : "inherit", fontVariantNumeric: "tabular-nums" } }, money(due)),
           ...(isOwnerMgr ? [salaryPaidControls(p, month, due)] : (paidPayoutFor(p.id, month) ? [el("span", { class: "muted small" }, "✅ " + T("Paid","مدفوع"))] : [])),
         ]),
