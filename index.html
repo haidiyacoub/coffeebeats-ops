@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261013-540 -->
+<!-- CB_BUILD:20261014-012 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261013-540";
+  var BUILD = "20261014-012";
   (function() {
     function checkFresh() {
       try {
@@ -8784,7 +8784,14 @@ routes.salaries = function (u) {
 
     // ---- 3) Total due THIS MONTH (per person + grand total) ----
     const dueCard = el("div", { class: "card", style: { marginTop: "12px" } });
-    dueCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, T(`Total due · ${month}`, `الإجمالي المستحق · ${month}`)));
+    dueCard.style.padding = "18px";
+    dueCard.style.borderRadius = "16px";
+    dueCard.style.background = "linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%)";
+    const dueHead = el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "14px" } }, [
+      el("div", { style: { fontSize: "13px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1.5px" } }, "💰 " + T("Total due","الإجمالي المستحق")),
+      el("div", { style: { fontSize: "12px", fontWeight: "600", padding: "3px 12px", borderRadius: "999px", background: "var(--surface-2)", border: "1px solid var(--border)" } }, month),
+    ]);
+    dueCard.appendChild(dueHead);
     let grandDue = 0;
     for (const p of staff) {
       const fullSalary = getSalaryForMonth(p.id, month);
@@ -8806,22 +8813,22 @@ routes.salaries = function (u) {
       const due = Math.max(0, salary + otSum + hbIncentive - lateSum - penSum - loanSum - sickSum - annualSum);
       grandDue += due;
       const incentivePart = hbIncentive > 0 ? ` + Incentive ${money(hbIncentive)}` : "";
-      dueCard.appendChild(el("div", { class: "kv", style: p.active ? {} : { opacity: ".6", fontStyle: "italic" } }, [
+      dueCard.appendChild(el("div", { class: "kv", style: Object.assign({ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "12px 14px", marginBottom: "10px", alignItems: "flex-start", boxShadow: "0 1px 3px rgba(0,0,0,.05)" }, p.active ? {} : { opacity: ".6", fontStyle: "italic" }) }, [
         el("div", { class: "k" }, [
-          el("div", {}, p.name + (p.active ? "" : " (archived)")),
-          el("div", { class: "muted small" }, `Salary ${money(salary)}${hireCalc.prorated ? ` (joined ${hireCalc.hire}: ${hireCalc.days}/30 days of ${money(fullSalary)})` : ""}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
+          el("div", { style: { fontSize: "15px", fontWeight: "700" } }, p.name + (p.active ? "" : " (archived)")),
+          el("div", { class: "muted small", style: { marginTop: "2px", lineHeight: "1.5" } }, `Salary ${money(salary)}${hireCalc.prorated ? ` (joined ${hireCalc.hire}: ${hireCalc.days}/30 days of ${money(fullSalary)})` : ""}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
           ...(penRows.length ? [el("div", { class: "muted small", style: { marginTop: "4px", fontStyle: "italic", lineHeight: "1.5" } },
             "* " + T("Penalty reasons","أسباب الخصم") + ": " + penRows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText).join(" · "))] : []),
         ]),
         el("div", { class: "v", style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" } }, [
-          money(due),
+          el("span", { style: { fontSize: "18px", fontWeight: "800", color: due > 0 ? "#2e7d32" : "inherit", fontVariantNumeric: "tabular-nums" } }, money(due)),
           ...(isOwnerMgr ? [salaryPaidControls(p, month, due)] : (paidPayoutFor(p.id, month) ? [el("span", { class: "muted small" }, "✅ " + T("Paid","مدفوع"))] : [])),
         ]),
       ]));
     }
-    dueCard.appendChild(el("div", { class: "kv", style: { borderTop: "1px solid var(--border)", marginTop: "6px", paddingTop: "6px", fontWeight: "700" } }, [
-      el("div", { class: "k" }, T("Grand total due","الإجمالي الكلي المستحق")),
-      el("div", { class: "v" }, money(grandDue)),
+    dueCard.appendChild(el("div", { class: "kv", style: { marginTop: "14px", padding: "16px 18px", borderRadius: "14px", background: "linear-gradient(135deg, #3b2a20 0%, #6b4a33 100%)", color: "#fff", alignItems: "center", boxShadow: "0 4px 12px rgba(59,42,32,.3)" } }, [
+      el("div", { class: "k", style: { color: "#fff", fontSize: "13px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "1.5px" } }, T("Grand total due","الإجمالي الكلي المستحق")),
+      el("div", { class: "v", style: { color: "#fff", fontSize: "26px", fontWeight: "800", fontVariantNumeric: "tabular-nums" } }, money(grandDue)),
     ]));
     body.appendChild(dueCard);
 
@@ -16938,8 +16945,6 @@ routes.cleaning_log_list = function (u) {
 // ==============================================================
 // SIGN-IN STAMP
 // ==============================================================
-// Last day (exclusive) the head barista may clock in on behalf of other baristas.
-const HB_STAMP_FOR_OTHERS_UNTIL = "2026-10-06";
 routes.signin_stamp_new = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Sign-In Stamp","بصمة الحضور"), T("Upload a photo of the iPad clock showing your arrival time.","ارفع صورة لساعة الآيباد تُظهر وقت وصولك.")));
@@ -16952,9 +16957,7 @@ routes.signin_stamp_new = function (u) {
 
   // Owner / head barista can clock in on behalf of another barista (e.g. their phone died).
   // The stamp, lateness penalty and bonuses go to that barista; entered_by records who did it.
-  // Head barista's right is temporary: 10 days from 26 Sep 2026 (through 5 Oct). After that owner only.
-  const canStampForOthers = u.role === "owner" ||
-    (u.role === "head_barista" && localISODate(new Date()) < HB_STAMP_FOR_OTHERS_UNTIL);
+  const canStampForOthers = u.role === "owner" || u.role === "head_barista";
   let forUserId = u.id;
   const forSel = canStampForOthers ? el("select", {}) : null;
   const fillForSel = () => {
