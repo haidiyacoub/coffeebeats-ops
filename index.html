@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261014-022 -->
+<!-- CB_BUILD:20261015-780 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261014-022";
+  var BUILD = "20261015-780";
   (function() {
     function checkFresh() {
       try {
@@ -1229,6 +1229,7 @@ function migrateState(s) {
   s.suppliers           = s.suppliers       || {}; // inv_item_id → [{ id, name, contact, notes }]
   s.reorder_actions     = s.reorder_actions || []; // per-alert action records logged by baristas
   s.rosters             = s.rosters || []; // weekly shift rosters
+  s.morning_open_overrides = s.morning_open_overrides || []; // [{id,date,branch,time,by,by_name,at}] one-day morning start overrides
   s.branch_closures     = s.branch_closures || []; // [{id,date,branch,by,by_name,at}] days a branch was closed → no penalties/alerts
   s.roaster_schedules   = s.roaster_schedules || []; // weekly roaster — head barista posts to whole team
   s.kpi_logs      = s.kpi_logs      || []; // kept for migration only — scores now derived from source tiles
@@ -1554,7 +1555,7 @@ const STATE_CHUNKS = {
   // eventually blow the 1 MB Firestore doc limit and fail every sync. They are now
   // month-sharded (see MONTH_SHARDED / _syncMonthShards / the pull migration below).
   suggestions:   ["suggestions", "deleted_suggestions"],
-  roster:        ["rosters", "branch_closures", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
+  roster:        ["rosters", "branch_closures", "morning_open_overrides", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
   hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves", "deleted_salary_loans", "deleted_sick_leave_deductions", "deleted_leaves", "deleted_salaries"],
   hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "overhead_custom_cats", "overhead_cat_overrides", "maintenance_config", "loan_payments"],
@@ -7889,7 +7890,7 @@ function checkNoStampAlert() {
     if (!user) continue;
     if (isBranchClosed(branch, todayStr)) continue;
 
-    const openStr  = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+    const openStr  = branchMorningOpen(branch, todayStr);
     const openMs   = new Date(todayStr + "T" + openStr + ":00").getTime();
     const minsAfter = Math.round((now.getTime() - openMs) / 60000);
     if (minsAfter < 60) continue; // not yet 60 minutes past opening
@@ -13998,6 +13999,35 @@ routes.roster = function (u) {
             branchHdr.appendChild(el("span", { class: "pill warn" }, T("🔒 Branch closed","🔒 الفرع مغلق")));
           }
         }
+        if (branch !== "events" && !closedRec) {
+          const defOpen = branchMorningOpen(branch);
+          const ovRec = (state.morning_open_overrides || []).find(o => o.date === dayDateStr && o.branch === branch);
+          if (canEdit) {
+            const ovInp = el("input", { type: "time", value: ovRec ? ovRec.time : "", style: { maxWidth: "110px" } });
+            ovInp.addEventListener("change", () => {
+              state.morning_open_overrides = state.morning_open_overrides || [];
+              const sc = stamp();
+              const cur = state.morning_open_overrides.find(o => o.date === dayDateStr && o.branch === branch);
+              if (ovInp.value && ovInp.value !== defOpen) {
+                if (cur) { cur.time = ovInp.value; cur.by = sc.by; cur.by_name = sc.by_name; cur.at = sc.at; }
+                else state.morning_open_overrides.push({ id: uuid(), date: dayDateStr, branch, time: ovInp.value, by: sc.by, by_name: sc.by_name, at: sc.at });
+              } else if (cur) {
+                state.morning_open_overrides = state.morning_open_overrides.filter(o => o !== cur);
+                recordDeletion(cur.id);
+              }
+              saveState(); draw();
+            });
+            const clr = ovRec ? el("button", { class: "btn ghost", style: { padding: "2px 8px", fontSize: "11px", textTransform: "none", letterSpacing: "0" }, onClick: () => {
+              state.morning_open_overrides = state.morning_open_overrides.filter(o => o !== ovRec);
+              recordDeletion(ovRec.id);
+              saveState(); draw();
+            } }, T("Reset","إعادة")) : null;
+            branchHdr.appendChild(el("label", { style: { display: "inline-flex", alignItems: "center", gap: "5px", textTransform: "none", letterSpacing: "0" } },
+              [T(`⏰ Morning opens (default ${defOpen})`, `⏰ فتح الصباح (الافتراضي ${defOpen})`), ovInp, ...(clr ? [clr] : [])]));
+          } else if (ovRec) {
+            branchHdr.appendChild(el("span", { class: "pill warn", style: { textTransform: "none", letterSpacing: "0" } }, T(`⏰ Opens ${ovRec.time} today`, `⏰ يفتح ${ovRec.time}`)));
+          }
+        }
         card.appendChild(branchHdr);
         if (closedRec) {
           card.appendChild(el("div", { class: "muted small", style: { marginLeft: "4px" } },
@@ -17181,14 +17211,19 @@ routes.signin_stamp_new = function (u) {
 const STAMP_RULES_2026_10 = "2026-10-01";
 
 // Morning opening time ("HH:MM") for a branch — Settings → Attendance Opening Times.
-function branchMorningOpen(branch) {
+// Pass `dateStr` ("YYYY-MM-DD") to honour a one-day override set on the Weekly Schedule.
+function branchMorningOpen(branch, dateStr) {
   const b = (branch || "maadi").toLowerCase();
+  if (dateStr) {
+    const ov = (state.morning_open_overrides || []).find(o => o.date === dateStr && String(o.branch || "").toLowerCase() === b && o.time);
+    if (ov) return ov.time;
+  }
   return ((state.branch_opening_times || {})[b] || {}).morning || (b === "maadi" ? "10:00" : "12:00");
 }
 // Minutes between a branch's morning opening and `iso` on that same local day (negative = early).
 function minsLateAt(branch, iso) {
   const t = new Date(iso);
-  const openMs = new Date(localISODate(t) + "T" + branchMorningOpen(branch) + ":00").getTime();
+  const openMs = new Date(localISODate(t) + "T" + branchMorningOpen(branch, localISODate(t)) + ":00").getTime();
   return Math.round((t.getTime() - openMs) / 60000);
 }
 // When a stamp counts as clocked in: the photo's capture time if it could be read, else upload time.
@@ -17348,7 +17383,7 @@ async function rescoreSigninStamps(fromDate) {
     }
     const clockAt = photo ? photo.toISOString() : stampClockTime(s);
     const mins = minsLateAt(s.branch, clockAt);
-    log.push(`${s.by_name} · ${s.branch} · ${localISODate(new Date(s.at))} — opening ${branchMorningOpen(s.branch)}, ` +
+    log.push(`${s.by_name} · ${s.branch} · ${localISODate(new Date(s.at))} — opening ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))}, ` +
       (photo ? `photo time ${fmtDate(clockAt)}`
         : s.clock_source === "manual" ? `time set from photo ${fmtDate(clockAt)}`
         : `upload time (${[...new Set(why)].join(", ") || "photo not found"})`) +
@@ -17631,15 +17666,15 @@ function viewSigninStampPhotos(s, onSaved) {
       s.last_edited_by_name = currentUser()?.name || "?";
       const log = _retierLatePenalty(s, stampedAt);
       saveState();
-      toast(T(`${s.by_name}: ${before ?? "?"} → ${s.mins_late} min (opening ${branchMorningOpen(s.branch)})${log.length ? " · penalty updated" : ""}`,
+      toast(T(`${s.by_name}: ${before ?? "?"} → ${s.mins_late} min (opening ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))})${log.length ? " · penalty updated" : ""}`,
               `${s.by_name}: ${before ?? "?"} ← ${s.mins_late} دقيقة`), "ok");
       closeSheet();
       if (onSaved) onSaved();
     });
     body.appendChild(el("div", { class: "card", style: { background: "var(--surface-2)", marginBottom: "12px" } }, [
       el("div", { class: "muted small", style: { marginBottom: "6px" } },
-        T(`Time shown on the clock in the photo — lateness is scored from this (opening ${branchMorningOpen(s.branch)}).`,
-          `الوقت الظاهر على الساعة في الصورة — يُحتسب التأخير منه (الفتح ${branchMorningOpen(s.branch)}).`)),
+        T(`Time shown on the clock in the photo — lateness is scored from this (opening ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))}).`,
+          `الوقت الظاهر على الساعة في الصورة — يُحتسب التأخير منه (الفتح ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))}).`)),
       el("div", { style: { display: "flex", gap: "8px", alignItems: "center" } }, [tInp, saveBtn]),
     ]));
   }
@@ -21271,7 +21306,7 @@ function kpiPunctualityScore(userId, cutoff) {
     for (const entry of entries) {
       shiftsFound++;
       const branch  = (entry.branch||"maadi").toLowerCase();
-      const openStr = ((bot[branch]||{})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+      const openStr = branchMorningOpen(branch, dateStr);
       const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
       const st      = stampMap[dateStr + "|" + branch];
       if (!st) {
@@ -21655,7 +21690,7 @@ function kpiLeadershipScore(userId, month) {
       for (const entry of morningEntries) {
         const branch  = (entry.branch || "maadi").toLowerCase();
         if (isBranchClosed(branch, dateStr)) continue;
-        const openStr = ((bot[branch] || {})["morning"]) || (branch === "maadi" ? "10:00" : "12:00");
+        const openStr = branchMorningOpen(branch, dateStr);
         const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
         const stamp = (state.signin_stamps || []).find(s =>
           notTest(s) &&
