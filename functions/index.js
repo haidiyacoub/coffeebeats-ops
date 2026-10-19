@@ -733,14 +733,21 @@ exports.dailyComplianceRecap = onSchedule(
     const wastes  = arr(wasteDoc, "waste").filter(live).filter(w => localISODate(new Date(w.at)) === day);
     const closedD = new Set(arr(rosterDoc, "branch_closures").filter(c => c.date === day && !tomb.has(c.id)).map(branchOf));
 
+    // Evening shift: from 2026-10-20 a night stamp is also expected wherever someone is rostered on it.
+    const sundayOf = ds => { const d = new Date(ds + "T12:00:00"); d.setDate(d.getDate() - d.getDay()); return localISODate(d); };
+    const dayKey = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(day + "T12:00:00").getDay()];
+    const nightRostered = new Set(arr(rosterDoc, "rosters")
+      .filter(r => r.week_of === sundayOf(day) && r.day === dayKey && r.shift === "night").map(branchOf));
+    const isNight = s => s.shift === "night";
     const checks = [
-      ["Sign-in stamp", stamps], ["Shift close", closes], ["Waste log", wastes], ["Cleaning log", cleans],
+      ["Sign-in stamp", stamps.filter(s => !isNight(s))], ["Shift close", closes], ["Waste log", wastes], ["Cleaning log", cleans],
     ];
     const lines = [`Coffee Beats — daily recap for ${day} (checked ${today} 01:00)`, ""];
     const missedNames = []; let missedItems = 0;
     for (const b of COMPLIANCE_BRANCHES) {
       if (closedD.has(b)) { lines.push(`${_cap(b)}: closed that day — nothing expected`); continue; }
       const missing = checks.filter(([, rows]) => !rows.some(r => branchOf(r) === b)).map(([name]) => name);
+      if (day >= "2026-10-20" && nightRostered.has(b) && !stamps.some(s => isNight(s) && branchOf(s) === b)) missing.push("Evening sign-in stamp");
       if (missing.length) { missedNames.push(_cap(b)); missedItems += missing.length; lines.push(`❌ ${_cap(b)} MISSED: ${missing.join(", ")}`); }
       else lines.push(`✅ ${_cap(b)}: all done`);
     }

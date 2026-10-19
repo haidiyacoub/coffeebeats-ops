@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261015-780 -->
+<!-- CB_BUILD:20261019-580 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261015-780";
+  var BUILD = "20261019-580";
   (function() {
     function checkFresh() {
       try {
@@ -5065,10 +5065,18 @@ function headBaristaMissingAlert(u) {
     const closedToday = isBranchClosed(b, today), closedYest = isBranchClosed(b, yesterday);
     if (!(state.rosters || []).some(r => bOf(r) === b && r.week_of === sunday))
       items.push({ en: `Weekly schedule NOT updated — ${nm(b)} (week of ${sunday})`, ar: `الجدول الأسبوعي لم يُحدَّث — ${nm(b)} (أسبوع ${sunday})`, go: "roster" });
-    if (!closedToday && !stamps.some(r => bOf(r) === b && day(r) === today))
+    // Evening shift: a night stamp is expected only if someone is rostered on it that day.
+    const nightExpected = ds => ds >= NIGHT_STAMP_RULES_START &&
+      (state.rosters || []).some(r => bOf(r) === b && r.shift === "night" && r.week_of === sundayOf(ds) && r.day === ROSTER_DAYS[new Date(ds + "T12:00:00").getDay()]);
+    const nightStamped = ds => stamps.some(r => bOf(r) === b && day(r) === ds && stampShift(r) === "night");
+    if (!closedToday && !stamps.some(r => bOf(r) === b && day(r) === today && stampShift(r) === "morning"))
       items.push({ en: `No sign-in stamp today — ${nm(b)}`, ar: `لا توجد بصمة حضور اليوم — ${nm(b)}`, go: "signin_stamp_new" });
-    if (!closedYest && !stamps.some(r => bOf(r) === b && day(r) === yesterday))
+    if (!closedYest && !stamps.some(r => bOf(r) === b && day(r) === yesterday && stampShift(r) === "morning"))
       items.push({ en: `No sign-in stamp YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا توجد بصمة حضور أمس (${yesterday}) — ${nm(b)}`, go: "signin_stamp_new" });
+    if (!closedToday && nightExpected(today) && now >= new Date(today + "T" + branchShiftOpen(b, "night", today) + ":00").getTime() + 60 * 60000 && !nightStamped(today))
+      items.push({ en: `No EVENING sign-in stamp today — ${nm(b)}`, ar: `لا توجد بصمة حضور للشيفت المسائي اليوم — ${nm(b)}`, go: "signin_stamp_new" });
+    if (!closedYest && nightExpected(yesterday) && !nightStamped(yesterday))
+      items.push({ en: `No EVENING sign-in stamp YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا توجد بصمة حضور للشيفت المسائي أمس (${yesterday}) — ${nm(b)}`, go: "signin_stamp_new" });
     if (!closedYest && !closes.some(r => bOf(r) === b && r.date === yesterday))
       items.push({ en: `No shift close YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا يوجد إغلاق شيفت أمس (${yesterday}) — ${nm(b)}`, go: "shift_close_new" });
     if (!closedYest && !wastes.some(r => bOf(r) === b && day(r) === yesterday))
@@ -7873,7 +7881,8 @@ function checkNoStampAlert() {
   const weekOf   = sundayOf(todayStr);
 
   const morning = (state.rosters || []).filter(r =>
-    r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+    r.week_of === weekOf && r.day === dayKey && (r.shift === "morning" || r.shift === "night") &&
+    shiftStampRuleActive(r.shift, todayStr)
   );
   if (!morning.length) return;
 
@@ -7890,19 +7899,22 @@ function checkNoStampAlert() {
     if (!user) continue;
     if (isBranchClosed(branch, todayStr)) continue;
 
-    const openStr  = branchMorningOpen(branch, todayStr);
+    const entShift = stampShift(entry);
+    const shiftTag = entShift === "night" ? " (evening shift)" : "";
+    const openStr  = branchShiftOpen(branch, entShift, todayStr);
     const openMs   = new Date(todayStr + "T" + openStr + ":00").getTime();
     const minsAfter = Math.round((now.getTime() - openMs) / 60000);
     if (minsAfter < 60) continue; // not yet 60 minutes past opening
 
-    const alertKey = `${todayStr}:${entry.user_id}:${branch}`;
+    const alertKey = `${todayStr}:${entry.user_id}:${branch}` + (entShift === "night" ? ":night" : "");
     if (state.settings.no_stamp_alerted[alertKey]) continue; // already fired today
 
     const hasStamp = (state.signin_stamps || []).some(s =>
       notTest(s) &&
       s.by === entry.user_id &&
       localISODate(new Date(s.at)) === todayStr &&
-      (s.branch || "").toLowerCase() === branch
+      (s.branch || "").toLowerCase() === branch &&
+      stampShift(s) === entShift
     );
     if (hasStamp) continue; // stamp was submitted — no alert needed
 
@@ -7910,20 +7922,20 @@ function checkNoStampAlert() {
     saveState();
 
     // In-app high-priority notification
-    const title = `🚨 No stamp — ${user.name}`;
-    const body  = `No sign-in stamp at ${branch} — ${minsAfter} min after opening (${openStr}).`;
+    const title = `🚨 No stamp — ${user.name}${shiftTag}`;
+    const body  = `No sign-in stamp at ${branch}${shiftTag} — ${minsAfter} min after opening (${openStr}).`;
     notifyHaidi(title, body);
 
     // Email to head barista (To:) and owner (CC:)
     const ownerEmail = (state.settings.owner_email || "coffeebeats@haidiyacoub.com").trim();
     const hbEmail    = (state.settings.head_barista_email || "").trim();
     const subj = encodeURIComponent(
-      `[No Stamp Alert] ${user.name} · ${branch} · ${todayStr}`
+      `[No Stamp Alert] ${user.name} · ${branch}${shiftTag} · ${todayStr}`
     );
     const mailBody = encodeURIComponent(
       `🚨 No Sign-In Stamp Alert\n\n` +
       `Barista: ${user.name}\n` +
-      `Branch: ${branch}\n` +
+      `Branch: ${branch}${shiftTag}\n` +
       `Date: ${todayStr}\n` +
       `Opening time: ${openStr}\n` +
       `Minutes since opening: ${minsAfter}\n\n` +
@@ -7932,7 +7944,7 @@ function checkNoStampAlert() {
     );
     const toAddr  = hbEmail || ownerEmail;
     const ccPart  = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
-    const noStampSubj = hbEmail ? subj : encodeURIComponent(`[PRIORITY — No Head Barista] [No Stamp Alert] ${user.name} · ${branch} · ${todayStr}`);
+    const noStampSubj = hbEmail ? subj : encodeURIComponent(`[PRIORITY — No Head Barista] [No Stamp Alert] ${user.name} · ${branch}${shiftTag} · ${todayStr}`);
     try { window.open(`mailto:${encodeURIComponent(toAddr)}?subject=${noStampSubj}${ccPart}&body=${mailBody}`, "_blank"); } catch(e) {}
   }
 }
@@ -13469,7 +13481,7 @@ routes.roster = function (u) {
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Sign-in stamps are checked against these times. 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time or no stamp = no show = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
+    "Sign-in stamps are checked against these times — morning AND evening shift each need their own stamp, with the same rules (evening rule starts 20 Oct 2026). 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time or no stamp = no show = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
   for (const otBranch of ["maadi", "zawya"]) {
     const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
@@ -13873,14 +13885,14 @@ routes.roster = function (u) {
       body.appendChild(el("div", { class: "banner-arch" },
         T("Assign baristas per shift per day — changes save instantly and take effect immediately. " +
         "You can update mid-week at any time (sick calls, emergencies). " +
-        "⚠ The morning shift barista is the one responsible for the sign-in stamp. " +
-        "If you swap the morning assignment, the penalty system picks up the new name automatically.",
+        "⚠ The barista on each shift (morning and evening) is responsible for that shift's sign-in stamp. " +
+        "If you swap an assignment, the penalty system picks up the new name automatically.",
         "عيّن البريستا لكل شيفت في كل يوم — التغييرات تُحفظ فوراً وتُطبَّق مباشرة. " +
         "يمكنك التحديث في منتصف الأسبوع في أي وقت (إجازات مرضية، طوارئ). " +
-        "⚠ بريستا شيفت الصباح هو المسؤول عن بصمة الحضور. " +
-        "إذا بدّلت تعيين الصباح، نظام الخصومات يأخذ الاسم الجديد تلقائياً.")));
+        "⚠ بريستا كل شيفت (الصباح والمساء) مسؤول عن بصمة حضور شيفته. " +
+        "إذا بدّلت أي تعيين، نظام الخصومات يأخذ الاسم الجديد تلقائياً.")));
     } else {
-      body.appendChild(el("div", { class: "banner-arch" }, T("Read-only — your weekly schedule. The morning shift barista is responsible for the daily sign-in stamp. Ask the head barista if anything looks off.","للعرض فقط — جدولك الأسبوعي. بريستا شيفت الصباح مسؤول عن بصمة الحضور اليومية. اسأل رئيس البريستا إذا لاحظت خطأ.")));
+      body.appendChild(el("div", { class: "banner-arch" }, T("Read-only — your weekly schedule. Each shift's barista (morning and evening) is responsible for that shift's sign-in stamp. Ask the head barista if anything looks off.","للعرض فقط — جدولك الأسبوعي. بريستا كل شيفت (الصباح والمساء) مسؤول عن بصمة حضور شيفته. اسأل رئيس البريستا إذا لاحظت خطأ.")));
     }
 
     const staff = state.users.filter(x => x.active && (x.role === "barista" || x.role === "head_barista"));
@@ -17002,15 +17014,45 @@ routes.signin_stamp_new = function (u) {
     forSel.value = forUserId;
   };
 
-  const branchPicker = makeBranchPicker(stampBranches, () => branch, b => { branch = b; fillForSel(); });
+  // Morning and evening shifts each need their own stamp. Default to the shift the barista is
+  // rostered on here today (if on both, the one not stamped yet), else by the time of day.
+  let shift = "morning";
+  const shiftSel = el("select", {}, [
+    el("option", { value: "morning" }, T("☀️ Morning shift","☀️ شيفت الصباح")),
+    el("option", { value: "night" },   T("🌙 Evening shift","🌙 الشيفت المسائي")),
+  ]);
+  const guessShift = () => {
+    const nowD = new Date(), todayS = localISODate(nowD), dayKey = ROSTER_DAYS[nowD.getDay()], wk = sundayOf(todayS);
+    const whoId = forUserId || u.id;
+    const mine = (state.rosters || []).filter(r => r.week_of === wk && r.day === dayKey &&
+      String(r.branch || "").toLowerCase() === String(branch || "").toLowerCase() && r.user_id === whoId).map(r => r.shift);
+    const stamped = sh => (state.signin_stamps || []).some(x => notTest(x) && x.by === whoId && localISODate(new Date(x.at)) === todayS &&
+      String(x.branch || "").toLowerCase() === String(branch || "").toLowerCase() && stampShift(x) === sh);
+    const hasM = mine.includes("morning"), hasN = mine.includes("night");
+    if (hasM && hasN) return stamped("morning") ? "night" : "morning";
+    if (hasN) return "night";
+    if (hasM) return "morning";
+    const mid = (new Date(todayS + "T" + branchShiftOpen(branch, "morning", todayS) + ":00").getTime() +
+                 new Date(todayS + "T" + branchShiftOpen(branch, "night",   todayS) + ":00").getTime()) / 2;
+    return nowD.getTime() >= mid ? "night" : "morning";
+  };
+  const syncShift = () => { shift = guessShift(); shiftSel.value = shift; };
+  shiftSel.addEventListener("change", () => { shift = shiftSel.value; });
+
+  const branchPicker = makeBranchPicker(stampBranches, () => branch, b => { branch = b; fillForSel(); syncShift(); });
   wrap.appendChild(branchPicker);
 
   if (forSel) {
     fillForSel();
-    forSel.addEventListener("change", () => { forUserId = forSel.value; });
+    forSel.addEventListener("change", () => { forUserId = forSel.value; syncShift(); });
     wrap.appendChild(el("label", {}, T("Signing in for","تسجيل الحضور لـ")));
     wrap.appendChild(forSel);
   }
+  syncShift();
+  wrap.appendChild(el("label", {}, T("Shift","الشيفت")));
+  wrap.appendChild(shiftSel);
+  wrap.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
+    T("Every shift needs its own sign-in stamp — morning and evening. Evening stamps follow the same late rules as the morning.","كل شيفت يحتاج بصمة حضور خاصة به — الصباح والمساء. بصمة المساء تخضع لنفس قواعد التأخير.")));
 
   wrap.appendChild(el("div", { class: "card", style: { background: "var(--surface-2)", marginBottom: "14px" } }, [
     el("div", { style: { fontWeight: "600", marginBottom: "4px" } }, T("How to stamp in","كيفية تسجيل الحضور")),
@@ -17050,13 +17092,13 @@ routes.signin_stamp_new = function (u) {
         // Score against the time the clock photo was taken (EXIF), falling back to upload time.
         const _photoTime       = await photoClockTime(photoBlobs, s.at);
         const _clockAt         = _photoTime ? _photoTime.toISOString() : s.at;
-        const _stampMinsLate   = minsLateAt(branch, _clockAt);
+        const _stampMinsLate   = minsLateAt(branch, _clockAt, shift);
         const _earlyBonus      = _stampMinsLate <= -15;
 
         state.signin_stamps.push({
           id: uuid(), at: s.at, by: who.id, by_name: who.name, device: s.device,
           ...(onBehalf ? { entered_by: s.by, entered_by_name: s.by_name } : {}),
-          branch,
+          branch, shift,
           photo_id: photoIds[0], photo_name: photoNames[0],
           photo_ids: photoIds, photo_names: photoNames,
           drive_ids: stampPhotoField.getDriveIds(),
@@ -17078,24 +17120,25 @@ routes.signin_stamp_new = function (u) {
           const dayKey     = ROSTER_DAYS[dayIndex];
           const weekOf     = sundayOf(todayStr);
           if (isBranchClosed(branch, todayStr)) return; // branch closed that day — nothing expected
+          if (!shiftStampRuleActive(shift, todayStr)) return; // evening stamp rule not live yet
 
-          // Sign-in stamp = morning shift only.
-          // Only penalise if this barista is currently assigned to the morning shift
+          // Morning and evening shifts are each scored on their own stamp.
+          // Only penalise if this barista is currently assigned to that shift
           // at this branch today — checked live so mid-week swaps take effect immediately.
           const morningEntry = (state.rosters || []).find(r =>
             r.week_of === weekOf &&
             r.branch  === branch.toLowerCase() &&
             r.day     === dayKey &&
-            r.shift   === "morning" &&
+            r.shift   === shift &&
             r.user_id === who.id
           );
           if (!morningEntry) {
-            // Check if this barista is covering someone else's morning shift
+            // Check if this barista is covering someone else's shift
             const anyMorningShift = (state.rosters || []).find(r =>
               r.week_of === weekOf &&
               r.branch  === branch.toLowerCase() &&
               r.day     === dayKey &&
-              r.shift   === "morning"
+              r.shift   === shift
             );
             if (anyMorningShift) {
               // Mark the stamp as a substitute cover and award +50 punctuality KPI bonus
@@ -17104,7 +17147,7 @@ routes.signin_stamp_new = function (u) {
               saveState();
               toast(T(`⭐ Substitute cover recorded for ${who.name} — +50 punctuality bonus`, `⭐ تم تسجيل تغطية بديلة لـ ${who.name} — +50 نقطة انضباط`), "ok");
             }
-            return; // not today's assigned morning barista — no late penalty
+            return; // not today's assigned barista for this shift — no late penalty
           }
 
           const minsLate  = _stampMinsLate; // photo capture time vs morning opening
@@ -17116,14 +17159,14 @@ routes.signin_stamp_new = function (u) {
 
           // Prevent duplicate auto-penalty for same person on same date
           const already = (state.penalties || []).find(p =>
-            p.auto_late && p.user_id === who.id && p.date === todayStr
+            p.auto_late && p.user_id === who.id && p.date === todayStr && stampShift(p) === shift
           );
           if (already) return;
 
           const lateWhat = noPhotoTime ? "clock-in photo has no readable time" : `${minsLate} min late`;
           notifyLeadershipRole("weekly_schedule",
             `Late arrival — ${who.name}`,
-            `${lateWhat} at ${branch} on ${todayStr}.`
+            `${lateWhat} at ${branch} on ${todayStr}${shift === "night" ? " (evening shift)" : ""}.`
           );
 
           // Penalty tier: 10–60 min = ½ day · 60–120 min = 1 day · >120 min = 2 days · no photo time = 3 days (no show)
@@ -17148,11 +17191,12 @@ routes.signin_stamp_new = function (u) {
             id: uuid(), at: s.at, by: s.by, by_name: s.by_name,
             user_id: who.id, barista: who.name,
             kind, reason: "late",
+            ...(shift === "night" ? { shift: "night" } : {}),
             date: todayStr,
             month: thisMonth,
             branch,
             amount,
-            note: `Auto: ${lateWhat} — ${kLabel} deducted${doubleNote} (sign-in stamp)`,
+            note: `Auto: ${lateWhat} — ${kLabel} deducted${doubleNote} (${shift === "night" ? "evening " : ""}sign-in stamp)`,
             auto_late: true,
             ...(noPhotoTime ? { no_photo_time: true } : {}),
           });
@@ -17220,10 +17264,22 @@ function branchMorningOpen(branch, dateStr) {
   }
   return ((state.branch_opening_times || {})[b] || {}).morning || (b === "maadi" ? "10:00" : "12:00");
 }
-// Minutes between a branch's morning opening and `iso` on that same local day (negative = early).
-function minsLateAt(branch, iso) {
+// Evening ("night" on the roster) shift: from this date it needs its own sign-in stamp, with the
+// same late tiers, grace period, automatic no-show deduction, alerts and KPI as the morning shift.
+const NIGHT_STAMP_RULES_START = "2026-10-20";
+// Stamps saved before the evening shift existed carry no `shift` and are morning stamps.
+function stampShift(x) { return x && x.shift === "night" ? "night" : "morning"; }
+function shiftStampRuleActive(shift, dateStr) { return shift !== "night" || dateStr >= NIGHT_STAMP_RULES_START; }
+// Opening time ("HH:MM") for one shift — morning honours the one-day override from the Weekly Schedule.
+function branchShiftOpen(branch, shift, dateStr) {
+  if (shift !== "night") return branchMorningOpen(branch, dateStr);
+  const b = (branch || "maadi").toLowerCase();
+  return ((state.branch_opening_times || {})[b] || {}).night || (b === "maadi" ? "16:00" : "18:00");
+}
+// Minutes between a branch's shift opening and `iso` on that same local day (negative = early).
+function minsLateAt(branch, iso, shift) {
   const t = new Date(iso);
-  const openMs = new Date(localISODate(t) + "T" + branchMorningOpen(branch, localISODate(t)) + ":00").getTime();
+  const openMs = new Date(localISODate(t) + "T" + branchShiftOpen(branch, shift, localISODate(t)) + ":00").getTime();
   return Math.round((t.getTime() - openMs) / 60000);
 }
 // When a stamp counts as clocked in: the photo's capture time if it could be read, else upload time.
@@ -17296,7 +17352,7 @@ async function photoClockTime(blobs, uploadIso) {
 
 function _signinMinsLate(s) {
   if (s.mins_late !== undefined) return s.mins_late;
-  try { return minsLateAt(s.branch, stampClockTime(s)); } catch (e) { return 0; }
+  try { return minsLateAt(s.branch, stampClockTime(s), stampShift(s)); } catch (e) { return 0; }
 }
 // Same thresholds as the salary deduction: ≤10 min late is the grace period.
 function _signinStatus(minsLate) {
@@ -17320,7 +17376,7 @@ function _retierLatePenalty(s, stampedAt) {
   const log = [];
   const mins = s.mins_late;
   const dateStr = localISODate(new Date(s.at));
-  const p = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === dateStr);
+  const p = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === dateStr && stampShift(x) === stampShift(s));
   if (!p) return log;
   // A no-photo-time penalty only changes once a real clock time exists (photo or owner-entered).
   if (p.no_photo_time && s.clock_source !== "photo" && s.clock_source !== "manual") return log;
@@ -17382,8 +17438,8 @@ async function rescoreSigninStamps(fromDate) {
       if (!photo || d < photo) photo = d;
     }
     const clockAt = photo ? photo.toISOString() : stampClockTime(s);
-    const mins = minsLateAt(s.branch, clockAt);
-    log.push(`${s.by_name} · ${s.branch} · ${localISODate(new Date(s.at))} — opening ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))}, ` +
+    const mins = minsLateAt(s.branch, clockAt, stampShift(s));
+    log.push(`${s.by_name} · ${s.branch}${stampShift(s) === "night" ? " (evening)" : ""} · ${localISODate(new Date(s.at))} — opening ${branchShiftOpen(s.branch, stampShift(s), localISODate(new Date(s.at)))}, ` +
       (photo ? `photo time ${fmtDate(clockAt)}`
         : s.clock_source === "manual" ? `time set from photo ${fmtDate(clockAt)}`
         : `upload time (${[...new Set(why)].join(", ") || "photo not found"})`) +
@@ -17515,7 +17571,7 @@ routes.signin_stamp_list = function (u) {
         ...(hasPhoto ? { onClick: () => viewSigninStampPhotos(s, draw) } : {}),
       }, [
         el("div", { class: "grow" }, [
-          el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
+          el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, stampShift(s) === "night" ? T(" · 🌙 Evening"," · 🌙 مسائي") : "", hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
           el("div", { class: "sub" }, `${fmtDate(stampClockTime(s))} · ${minStr}${s.note ? " · " + s.note : ""}`),
           s.edit_note ? el("div", { class: "muted small" }, "✎ " + s.edit_note) : null,
           s.entered_by_name ? el("div", { class: "muted small", style: { fontWeight: "600" } },
@@ -17562,8 +17618,10 @@ function editSigninStamp(s) {
   const dateInp = el("input", { type: "date", value: localISODate(new Date(s.at)) });
   const timeInp = el("input", { type: "time", value: pad(clock.getHours()) + ":" + pad(clock.getMinutes()) });
 
+  const shiftSel = el("select", {}, [el("option", { value: "morning" }, T("Morning shift","شيفت الصباح")), el("option", { value: "night" }, T("Evening shift","الشيفت المسائي"))]);
+  shiftSel.value = stampShift(s);
   const findPenalty = () => (state.penalties || []).find(x =>
-    x.auto_late && x.user_id === s.by && x.date === localISODate(new Date(s.at)));
+    x.auto_late && x.user_id === s.by && x.date === localISODate(new Date(s.at)) && stampShift(x) === stampShift(s));
 
   const save = () => {
     if (!dateInp.value || !timeInp.value) return toast(T("Pick a day and time.","اختر اليوم والوقت."), "error");
@@ -17577,20 +17635,21 @@ function editSigninStamp(s) {
       ...s, id: uuid(),
       by: who.id, by_name: who.name,
       branch: branchSel.value,
+      shift: shiftSel.value,
       at: at.toISOString(),
       clock_at: clockAt.toISOString(),
       clock_source: clockAt.toISOString() === s.clock_at ? s.clock_source : "manual",
       last_edited_at: stampedAt, last_edited_by_name: cu.name,
       edit_note: `Edited by ${cu.name} · ${fmtDate(stampedAt)} (was ${s.by_name} · ${localISODate(oldAt)}${String(s.branch || "").toLowerCase() !== branchSel.value ? " · " + s.branch : ""})`,
     };
-    ns.mins_late = minsLateAt(ns.branch, ns.clock_at);
+    ns.mins_late = minsLateAt(ns.branch, ns.clock_at, ns.shift);
     ns.early_bonus = ns.mins_late <= -15;
     state.signin_stamps = state.signin_stamps.filter(x => x.id !== s.id);
     recordDeletion(s.id);
     state.signin_stamps.push(ns);
     let penMsg = "";
     if (pen) {
-      pen.user_id = who.id; pen.barista = who.name; pen.branch = ns.branch;
+      pen.user_id = who.id; pen.barista = who.name; pen.branch = ns.branch; pen.shift = ns.shift;
       pen.date = localISODate(at); pen.month = pen.date.slice(0, 7);
       pen.last_edited_at = stampedAt;
       const log = _retierLatePenalty(ns, stampedAt);
@@ -17623,8 +17682,9 @@ function editSigninStamp(s) {
       `${s.by_name} · ${s.branch} · ${fmtDate(stampClockTime(s))}${s.entered_by_name ? " · ✍ " + s.entered_by_name : ""}`),
     el("label", {}, T("Barista","الباريستا")), whoSel,
     el("label", {}, T("Branch","الفرع")), branchSel,
+    el("label", {}, T("Shift","الشيفت")), shiftSel,
     el("label", {}, T("Day","اليوم")), dateInp,
-    el("label", {}, T(`Clock-in time (opening ${branchMorningOpen(branchSel.value)})`, `وقت الحضور (الفتح ${branchMorningOpen(branchSel.value)})`)), timeInp,
+    el("label", {}, T(`Clock-in time (opening ${branchShiftOpen(branchSel.value, stampShift(s))})`, `وقت الحضور (الفتح ${branchShiftOpen(branchSel.value, stampShift(s))})`)), timeInp,
     el("button", { class: "btn", style: { marginTop: "14px" }, onClick: save }, T("Save changes","حفظ التعديلات")),
     el("button", { class: "btn ghost", style: { marginTop: "8px", color: "var(--bad)" }, onClick: del }, T("🗑 Delete this stamp","🗑 حذف هذه البصمة")),
   ]));
@@ -17660,21 +17720,21 @@ function viewSigninStampPhotos(s, onSaved) {
       const before = s.mins_late;
       s.clock_at = clockAt.toISOString();
       s.clock_source = "manual";
-      s.mins_late = minsLateAt(s.branch, s.clock_at);
+      s.mins_late = minsLateAt(s.branch, s.clock_at, stampShift(s));
       s.early_bonus = s.mins_late <= -15;
       s.last_edited_at = stampedAt;
       s.last_edited_by_name = currentUser()?.name || "?";
       const log = _retierLatePenalty(s, stampedAt);
       saveState();
-      toast(T(`${s.by_name}: ${before ?? "?"} → ${s.mins_late} min (opening ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))})${log.length ? " · penalty updated" : ""}`,
+      toast(T(`${s.by_name}: ${before ?? "?"} → ${s.mins_late} min (opening ${branchShiftOpen(s.branch, stampShift(s), localISODate(new Date(s.at)))})${log.length ? " · penalty updated" : ""}`,
               `${s.by_name}: ${before ?? "?"} ← ${s.mins_late} دقيقة`), "ok");
       closeSheet();
       if (onSaved) onSaved();
     });
     body.appendChild(el("div", { class: "card", style: { background: "var(--surface-2)", marginBottom: "12px" } }, [
       el("div", { class: "muted small", style: { marginBottom: "6px" } },
-        T(`Time shown on the clock in the photo — lateness is scored from this (opening ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))}).`,
-          `الوقت الظاهر على الساعة في الصورة — يُحتسب التأخير منه (الفتح ${branchMorningOpen(s.branch, localISODate(new Date(s.at)))}).`)),
+        T(`Time shown on the clock in the photo — lateness is scored from this (opening ${branchShiftOpen(s.branch, stampShift(s), localISODate(new Date(s.at)))}).`,
+          `الوقت الظاهر على الساعة في الصورة — يُحتسب التأخير منه (الفتح ${branchShiftOpen(s.branch, stampShift(s), localISODate(new Date(s.at)))}).`)),
       el("div", { style: { display: "flex", gap: "8px", alignItems: "center" } }, [tInp, saveBtn]),
     ]));
   }
@@ -18940,7 +19000,7 @@ routes.handbook = function (u) {
     {
       number: "9", title: "Sign-In Stamps", ar_title: "بصمة الحضور",
       content: [
-        { type: "para", text: "The Sign-In Stamp is the official daily attendance record for all morning-shift baristas. Every morning shift must begin with a clock-in photo submitted through the Operations App." },
+        { type: "para", text: "The Sign-In Stamp is the official attendance record for every shift. Every morning shift AND every evening shift must begin with its own clock-in photo submitted through the Operations App. A missed evening stamp carries exactly the same penalties as a missed morning stamp." },
         { type: "subheader", text: "What counts as \"on time\"" },
         { type: "para", text: "\"Late\" is measured against your branch's opening time for the current month — the same time shown on your Weekly Schedule. That time is set by management each month and can change, so all the rules below are written relative to it, never to a fixed clock time. Lateness is the number of minutes between your stamp and that opening time." },
         { type: "subheader", text: "How to Submit a Sign-In Stamp" },
@@ -20167,18 +20227,20 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>Sign-In Stamp</strong> from the home screen <em>as soon as you arrive</em>.",
         "Select your branch: <strong>Maadi</strong> or <strong>Zawya</strong>.",
+        "Pick your <strong>shift</strong> (morning or evening) — it is pre-selected from your Weekly Schedule. <strong>Every shift, morning and evening, needs its own stamp, with exactly the same lateness, no-show and KPI rules.</strong> If you work both on the same day, stamp twice.",
         "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
         "Tap <strong>Submit clock-in</strong>.",
         "<strong>\"Late\" is measured against your branch's opening time for the current month</strong> — the time on your Weekly Schedule. It is set by management each month and can change, so the rules below are always relative to it, never to a fixed clock time.",
         "<strong>⚠ Automatic salary deduction:</strong> within 10 min after opening = <strong>no penalty</strong> (grace). 10–60 min late = <strong>½ day</strong>. 60–120 min late = <strong>1 full day</strong>. More than 120 min late = <strong>2 days</strong>. Lateness counts from when the clock photo was taken; a photo whose time can't be read = no show = <strong>3 days</strong>. No stamp for an assigned morning shift = no show = <strong>3 days</strong>, applied automatically. Each deduction is a share of one day's pay (monthly salary ÷ 30).",
         "<strong>Repeat-offender rule:</strong> from your 2nd late stamp in one calendar month onward, every further late penalty that month is <strong>doubled automatically</strong>.",
-        "<strong>Substitute cover:</strong> stamping a morning shift not assigned to you (covering a colleague) = no penalty even if late, plus <strong>+50 Punctuality KPI</strong>.",
+        "<strong>Substitute cover:</strong> stamping a shift not assigned to you (covering a colleague) = no penalty even if late, plus <strong>+50 Punctuality KPI</strong>.",
         "<strong>Punctuality KPI</strong> (separate from the salary deduction): starts at 100 each month. 30+ min early = <strong>+10</strong>. 15–30 min early = <strong>+5</strong>. On time / within grace = 0. 11–120 min late = <strong>−20</strong>. 120+ min late = <strong>−50</strong>. No stamp = <strong>−100</strong>. Cover = <strong>+50</strong>. Anything past 0 spills into your overall KPI.",
         "<strong>Notifications:</strong> any stamp more than 10 min late sends an immediate in-app alert + email to the owner and head barista. No stamp within 1 hour of opening sends a second alert automatically.",
       ],
       ar_steps: [
         "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
         "اختر الفرع: <strong>المعادي</strong> أو <strong>زاوية</strong>.",
+        "اختر <strong>الشيفت</strong> (صباحي أو مسائي) — يُحدَّد تلقائياً من جدولك الأسبوعي. <strong>كل شيفت، صباحي ومسائي، يحتاج بصمة خاصة به بنفس قواعد التأخير وعدم الحضور ونقاط الأداء.</strong> إذا عملت الشيفتين في نفس اليوم، سجّل بصمتين.",
         "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك.",
         "اضغط <strong>تسجيل الحضور</strong>.",
         "<strong>يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك للشهر الحالي</strong> — الموعد الظاهر في جدولك الأسبوعي. تحدده الإدارة كل شهر وقد يتغير، لذا القواعد أدناه دائماً نسبةً إليه وليس إلى وقت ثابت.",
@@ -20944,7 +21006,7 @@ routes.app_guide = function (u) {
       en_title: "Key Rules — Must Follow",
       ar_title: "قواعد أساسية — يجب الالتزام بها",
       en_steps: [
-        "<strong>🕐 Sign-In Stamp</strong>: Stamp the moment you arrive. Never stamp for someone else. Penalties are automatic.",
+        "<strong>🕐 Sign-In Stamp</strong>: Stamp the moment you arrive — for every shift, morning and evening. Never stamp for someone else. Penalties are automatic.",
         "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small. If nothing was wasted, tap No Waste. This is mandatory every shift — missing entries deduct −10 pts from your Waste Control KPI.",
         "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
         "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
@@ -21285,7 +21347,7 @@ function kpiPunctualityScore(userId, cutoff) {
 
   const stampMap = {};
   (state.signin_stamps||[]).filter(s => notTest(s) && s.by === userId).forEach(s => {
-    const key = localISODate(new Date(s.at)) + "|" + (s.branch||"maadi").toLowerCase();
+    const key = localISODate(new Date(s.at)) + "|" + (s.branch||"maadi").toLowerCase() + "|" + stampShift(s);
     if (!stampMap[key]) stampMap[key] = s;
   });
 
@@ -21301,14 +21363,13 @@ function kpiPunctualityScore(userId, cutoff) {
     const weekOf   = sundayOf(dateStr);
     const entries  = (state.rosters||[]).filter(r =>
       r.week_of === weekOf && r.day === dayKey &&
-      r.shift === "morning" && r.user_id === userId
+      (r.shift === "morning" || r.shift === "night") && r.user_id === userId &&
+      shiftStampRuleActive(r.shift, dateStr)
     );
     for (const entry of entries) {
       shiftsFound++;
       const branch  = (entry.branch||"maadi").toLowerCase();
-      const openStr = branchMorningOpen(branch, dateStr);
-      const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
-      const st      = stampMap[dateStr + "|" + branch];
+      const st      = stampMap[dateStr + "|" + branch + "|" + stampShift(entry)];
       if (!st) {
         delta -= 100;
       } else {
@@ -21356,7 +21417,8 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
   const dayKey   = ROSTER_DAYS[dayIndex];
   const weekOf   = sundayOf(dateStr);
   const morning  = (state.rosters||[]).filter(r =>
-    r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+    r.week_of === weekOf && r.day === dayKey && (r.shift === "morning" || r.shift === "night") &&
+    shiftStampRuleActive(r.shift, dateStr)
   );
   if (!morning.length) return 0;
   state.penalties = state.penalties || [];
@@ -21369,9 +21431,10 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
     if (!user) continue;
     if (isBranchClosed(branch, dateStr)) continue; // branch closed — not a no-show
     // Check for existing stamp that day+branch
+    const entShift = stampShift(entry);
     const hasStamp = (state.signin_stamps||[]).some(s =>
       notTest(s) && s.by === uid && localISODate(new Date(s.at)) === dateStr &&
-      (s.branch||"").toLowerCase() === branch
+      (s.branch||"").toLowerCase() === branch && stampShift(s) === entShift
     );
     if (hasStamp) continue;
     // Approved leave that day → not a no-show.
@@ -21381,13 +21444,13 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
     if (onLeave) continue;
     // Check no duplicate auto_no_stamp penalty for same user+date
     const already = state.penalties.find(p =>
-      p.auto_no_stamp && p.user_id === uid && p.date === dateStr
+      p.auto_no_stamp && p.user_id === uid && p.date === dateStr && stampShift(p) === entShift
     );
     if (already) continue;
     // Deterministic id: owner + head barista devices both run the auto check, and the
     // union-by-id merge collapses their copies into one. Also lets a deleted (tombstoned)
     // penalty stay deleted instead of being re-created on the next check.
-    const pid = `nostamp_${uid}_${dateStr}`;
+    const pid = entShift === "night" ? `nostamp_night_${uid}_${dateStr}` : `nostamp_${uid}_${dateStr}`;
     if (_tombstoneSet().has(pid)) continue;
     const salary = getSalaryForMonth(uid, dateStr.slice(0, 7));
     const nsKind = "three_days";
@@ -21396,14 +21459,15 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
       id: pid, at: now(), by: appliedBy.by, by_name: appliedBy.by_name,
       user_id: uid, barista: user.name,
       kind: nsKind, reason: "no_show",
+      ...(entShift === "night" ? { shift: "night" } : {}),
       date: dateStr, month: dateStr.slice(0, 7), branch,
       amount,
-      note: `Auto: no sign-in stamp — 3 days deducted`,
+      note: `Auto: no ${entShift === "night" ? "evening-shift " : ""}sign-in stamp — 3 days deducted`,
       auto_no_stamp: true,
     });
     notifyLeadershipRole("weekly_schedule",
       `Missing stamp — ${user.name}`,
-      `No sign-in recorded for ${dateStr} at ${branch}. 3-day deduction applied.`
+      `No ${entShift === "night" ? "evening-shift " : ""}sign-in recorded for ${dateStr} at ${branch}. 3-day deduction applied.`
     );
     created++;
   }
@@ -21431,7 +21495,7 @@ function autoApplyMissingStamps() {
   const stale = (state.penalties || []).filter(p =>
     p.auto_no_stamp && typeof p.id === "string" && p.id.startsWith("nostamp_") &&
     (state.signin_stamps || []).some(s => notTest(s) && s.by === p.user_id &&
-      localISODate(new Date(s.at)) === p.date && (s.branch || "").toLowerCase() === p.branch)
+      localISODate(new Date(s.at)) === p.date && (s.branch || "").toLowerCase() === p.branch && stampShift(s) === stampShift(p))
   );
   if (stale.length) {
     const ids = new Set(stale.map(p => p.id));
@@ -21685,22 +21749,22 @@ function kpiLeadershipScore(userId, month) {
       const dayKey   = ROSTER_DAYS[dayIndex];
       const weekOf   = sundayOf(dateStr);
       const morningEntries = (state.rosters || []).filter(r =>
-        r.week_of === weekOf && r.day === dayKey && r.shift === "morning"
+        r.week_of === weekOf && r.day === dayKey && (r.shift === "morning" || r.shift === "night") &&
+        shiftStampRuleActive(r.shift, dateStr)
       );
       for (const entry of morningEntries) {
         const branch  = (entry.branch || "maadi").toLowerCase();
         if (isBranchClosed(branch, dateStr)) continue;
-        const openStr = branchMorningOpen(branch, dateStr);
-        const openMs  = new Date(dateStr + "T" + openStr + ":00").getTime();
         const stamp = (state.signin_stamps || []).find(s =>
           notTest(s) &&
           s.by === entry.user_id &&
           localISODate(new Date(s.at)) === dateStr &&
-          (s.branch || "").toLowerCase() === branch
+          (s.branch || "").toLowerCase() === branch &&
+          stampShift(s) === stampShift(entry)
         );
         if (!stamp) {
           const hasNoStampPenalty = (state.penalties || []).some(p =>
-            p.auto_no_stamp && p.user_id === entry.user_id && p.date === dateStr
+            p.auto_no_stamp && p.user_id === entry.user_id && p.date === dateStr && stampShift(p) === stampShift(entry)
           );
           if (hasNoStampPenalty) deductions += 15;
         } else {
