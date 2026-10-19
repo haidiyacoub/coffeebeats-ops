@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261019-580 -->
+<!-- CB_BUILD:20261019-722 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261019-580";
+  var BUILD = "20261019-722";
   (function() {
     function checkFresh() {
       try {
@@ -7141,7 +7141,7 @@ routes.purchase_new = function (u) {
     note: "",
   }];
   // Receipt photos — initialized once, re-appended on each draw()
-  const receiptPhotoField = makePhotoField({ label: T("Receipt photo(s) or PDF","صورة/صور الفاتورة أو PDF"), formLabel: "Purchase Receipt", allowPdf: true });
+  const receiptPhotoField = makePhotoField({ label: T("Receipt photo(s)","صورة/صور الفاتورة"), formLabel: "Purchase Receipt" });
 
   const branchPicker = makeBranchPicker(pickerBranches, () => branch, b => {
     branch = b;
