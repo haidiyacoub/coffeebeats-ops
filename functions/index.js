@@ -306,7 +306,7 @@ exports.sendDailyShiftSummary = onSchedule(
     lines.push("──────────────────────");
 
     if (todayCloses.length === 0) {
-      lines.push("⚠️ No shift closes recorded today.");
+      lines.push(`⚠️ No shift closes recorded today — missing: ${COMPLIANCE_BRANCHES.map(_cap).join(", ")}.`);
     } else {
       const branches = [...new Set(todayCloses.map(c => c.branch))].sort();
       for (const branch of branches) {
@@ -319,6 +319,8 @@ exports.sendDailyShiftSummary = onSchedule(
         if (bSums.talabat_credit + bSums.talabat_cash > 0)
           lines.push(`   🛵 Talabat: ${_fmt(bSums.talabat_credit + bSums.talabat_cash)}`);
       }
+      const noClose = COMPLIANCE_BRANCHES.filter(br => !branches.some(x => String(x || "").toLowerCase() === br));
+      if (noClose.length) lines.push(`⚠️ No shift close yet: ${noClose.map(_cap).join(", ")}`);
       lines.push("──────────────────────");
       lines.push(`✅ *TOTAL TODAY: ${_fmt(_rowTotal(_sumPayments(todayCloses)))}*`);
     }
