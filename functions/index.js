@@ -289,16 +289,23 @@ async function _sendEmail(subject, text, { urgent = false, toHeadBarista = false
 }
 
 // ─── sendDailyShiftSummary ────────────────────────────────────────────────────
-// Runs at 23:30 Cairo time (UTC+2 = 21:30 UTC) every day.
+// Runs at 23:30 Cairo time every day (Cairo timezone, so DST can't shift it past midnight).
 exports.sendDailyShiftSummary = onSchedule(
-  { schedule: "30 21 * * *", timeZone: "UTC", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  { schedule: "30 23 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
   async () => {
     const db = getDb();
-    const today = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const today = localISODate(new Date());
 
-    const opSnap      = await db.collection("state").doc("operations").get();
-    const allCloses   = (opSnap.exists ? opSnap.data().shift_closes : null) || [];
-    const todayCloses = allCloses.filter(c => c.date === today);
+    // Shift closes live in month-shard docs (sc__YYYY-MM), not the old operations doc.
+    const [scDoc, tombDoc] = await Promise.all([
+      db.collection("state").doc(`sc__${today.slice(0, 7)}`).get(),
+      db.collection("state").doc("tombstones").get(),
+    ]);
+    const tomb = new Set((tombDoc.exists && Array.isArray(tombDoc.data().deleted_ids) ? tombDoc.data().deleted_ids : [])
+      .map(t => (t && typeof t === "object" ? t.id : t)));
+    const allCloses   = (scDoc.exists && Array.isArray(scDoc.data().shift_closes)) ? scDoc.data().shift_closes : [];
+    const todayCloses = allCloses.filter(c => c && !c.is_test && !c.deleted && !c.deleted_at && !tomb.has(c.id) && c.date === today)
+      .map(c => ({ ...c, branch: String(c.branch || "").toLowerCase() }));
 
     const lines = [];
     lines.push("☕ *Coffee Beats — Daily Shift Summary*");
@@ -472,8 +479,15 @@ exports.salesReconciliation = onDocumentUpdated(
     // Detect which months are represented in the uploaded sales
     const months = [...new Set(newSales.filter(s => s.date).map(s => s.date.slice(0, 7)))].sort();
 
-    const opSnap    = await db.collection("state").doc("operations").get();
-    const allCloses = (opSnap.exists ? opSnap.data().shift_closes : null) || [];
+    // Shift closes live in month-shard docs (sc__YYYY-MM), not the old operations doc.
+    const [scDocs, tombDoc] = await Promise.all([
+      Promise.all(months.map(m => db.collection("state").doc(`sc__${m}`).get())),
+      db.collection("state").doc("tombstones").get(),
+    ]);
+    const tomb = new Set((tombDoc.exists && Array.isArray(tombDoc.data().deleted_ids) ? tombDoc.data().deleted_ids : [])
+      .map(t => (t && typeof t === "object" ? t.id : t)));
+    const allCloses = scDocs.flatMap(d => (d.exists && Array.isArray(d.data().shift_closes)) ? d.data().shift_closes : [])
+      .filter(c => c && !c.is_test && !c.deleted && !c.deleted_at && !tomb.has(c.id));
 
     const lines = [];
     lines.push("📊 *Coffee Beats — Sales Reconciliation*");
