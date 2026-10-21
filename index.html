@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261019-722 -->
+<!-- CB_BUILD:20261021-108 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261019-722";
+  var BUILD = "20261021-108";
   (function() {
     function checkFresh() {
       try {
@@ -5619,7 +5619,9 @@ routes.waste_new = function (u) {
 // One calendar per branch for the chosen month. Green = at least one entry that day,
 // red = nothing logged on a past day, grey = today/future, before the branch's first entry,
 // or a day the branch was marked closed. Header shows how many days were missed.
-function missingDaysCard(u, { title, rows, dayOf }) {
+// Optional `shiftOf(row)` + `requiredShifts(branch, iso)` (sign-in stamps): a past day where only some of the
+// rostered shifts have an entry is orange (partial); green needs every required shift, red needs none.
+function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts }) {
   const viewAll = u.role === "owner" || u.role === "accountant";
   const branches = ["maadi", "zawya"].filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
   const card = el("div", { class: "card", style: { marginBottom: "14px" } });
@@ -5627,7 +5629,8 @@ function missingDaysCard(u, { title, rows, dayOf }) {
   const live = (rows || []).filter(r => notTest(r) && !r.deleted);
   const bOf = r => String(r.branch || "").toLowerCase();
   const byBranch = {};
-  branches.forEach(b => { const set = new Set(); live.filter(r => bOf(r) === b).forEach(r => { try { const d = dayOf(r); if (d) set.add(d); } catch (e) {} }); byBranch[b] = set; });
+  const shiftsByDay = {};   // branch|iso → Set of shifts that have an entry
+  branches.forEach(b => { const set = new Set(); live.filter(r => bOf(r) === b).forEach(r => { try { const d = dayOf(r); if (d) { set.add(d); if (shiftOf) (shiftsByDay[b + "|" + d] = shiftsByDay[b + "|" + d] || new Set()).add(shiftOf(r)); } } catch (e) {} }); byBranch[b] = set; });
   const closed = new Set((state.branch_closures || []).map(c => bOf(c) + "|" + c.date));
   const todayISO = localISODate(new Date());
   let month = todayISO.slice(0, 7);
@@ -5644,7 +5647,7 @@ function missingDaysCard(u, { title, rows, dayOf }) {
     for (const b of branches) {
       const set = byBranch[b];
       const first = set.size ? [...set].sort()[0] : null;
-      let missed = 0;
+      let missed = 0, partial = 0;
       const grid = el("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "3px", marginBottom: "6px" } });
       for (let i = 0; i < lead; i++) grid.appendChild(el("div", {}));
       for (let d = 1; d <= n; d++) {
@@ -5652,13 +5655,18 @@ function missingDaysCard(u, { title, rows, dayOf }) {
         const has = set.has(iso);
         const counts = first && iso >= first && iso < todayISO && !closed.has(b + "|" + iso);
         const miss = !has && counts;
+        const need = (requiredShifts && has && iso < todayISO && !closed.has(b + "|" + iso)) ? requiredShifts(b, iso) : [];
+        const lacking = need.filter(sh => !(shiftsByDay[b + "|" + iso] || new Set()).has(sh));
+        const part = has && lacking.length > 0;
         if (miss) missed++;
-        const bg = has ? "rgba(34,160,90,.18)" : miss ? "rgba(200,40,40,.28)" : "transparent";
-        const col = has ? "var(--ok)" : miss ? "var(--danger, #b91c1c)" : "var(--muted, #888)";
-        grid.appendChild(el("div", { title: iso + (has ? " ✓" : miss ? " ✗ missing" : ""), style: { textAlign: "center", fontSize: "12px", padding: "5px 0", borderRadius: "6px", border: "1px solid var(--border)", background: bg, color: col, fontWeight: miss ? "700" : "500" } }, String(d)));
+        if (part) partial++;
+        const bg = part ? "rgba(245,140,20,.28)" : has ? "rgba(34,160,90,.18)" : miss ? "rgba(200,40,40,.28)" : "transparent";
+        const col = part ? "#c2610c" : has ? "var(--ok)" : miss ? "var(--danger, #b91c1c)" : "var(--muted, #888)";
+        const tip = part ? " ◐ missing " + lacking.map(sh => sh === "night" ? "evening" : sh).join(" + ") + " stamp" : has ? " ✓" : miss ? " ✗ missing" : "";
+        grid.appendChild(el("div", { title: iso + tip, style: { textAlign: "center", fontSize: "12px", padding: "5px 0", borderRadius: "6px", border: "1px solid var(--border)", background: bg, color: col, fontWeight: (miss || part) ? "700" : "500" } }, String(d)));
       }
       body.appendChild(el("div", { style: { fontWeight: "600", margin: "8px 0 4px", textTransform: "capitalize" } },
-        `${b}  ·  ${missed ? "❌ " + missed + " " + T("missed day(s)", "يوم ناقص") : "✅ " + T("no missed days", "لا أيام ناقصة")}`));
+        `${b}  ·  ${missed ? "❌ " + missed + " " + T("missed day(s)", "يوم ناقص") : "✅ " + T("no missed days", "لا أيام ناقصة")}${partial ? "  ·  🟠 " + partial + " " + T("partial day(s)", "يوم ناقص جزئياً") : ""}`));
       body.appendChild(grid);
     }
   }
@@ -5666,7 +5674,8 @@ function missingDaysCard(u, { title, rows, dayOf }) {
     el("div", { style: { fontWeight: "700" } }, title),
     el("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, [navBtn("‹", -1), label, navBtn("›", 1)]),
   ]));
-  card.appendChild(el("div", { class: "muted small", style: { margin: "4px 0 2px" } }, T("Green = logged · Red = missed day · Grey = not counted (today, future, closed, or before first entry).", "أخضر = تم · أحمر = يوم ناقص · رمادي = غير محسوب.")));
+  card.appendChild(el("div", { class: "muted small", style: { margin: "4px 0 2px" } }, (requiredShifts ? T("Green = all stamps · Orange = only some of the rostered shifts stamped · Red = no stamp · Grey = not counted (today, future, closed, or before first entry).", "أخضر = كل البصمات · برتقالي = بعض الشيفتات فقط · أحمر = لا بصمة · رمادي = غير محسوب.")
+    : T("Green = logged · Red = missed day · Grey = not counted (today, future, closed, or before first entry).", "أخضر = تم · أحمر = يوم ناقص · رمادي = غير محسوب."))));
   card.appendChild(body);
   draw();
   return card;
@@ -6681,6 +6690,25 @@ routes.supplier_list = function (u) {
   const btnBulk   = el("button", { class: "chip" },    T("☑️ Bulk assign supplier","☑️ تعيين مورد لعدة أصناف"));
   modeBar.appendChild(btnSingle);
   modeBar.appendChild(btnBulk);
+  const btnExport = el("button", { class: "chip" }, T("⬇ Export inventory + suppliers","⬇ تصدير المخزون مع الموردين"));
+  btnExport.addEventListener("click", () => {
+    const catLabel = Object.fromEntries(INV_CATS_SL.map(c => [c.value, c.label]));
+    const rows = [];
+    (state.items || []).filter(it => it.active !== false)
+      .sort((a,b) => (catLabel[a.category] || a.category || "").localeCompare(catLabel[b.category] || b.category || "") || a.name.localeCompare(b.name))
+      .forEach(it => {
+        const base = { category: catLabel[it.category] || it.category || "", item: it.name, unit: it.unit || "" };
+        const sups = state.suppliers[it.id] || [];
+        if (!sups.length) rows.push({ ...base, supplier: "", contact: "", notes: "" });
+        else sups.forEach(s => rows.push({ ...base, supplier: s.name || "", contact: s.contact || "", notes: s.notes || "" }));
+      });
+    if (!rows.length) { toast("No inventory items to export."); return; }
+    const dateStr = new Date().toISOString().slice(0, 10);
+    download(`cb-inventory-suppliers-${dateStr}.csv`, new Blob(["﻿" + toCSV(rows)], { type: "text/csv;charset=utf-8" }));
+    const noSup = rows.filter(r => !r.supplier).length;
+    toast(`Exported ${rows.length} rows${noSup ? ` (${noSup} items without a supplier)` : ""}`);
+  });
+  modeBar.appendChild(btnExport);
   modeBar.appendChild(el("span", { class: "muted small", style: { marginLeft: "4px" } },
     T("Bulk: tick items that share the same supplier, then fill in supplier details once.","تعيين جماعي: حدد الأصناف التي لها نفس المورد، ثم أدخل بيانات المورد مرة واحدة.")));
   wrap.appendChild(modeBar);
@@ -17461,7 +17489,14 @@ async function rescoreSigninStamps(fromDate) {
 routes.signin_stamp_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Sign-In Stamps","بصمات الحضور"), T("Attendance record — every clock-in, color-coded by punctuality.","سجل الحضور — كل تسجيل دخول، مع ترميز لوني حسب الانضباط.")));
-  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — sign-in stamp","الأيام الناقصة — بصمة الحضور"), rows: state.signin_stamps, dayOf: s => localISODate(new Date(s.at)) }));
+  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — sign-in stamp","الأيام الناقصة — بصمة الحضور"), rows: state.signin_stamps, dayOf: s => localISODate(new Date(s.at)),
+    shiftOf: stampShift,
+    // Every shift on the roster that day needs its own stamp (evening only from NIGHT_STAMP_RULES_START).
+    requiredShifts: (b, iso) => {
+      const dk = ROSTER_DAYS[new Date(iso + "T12:00:00").getDay()], wk = sundayOf(iso);
+      return [...new Set((state.rosters || []).filter(r => String(r.branch || "").toLowerCase() === b && r.week_of === wk && r.day === dk &&
+        (r.shift === "morning" || r.shift === "night") && shiftStampRuleActive(r.shift, iso)).map(r => r.shift))];
+    } }));
   const isAdmin = u.role === "owner" || u.role === "accountant";
   const all = state.signin_stamps
     .filter(s => isAdmin || s.by === u.id || (u.branches||[]).includes(s.branch));

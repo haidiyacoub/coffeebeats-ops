@@ -752,23 +752,29 @@ exports.dailyComplianceRecap = onSchedule(
     // Evening shift: from 2026-10-20 a night stamp is also expected wherever someone is rostered on it.
     const sundayOf = ds => { const d = new Date(ds + "T12:00:00"); d.setDate(d.getDate() - d.getDay()); return localISODate(d); };
     const dayKey = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(day + "T12:00:00").getDay()];
-    const nightRostered = new Set(arr(rosterDoc, "rosters")
-      .filter(r => r.week_of === sundayOf(day) && r.day === dayKey && r.shift === "night").map(branchOf));
+    // Every rostered shift (morning / evening) needs its own stamp; a missing one is named in the email.
+    const dayRoster = arr(rosterDoc, "rosters").filter(r => r.week_of === sundayOf(day) && r.day === dayKey);
+    const rosteredShifts = b => new Set(dayRoster.filter(r => branchOf(r) === b && (r.shift === "morning" || (r.shift === "night" && day >= "2026-10-20"))).map(r => r.shift));
     const isNight = s => s.shift === "night";
-    const checks = [
-      ["Sign-in stamp", stamps.filter(s => !isNight(s))], ["Shift close", closes], ["Waste log", wastes], ["Cleaning log", cleans],
-    ];
+    const checks = [["Shift close", closes], ["Waste log", wastes], ["Cleaning log", cleans]];
     const lines = [`Coffee Beats — daily recap for ${day} (checked ${today} 01:00)`, ""];
-    const missedNames = []; let missedItems = 0;
+    const missedNames = []; let missedItems = 0; const stampSubjects = [];
     for (const b of COMPLIANCE_BRANCHES) {
       if (closedD.has(b)) { lines.push(`${_cap(b)}: closed that day — nothing expected`); continue; }
-      const missing = checks.filter(([, rows]) => !rows.some(r => branchOf(r) === b)).map(([name]) => name);
-      if (day >= "2026-10-20" && nightRostered.has(b) && !stamps.some(s => isNight(s) && branchOf(s) === b)) missing.push("Evening sign-in stamp");
+      const bStamps = stamps.filter(s => branchOf(s) === b);
+      const need = rosteredShifts(b);
+      const stampMissing = [];
+      if (need.size) {
+        if (need.has("morning") && !bStamps.some(s => !isNight(s))) stampMissing.push("☀️ MORNING shift sign-in stamp");
+        if (need.has("night")   && !bStamps.some(isNight))          stampMissing.push("🌙 EVENING shift sign-in stamp");
+      } else if (!bStamps.length) stampMissing.push("Sign-in stamp");   // nobody rostered: any stamp will do
+      const missing = [...stampMissing, ...checks.filter(([, rows]) => !rows.some(r => branchOf(r) === b)).map(([name]) => name)];
+      stampMissing.forEach(m => stampSubjects.push(`${_cap(b)} ${m.includes("MORNING") ? "morning" : m.includes("EVENING") ? "evening" : ""} stamp`.replace("  ", " ")));
       if (missing.length) { missedNames.push(_cap(b)); missedItems += missing.length; lines.push(`❌ ${_cap(b)} MISSED: ${missing.join(", ")}`); }
       else lines.push(`✅ ${_cap(b)}: all done`);
     }
     const subject = missedItems
-      ? `❌ ${missedNames.join(" + ")} missed daily tasks — ${day}`
+      ? `❌ ${missedNames.join(" + ")} missed daily tasks${stampSubjects.length ? ` (${stampSubjects.join(", ")})` : ""} — ${day}`
       : `✅ All daily tasks done — ${day}`;
     await _sendEmail(subject, lines.join("\n"), { urgent: missedItems > 0, toHeadBarista: missedItems > 0 });   // head barista gets the same list (with penalty note) only when something was missed
     console.log(`Compliance recap ${day}: ${missedItems} missing item(s)`);
