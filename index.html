@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261025-185 -->
+<!-- CB_BUILD:20261025-300 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261025-185";
+  var BUILD = "20261025-300";
   (function() {
     function checkFresh() {
       try {
@@ -13868,6 +13868,12 @@ routes.roster = function (u) {
   function rosterEntry(branch, shift, day) {
     return state.rosters.find(r => r.week_of === weekOf && r.branch === branch && r.shift === shift && r.day === day);
   }
+  // Same person can't work the same day+shift at two branches. Returns the other branch or null.
+  function rosterConflict(userId, branch, shift, day) {
+    if (!userId) return null;
+    const c = state.rosters.find(r => r.week_of === weekOf && r.user_id === userId && r.shift === shift && r.day === day && r.branch !== branch);
+    return c ? c.branch : null;
+  }
   function setRosterEntry(branch, shift, day, user) {
     const s = stamp();
     const existing = rosterEntry(branch, shift, day);
@@ -14138,6 +14144,14 @@ routes.roster = function (u) {
                 sel.appendChild(o);
               }
             }
+            // Grey out anyone already rostered on this day+shift at another branch
+            for (const o of sel.querySelectorAll("option")) {
+              const other = rosterConflict(o.value, branch, shift, day);
+              if (other && !o.selected) {
+                o.disabled = true;
+                o.textContent += T(` — already at ${other[0].toUpperCase() + other.slice(1)}`, ` — معيّن في ${other === "maadi" ? "معادي" : other === "zawya" ? "زاوية" : other}`);
+              }
+            }
             // If assigned person is now on leave, add them as a disabled option with warning
             if (assignedOnLeave) {
               const warnOpt = el("option", { value: entry.user_id, selected: "true", style: { color: "var(--bad)" } },
@@ -14148,6 +14162,12 @@ routes.roster = function (u) {
               // Block assigning someone on leave
               if (onLeave.includes(sel.value)) {
                 toast(T("This barista has approved leave on this day — cannot assign them.","هذا البريستا لديه إجازة معتمدة هذا اليوم — لا يمكن تعيينه."), "error");
+                sel.value = entry ? entry.user_id : "";
+                return;
+              }
+              const _clash = rosterConflict(sel.value, branch, shift, day);
+              if (_clash) {
+                toast(T(`Already rostered at ${_clash[0].toUpperCase() + _clash.slice(1)} on this day and shift — cannot be in two branches at once.`, `معيّن بالفعل في فرع آخر (${_clash === "maadi" ? "معادي" : _clash === "zawya" ? "زاوية" : _clash}) في نفس اليوم والشيفت — لا يمكن التواجد في فرعين.`), "error");
                 sel.value = entry ? entry.user_id : "";
                 return;
               }
@@ -14292,7 +14312,7 @@ routes.roster = function (u) {
           if (!src.length) return toast(T("No schedule found for last week","لا يوجد جدول للأسبوع الماضي"), "error");
           for (const r of src) {
             const exists = rosterEntry(r.branch, r.shift, r.day);
-            if (!exists) {
+            if (!exists && !rosterConflict(r.user_id, r.branch, r.shift, r.day)) {
               const s = stamp();
               state.rosters.push({
                 id: uuid(), week_of: weekOf, branch: r.branch, shift: r.shift, day: r.day,
