@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261025-300 -->
+<!-- CB_BUILD:20261025-490 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261025-300";
+  var BUILD = "20261025-490";
   (function() {
     function checkFresh() {
       try {
@@ -8888,7 +8888,7 @@ routes.salaries = function (u) {
       dueCard.appendChild(el("div", { class: "kv", style: Object.assign({ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "12px 14px", marginBottom: "10px", alignItems: "flex-start", boxShadow: "0 1px 3px rgba(0,0,0,.05)" }, p.active ? {} : { opacity: ".6", fontStyle: "italic" }) }, [
         el("div", { class: "k" }, [
           el("div", { style: { fontSize: "15px", fontWeight: "700" } }, p.name + (p.active ? "" : " (archived)")),
-          el("div", { class: "muted small", style: { marginTop: "2px", lineHeight: "1.5" } }, `Salary ${money(salary)}${hireCalc.prorated ? ` (joined ${hireCalc.hire}: ${hireCalc.days}/30 days of ${money(fullSalary)})` : ""}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)` : ""}`),
+          el("div", { class: "muted small", style: { marginTop: "2px", lineHeight: "1.5" } }, `Salary ${money(salary)}${hireCalc.prorated ? ` (joined ${hireCalc.hire}: ${hireCalc.days}/30 days of ${money(fullSalary)})` : ""}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free${annualOver.noShowDays ? `, ${annualOver.noShowDays} off-roster = no-show ×3` : ""})` : ""}`),
           ...(penRows.length ? [el("div", { class: "muted small", style: { marginTop: "4px", fontStyle: "italic", lineHeight: "1.5" } },
             "* " + T("Penalty reasons","أسباب الخصم") + ": " + penRows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText).join(" · "))] : []),
         ]),
@@ -10723,7 +10723,8 @@ function workedDaysReport(uid, month, flatSalary) {
 
 // Annual leave policy: every barista gets 4 paid annual leave days per calendar
 // month; each approved annual leave day beyond the 4th in that month deducts one
-// full day's salary (monthly salary ÷ 30). Returns per-day counts for `month`
+// full day's salary (monthly salary ÷ 30), and each roster-absence day beyond the 4th
+// counts as a no-show (3 days' salary). Returns per-day counts for `month`
 // (YYYY-MM) plus the deduction amount at the given salary.
 function annualLeaveOverage(uid, month, salary) {
   const FREE_DAYS = 4;
@@ -10741,8 +10742,12 @@ function annualLeaveOverage(uid, month, salary) {
   const scheduleDays = scheduleDayOffs(uid, month);
   usedDays += scheduleDays.length;
   const excessDays = Math.max(0, usedDays - FREE_DAYS);
-  const amount = Math.round((Number(salary) || 0) / 30 * excessDays * 100) / 100;
-  return { freeDays: FREE_DAYS, usedDays, excessDays, amount, scheduleDays };
+  // Days off beyond the 4 free ones that come from simply not being on the roster are treated as
+  // a no-show: 3 days' pay each. Excess days from approved annual leave stay at 1 day's pay.
+  const noShowDays = Math.min(excessDays, scheduleDays.length);
+  const deductDays = (excessDays - noShowDays) + noShowDays * 3;
+  const amount = Math.round((Number(salary) || 0) / 30 * deductDays * 100) / 100;
+  return { freeDays: FREE_DAYS, usedDays, excessDays, noShowDays, deductDays, amount, scheduleDays };
 }
 
 // Schedule-derived days off. Rules start the week of 2026-10-11 so nothing earlier is touched.
@@ -18551,7 +18556,7 @@ routes.leave_list = function (u) {
         const salary = getSalaryForMonth(p.id, summaryMonth);
         const over = annualLeaveOverage(p.id, summaryMonth, salary); // { freeDays, usedDays, excessDays, amount }
         return { name: p.name, schedDays, annualDays, sickDays, totalDays: annualDays + sickDays,
-                 freeDays: over.freeDays, excessDays: over.excessDays, deduction: over.amount };
+                 freeDays: over.freeDays, excessDays: over.excessDays, noShowDays: over.noShowDays, deduction: over.amount };
       }).sort((a,b) => b.totalDays - a.totalDays || a.name.localeCompare(b.name));
 
       const grandTotal = rows.reduce((s,r) => s + r.totalDays, 0);
@@ -18579,7 +18584,7 @@ routes.leave_list = function (u) {
             annualLine.appendChild(el("span", {}, T(`🌴 ${freeUsed} of ${r.freeDays} free`, `🌴 ${freeUsed} من ${r.freeDays} مجانية`)));
             annualLine.appendChild(el("span", {}, " + "));
             annualLine.appendChild(el("span", { style: { color: "var(--bad)", fontWeight: "700" } },
-              T(`${r.excessDays} unpaid (−${money(r.deduction)})`, `${r.excessDays} بدون أجر (−${money(r.deduction)})`)));
+              T(`${r.excessDays} over${r.noShowDays ? ` (${r.noShowDays} no-show ×3)` : ""} (−${money(r.deduction)})`, `${r.excessDays} زيادة${r.noShowDays ? ` (${r.noShowDays} عدم حضور ×3)` : ""} (−${money(r.deduction)})`)));
           } else {
             annualLine.appendChild(el("span", {}, T(`🌴 ${r.annualDays} of ${r.freeDays} free used`, `🌴 ${r.annualDays} من ${r.freeDays} مجانية مستخدمة`)));
           }
@@ -22889,7 +22894,7 @@ routes.my_hr = function(u, params) {
     ];
     if (annualSum > 0) {
       rows.push([
-        isAR ? `تجاوز الإجازة السنوية (${annualOver.excessDays} يوم بعد ${annualOver.freeDays} مجانية)` : `Annual leave overage (${annualOver.excessDays}d beyond ${annualOver.freeDays} free)`,
+        isAR ? `تجاوز الإجازة السنوية (${annualOver.excessDays} يوم بعد ${annualOver.freeDays} مجانية${annualOver.noShowDays ? `، ${annualOver.noShowDays} غياب عن الجدول = عدم حضور ×3` : ""})` : `Annual leave overage (${annualOver.excessDays}d beyond ${annualOver.freeDays} free${annualOver.noShowDays ? `, ${annualOver.noShowDays} off-roster = no-show ×3` : ""})`,
         "−" + money(annualSum), "var(--bad)",
       ]);
     }
