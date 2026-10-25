@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261021-108 -->
+<!-- CB_BUILD:20261025-185 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261021-108";
+  var BUILD = "20261025-185";
   (function() {
     function checkFresh() {
       try {
@@ -2503,7 +2503,7 @@ async function doSync() {
     // every sync. If signed out, keep the edits pending — autoPullOnStart flushes them
     // on the next login.
     const _cu = firebase.auth().currentUser;
-    if (!_cu) { return; }
+    if (!_cu) { updateSyncBadge("error", "signed-out — sign in to upload pending edits"); return; }
     try { await _cu.getIdToken(); } catch (_) { /* best-effort refresh */ }
     // Detect any records deleted locally since the last sync and tombstone them, so the
     // merge below strips them instead of letting another device resurrect them.
@@ -2663,9 +2663,30 @@ async function doSync() {
       setTimeout(() => { syncInFlight = false; doSync(); }, delay);
       return;
     }
-    updateSyncBadge("error", `${code}${chunk}`);
+    // invalid-argument means Firestore rejected the document itself (over 1 MB, or an
+    // array nested inside an array). Say which, so the banner is actionable.
+    let why = "";
+    if (code === "invalid-argument" && e._chunk && STATE_CHUNKS[e._chunk]) {
+      try {
+        const doc = {}; for (const k of STATE_CHUNKS[e._chunk]) doc[k] = state[k];
+        const kb = JSON.stringify(doc).length / 1024;
+        const nested = [];
+        const walk = (v, p) => {
+          if (Array.isArray(v)) v.forEach((x, i) => Array.isArray(x) ? nested.push(`${p}[${i}]`) : walk(x, `${p}[${i}]`));
+          else if (v && typeof v === "object") for (const k in v) walk(v[k], `${p}.${k}`);
+        };
+        walk(doc, e._chunk);
+        const big = STATE_CHUNKS[e._chunk].map(k => [k, JSON.stringify(state[k] ?? null).length])
+          .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k} ${(n/1024).toFixed(0)}KB`).join(", ");
+        console.error(`[sync] ${e._chunk} rejected: ${kb.toFixed(0)} KB local, nested arrays: ${nested.length}`, nested.slice(0, 10), "largest:", big);
+        why = kb > 900 ? ` — local ${kb.toFixed(0)} KB, over the 1 MB limit (${big})`
+            : nested.length ? ` — array inside array at ${nested[0]}`
+            : ` — local ${kb.toFixed(0)} KB, no nested arrays; merged doc with remote may be over 1 MB`;
+      } catch (_) {}
+    }
+    updateSyncBadge("error", `${code}${chunk}${why}`);
     // After all retries exhausted, show a hard-to-miss warning banner
-    showSyncWarningBanner(`${code}${chunk}`);
+    showSyncWarningBanner(`${code}${chunk}${why}`);
   } finally {
     syncInFlight = false;
   }
@@ -2785,6 +2806,16 @@ async function _kpiMergeDoc() {
   }
   if (Array.isArray(doc.leadership_notifications)) {
     doc.leadership_notifications = doc.leadership_notifications.filter(n => (n.at || "") >= cutoffISO);
+    // Hard cap on top of the age window: 45 days still held 3,588 rows (865 KB) because
+    // low-stock bodies change daily, so the same-day dedupe never collapses them, and
+    // that pushed kpi to 1,067,137 bytes > 1,048,576 (invalid-argument on every sync).
+    // The UI only shows the latest 50, so keep the newest 300.
+    const NOTIF_CAP = 300;
+    if (doc.leadership_notifications.length > NOTIF_CAP) {
+      doc.leadership_notifications = doc.leadership_notifications
+        .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))
+        .slice(0, NOTIF_CAP);
+    }
   }
   // Keep local state in sync with what we just decided is canonical.
   state.alert_log = doc.alert_log;
