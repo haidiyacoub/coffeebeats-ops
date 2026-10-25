@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261025-490 -->
+<!-- CB_BUILD:20261025-565 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261025-490";
+  var BUILD = "20261025-565";
   (function() {
     function checkFresh() {
       try {
@@ -5680,6 +5680,8 @@ function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts }) {
       const first = set.size ? [...set].sort()[0] : null;
       let missed = 0, partial = 0;
       const grid = el("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "3px", marginBottom: "6px" } });
+      const dayNames = [T("Sun","أحد"), T("Mon","اثنين"), T("Tue","ثلاثاء"), T("Wed","أربعاء"), T("Thu","خميس"), T("Fri","جمعة"), T("Sat","سبت")];
+      dayNames.forEach(dn => grid.appendChild(el("div", { style: { textAlign: "center", fontSize: "11px", fontWeight: "700", color: "var(--muted, #888)", padding: "2px 0" } }, dn)));
       for (let i = 0; i < lead; i++) grid.appendChild(el("div", {}));
       for (let d = 1; d <= n; d++) {
         const iso = `${month}-${String(d).padStart(2, "0")}`;
