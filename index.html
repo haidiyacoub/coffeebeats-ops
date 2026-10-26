@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-970 -->
+<!-- CB_BUILD:20261026-981 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-970";
+  var BUILD = "20261026-981";
   (function() {
     function checkFresh() {
       try {
@@ -18142,7 +18142,7 @@ function handbookSeedRecipes() {
     { id: uuid(), category: "Hot Flavoured Coffee", name: "Mocha — White", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g dose", "White chocolate syrup: 40 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add white chocolate syrup, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     { id: uuid(), category: "Hot Flavoured Coffee", name: "Salted Caramel Latte", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g dose", "Salted caramel sauce: 40 g", "Steamed whole milk: 260 g"], steps: ["Extract espresso.", "Add salted caramel sauce, mix.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
     // ── SIGNATURE ──
-    { id: uuid(), category: "Signature Drinks", name: "The Artist — V60 Filter Coffee", size: "12 oz", time: "8 min", coffee_notes: V60, ingredients: ["Coffee powder: 18 g (Type 3 grind)", "Hot water: 270 g (at 92°C)"], steps: ["Heat water to 92°C exactly.", "Rinse paper filter in V60, discard rinse water.", "Grind 18 g medium-fine, place in filter.", "Bloom: pour 50 g water evenly, wait 30 sec.", "Second pour: 150 ml over ~1 min 15 sec.", "Final pour: 70 ml over ~40 sec.", "Allow to drip fully, serve with lid. (Iced: 135 ml hot + 135 g ice.)"] },
+    { id: uuid(), category: "Signature Drinks", name: "The Artist — V60 Filter Coffee", size: "12 oz", time: "8 min", coffee_notes: V60, ingredients: ["Coffee powder: 18 g (Type 3 grind)", "Hot water: 250 ml (at 92°C)"], steps: ["Heat water to 92°C exactly.", "Rinse paper filter in V60, discard rinse water.", "Grind 18 g medium-fine, place in filter.", "Bloom: pour 50 g water evenly, wait 30 sec.", "Second pour: 140 ml over ~1 min 15 sec.", "Final pour: 60 ml over ~40 sec.", "Allow to drip fully, serve with lid. (Iced: 125 ml hot + 125 g ice.)"] },
     { id: uuid(), category: "Signature Drinks", name: "The Diva — Haskap Berry Blended", size: "16 oz", time: "6 min", coffee_notes: T1, ingredients: ["Espresso: 18 g dose", "Cold milk: 90 g", "Ice: 200 g", "Vanilla powder: 30 g", "Haskap berries: 20 g", "Vanilla syrup: 20 ml"], steps: ["Add cold milk and espresso to blender.", "Add cubed ice and vanilla powder.", "Add haskap berries and vanilla syrup.", "Blend ~35 sec until smooth.", "Decorate cup with flower sticker, pour in, serve with lid."] },
     { id: uuid(), category: "Signature Drinks", name: "The Actor — Espressivo", size: "4 oz", time: "3 min", coffee_notes: T1, ingredients: ["Coffee powder: 18 g", "Condensed milk: 15 g", "Fresh cream: 10 g"], steps: ["Extract espresso into cup.", "Add condensed milk, stir.", "Top with fresh cream. Serve immediately."] },
     { id: uuid(), category: "Signature Drinks", name: "The Producer — Ginger Latte", size: "12 oz", time: "3 min", coffee_notes: T2, ingredients: ["Coffee powder: 18 g (Coffee Type 2)", "Condensed milk: 30 g", "Ground ginger: 1 g", "Steamed whole milk: 260 ml"], steps: ["Extract espresso.", "Add condensed milk and ginger, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
@@ -18182,7 +18182,7 @@ function handbookSeedRecipes() {
     { id: uuid(), category: "Hot Chocolate", name: "Choco Mallow Beats", size: "8 oz", time: "6 min", ingredients: ["Cold milk: 200 g", "Chocolate powder: 35 g", "Marshmallows: 3 pieces"], steps: ["Steam whole milk until hot.", "Add chocolate powder, whisk until dissolved.", "Pour into cup, top with marshmallows.", "Serve with lid."] },
     { id: uuid(), category: "Hot Chocolate", name: "Hot Choco Beats", size: "8 oz", time: "6 min", ingredients: ["Milk: 200 g", "Chocolate powder: 35 g"], steps: ["Steam milk until hot.", "Add chocolate powder, whisk until dissolved.", "Pour into cup, serve with lid."] },
     { id: uuid(), category: "Hot Chocolate", name: "Spicy Choco Beats", size: "8 oz", time: "6 min", ingredients: ["Milk: 200 g", "Chocolate powder: 35 g", "Cinnamon powder: 5 g"], steps: ["Steam milk until hot.", "Add chocolate and cinnamon, whisk dissolved.", "Pour into cup, serve with lid."] },
-    { id: uuid(), category: "Hot Chocolate", name: "Mint to Be", size: "8 oz", time: "6 min", ingredients: ["Milk: 200 g", "Chocolate powder: 35 g", "Peppermint: 2 g"], steps: ["Steam milk until hot.", "Add chocolate and peppermint, whisk dissolved.", "Pour into cup, serve with lid."] },
+    { id: uuid(), category: "Hot Chocolate", name: "Mint to Be", size: "8 oz", time: "6 min", ingredients: ["Mint-infused water: 100 ml", "Milk: 100 ml", "Chocolate powder: 35 g", "Peppermint: 2 g"], steps: ["Infuse 100 ml hot water with peppermint for 2–3 min.", "Steam 100 ml milk until hot.", "Add chocolate powder to the mint water, whisk until dissolved.", "Add steamed milk, stir. Pour into cup, serve with lid."] },
     { id: uuid(), category: "Hot Chocolate", name: "Berry Hot", size: "12 oz", time: "6 min", ingredients: ["Milk: 300 g", "Chocolate powder: 50 g", "Haskap berries: 20 g"], steps: ["Steam milk until hot.", "Add chocolate powder, whisk until dissolved.", "Add haskap berries.", "Pour into cup, serve with lid."] },
     // ── NON-COFFEE & TEA ──
     { id: uuid(), category: "Non-Coffee & Tea", name: "Passion Fruit Iced Tea", size: "16 oz", time: "6 min", ingredients: ["Tea bags: 2", "Passion fruit puree: 40 g", "Sugar syrup: 15 g", "Ice: full cup"], steps: ["Brew tea bags in hot water. Allow to cool.", "Fill cup with ice.", "Add passion fruit puree and sugar syrup, stir.", "Pour over ice, serve with lid."] },
@@ -18972,6 +18972,22 @@ routes.handbook = function (u) {
     }
   });
   if (_migrated) saveState();
+
+  // One-time fix: Mint to Be (100 ml mint water + 100 ml milk) and The Artist (250 ml water) per owner.
+  if (!state._hb_mint_artist_fix_v1) {
+    const _fix = (name, oldMark, ing, steps) => {
+      const r = state.handbook_recipes.find(x => x.name === name);
+      if (r && (r.ingredients || []).join("|").includes(oldMark)) { r.ingredients = ing; r.steps = steps; }
+    };
+    _fix("Mint to Be", "Milk: 200 g",
+      ["Mint-infused water: 100 ml", "Milk: 100 ml", "Chocolate powder: 35 g", "Peppermint: 2 g"],
+      ["Infuse 100 ml hot water with peppermint for 2–3 min.", "Steam 100 ml milk until hot.", "Add chocolate powder to the mint water, whisk until dissolved.", "Add steamed milk, stir. Pour into cup, serve with lid."]);
+    _fix("The Artist — V60 Filter Coffee", "270 g",
+      ["Coffee powder: 18 g (Type 3 grind)", "Hot water: 250 ml (at 92°C)"],
+      ["Heat water to 92°C exactly.", "Rinse paper filter in V60, discard rinse water.", "Grind 18 g medium-fine, place in filter.", "Bloom: pour 50 g water evenly, wait 30 sec.", "Second pour: 140 ml over ~1 min 15 sec.", "Final pour: 60 ml over ~40 sec.", "Allow to drip fully, serve with lid. (Iced: 125 ml hot + 125 g ice.)"]);
+    state._hb_mint_artist_fix_v1 = true;
+    saveState();
+  }
 
   // One-time fill: add Excel-sheet recipes the handbook lacks (matched by name, never overwrites).
   if (!state._hb_excel_fill_v1) {
