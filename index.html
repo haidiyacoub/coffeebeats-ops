@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-813 -->
+<!-- CB_BUILD:20261026-815 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-813";
+  var BUILD = "20261026-815";
   (function() {
     function checkFresh() {
       try {
@@ -4333,6 +4333,75 @@ function mirrorOverheadPayment(entry, s) {
     });
   }
 }
+// ---- Change "paid by / paid from" on an existing purchase or overhead ----------
+// Drops the petty-cash / bank / personal-account rows the old method created (keyed by ref = record id)
+// and writes the ones the new method needs. Maadi-drawer cash is derived, so it needs no row.
+function _dropPaymentLedgerRows(id) {
+  state.petty_cash    = (state.petty_cash    || []).filter(x => x.ref !== id);
+  state.bank_ledger   = (state.bank_ledger   || []).filter(x => x.ref !== id);
+  state.owner_account = (state.owner_account || []).filter(x => !(x.ref === id && !x.reimbursed));
+}
+function _paymentRowsReimbursed(id) {
+  return (state.owner_account || []).some(x => x.ref === id && x.reimbursed);
+}
+function changePurchasePaidBy(p, newPaid) {
+  if (!p || !newPaid || p.paid_by === newPaid) return true;
+  if (_paymentRowsReimbursed(p.id)) { toast(T("Already reimbursed to you — can't change how it was paid","تم سدادها لك بالفعل — لا يمكن تغيير طريقة الدفع"), "error"); return false; }
+  const s = stamp(), total = Number(p.total) || 0, supplier = p.supplier || "—";
+  const suffix = p.split_group ? ` (${p.branch} ${p.split_pct}% of shared cost)` : "";
+  _dropPaymentLedgerRows(p.id);
+  p.paid_by = newPaid; p.paid_by_edited_at = s.at; p.paid_by_edited_by = s.by_name;
+  const test = isTestMode() ? { is_test: true } : {};
+  if (newPaid === "petty_cash") {
+    state.petty_cash.push({ id: uuid(), branch: p.branch, date: p.date, type: "purchase", amount: -total,
+      balance_after: pettyCashBalance(p.branch) - total, ref: p.id, by: s.by, by_name: s.by_name, at: s.at,
+      note: `Purchase from ${supplier}${suffix}`, ...test });
+  } else if (newPaid === "owner_bank" || newPaid === "credit_card") {
+    state.bank_ledger.push({ id: uuid(), date: p.date, amount: -total, supplier, ref: p.id,
+      type: newPaid === "credit_card" ? "purchase_credit_card" : "purchase_payment",
+      by: s.by, by_name: s.by_name, at: s.at,
+      note: `${newPaid === "credit_card" ? "Credit card payment" : "Bank transfer"} to ${supplier}${suffix}`, ...test });
+  } else if (newPaid === "owner_personal") {
+    recordPersonalPayment({ amount: total, date: p.date, source: "purchase", ref: p.id, branch: p.branch, label: `Purchase — ${supplier}${suffix}` }, s);
+  }
+  return true;
+}
+function changeOverheadPaidFrom(o, newFrom) {
+  if (!o || (o.paid_from || "") === (newFrom || "")) return true;
+  if (_paymentRowsReimbursed(o.id)) { toast("Already reimbursed to you — can't change how it was paid", "error"); return false; }
+  _dropPaymentLedgerRows(o.id);
+  o.paid_from = newFrom || "";
+  if (o.paid_from) mirrorOverheadPayment(o, stamp());
+  return true;
+}
+const PURCHASE_PAID_BY_OPTS = () => [
+  { label: T("💵 Petty cash (topped-up float)","💵 العهدة النقدية (المشحونة)"), value: "petty_cash" },
+  { label: T("💰 Maadi cash (drawer — from shift close)","💰 نقدية المعادي (الدرج — من إغلاق الشيفت)"), value: "maadi_cash" },
+  { label: T("Bank transfer (owner)","تحويل بنكي (المالك)"), value: "owner_bank" },
+  { label: T("Credit card","بطاقة ائتمان"), value: "credit_card" },
+  { label: T("Paid personally (reimburse later)","دُفع شخصياً (يُسدَّد لاحقاً)"), value: "owner_personal" },
+  { label: T("Unpaid / credit","غير مدفوع / آجل"), value: "unpaid" },
+];
+// ✎ button for an overhead row: pick a new "paid from" and re-post the ledger rows.
+function overheadPaidFromEditBtn(o, redraw) {
+  return el("button", { class:"btn ghost", title:"Change paid from", style:{ fontSize:"11px", padding:"2px 6px", minHeight:"22px" }, onClick:() => {
+    openPrompt({
+      title: "Change paid from",
+      fields: [{ key: "paid_from", label: "Paid from", type: "select", value: o.paid_from || "", options: [
+        { label: "— not tracked (P&L only) —", value: "" },
+        { label: "💵 Petty cash", value: "petty_cash" },
+        MAADI_CASH_PAID_FROM_OPT,
+        { label: "🏦 Company bank / owner transfer", value: "owner_bank" },
+        { label: "💳 Credit card", value: "credit_card" },
+        PERSONAL_PAID_FROM_OPT,
+      ] }],
+      onSubmit: (vals) => {
+        if (!changeOverheadPaidFrom(o, vals.paid_from)) return;
+        saveState(); toast("Paid-from updated"); redraw && redraw();
+      },
+    });
+  } }, "✎");
+}
 // Delete a maintenance overhead plus any petty-cash / bank / owner-account row it created.
 function deleteMaintenanceEntry(id) {
   state.overheads     = state.overheads.filter(x => x.id !== id);
@@ -7721,8 +7790,10 @@ routes.purchase_list = function (u) {
               { key: "branch",   label: "Branch", type: "text", value: p.branch || "" },
               { key: "date",     label: "Date", type: "date", value: p.date || (p.at||"").slice(0,10) },
               { key: "note",     label: "Note", type: "text", value: p.note || "" },
+              { key: "paid_by",  label: T("Paid by","طريقة الدفع"), type: "select", value: p.paid_by || "petty_cash", options: PURCHASE_PAID_BY_OPTS() },
             ],
             onSubmit: (vals) => {
+              if (vals.paid_by && !changePurchasePaidBy(p, vals.paid_by)) return;
               p.supplier = vals.supplier || p.supplier;
               p.branch = vals.branch || p.branch;
               p.date = vals.date || p.date;
@@ -10251,6 +10322,7 @@ function renderMaintenanceCard(month, redraw, branches) {
           for (const o of logged) {
             cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
               el("div", { class:"muted small", style:{ flex:"1" } }, (o.paid_on || (o.date||"").slice(0,10)) + (o.equipment && o.equipment.length ? ` · ${o.equipment.length} item${o.equipment.length>1?"s":""}` : "") + ` · ${paidFromNote(o)}`),
+              overheadPaidFromEditBtn(o, redraw),
               el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
                 if (!confirm("Delete this maintenance entry?")) return;
                 deleteMaintenanceEntry(o.id);
@@ -10290,6 +10362,7 @@ function renderMaintenanceCard(month, redraw, branches) {
         for (const o of logged) {
           cell.appendChild(el("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginTop:"3px", gap:"4px" } }, [
             el("div", { class:"muted small", style:{ flex:"1" } }, `${o.paid_on || (o.date||"").slice(0,10)}${o.label ? " · " + o.label : ""} · ${paidFromNote(o)}`),
+            overheadPaidFromEditBtn(o, redraw),
             el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"1px 6px", minHeight:"20px" }, onClick:() => {
               if (!confirm("Delete this maintenance entry?")) return;
               deleteMaintenanceEntry(o.id);
@@ -11325,6 +11398,7 @@ routes.overheads = function (u) {
       cbLabel.appendChild(document.createTextNode(isPaid ? `Paid${paidOn ? " · " + paidOn : ""} · ${paidFromNote(existing)}` : "Mark as paid"));
       rowDiv.appendChild(el("div", { style:{ display:"flex", gap:"4px", marginTop:"5px", flexWrap:"wrap", alignItems:"center" } }, [
         cbLabel,
+        isPaid ? overheadPaidFromEditBtn(existing, draw) : null,
         el("button", {
           class:"btn ghost",
           style:{ fontSize:"12px", padding:"4px 8px", minHeight:"30px", color:"var(--warn)" },
@@ -11355,6 +11429,7 @@ routes.overheads = function (u) {
             el("div", { class:"muted small", style:{ fontSize:"11px" } }, paidFromNote(r)),
           ]),
           el("div", { style:{ fontWeight:"700", marginRight:"6px" } }, money(r.amount)),
+          overheadPaidFromEditBtn(r, draw),
           el("button", { class:"btn ghost", style:{ fontSize:"11px", padding:"2px 6px", minHeight:"22px" }, onClick:() => {
             if (shared) {
               if (!confirm("This is one half of a shared cost split across both branches. Delete both linked entries (and any petty-cash / bank record)?")) return;
