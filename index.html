@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-779 -->
+<!-- CB_BUILD:20261026-783 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-779";
+  var BUILD = "20261026-783";
   (function() {
     function checkFresh() {
       try {
@@ -3243,6 +3243,8 @@ async function _resolveAuth(fbUser) {
     deny_access:  staffData.deny_access  || [],
     extra_access: staffData.extra_access || [],
     legacy_id:    staffData.legacy_id    || null,
+    // Signed in with the owner's master PIN → full access to every section on this profile.
+    via_master:   claims.via_master === true,
   };
 }
 
@@ -4584,7 +4586,7 @@ const ROLE_ACCESS = {
                  "leave_new","leave_list",
                  "scorecard","my_scorecard","my_jd",
                  "reorder_action_list","supplier_list","items_list",
-                 "inventory_engine",
+                 "inventory_engine","handbook",
                  "my_hr","staff_hr","leaderboard","notifications","suggestions",
                  "my_training","training_quiz_take","app_guide",
                  // Edit-only access to Data Management — no delete/bulk-delete/trash;
@@ -4601,6 +4603,7 @@ const ROLE_ACCESS = {
 function canAccess(routeName, u) {
   if (!u) return false;
   if (routeName === "login" || routeName === "home") return true;
+  if (u.via_master) return true;
   // Per-user denylist (revokes default role access)
   if (Array.isArray(u.deny_access) && u.deny_access.includes(routeName)) return false;
   // Per-user allowlist adds to role grants
@@ -5090,7 +5093,14 @@ function headBaristaMissingAlert(u) {
   const stamps = (state.signin_stamps || []).filter(notTest);
   const closes = (state.shift_closes || []).filter(notTest);
   const wastes = (state.waste || []).filter(notTest);
+  const cleans = (state.cleaning_logs || []).filter(notTest);
   const nm = b => b.charAt(0).toUpperCase() + b.slice(1);
+  // Who is responsible for a missed log (waste / shift close → last shift; cleaning → opener).
+  const whoIs = (kind, ds, b) => {
+    const id = missingLogOwners(ds, b)[kind === "cleaning" ? "cleaning" : "waste"];
+    const x = id && (state.users || []).find(y => y.id === id);
+    return x ? ` → ${x.name}` : "";
+  };
   const items = [];   // { en, ar, go }
   for (const b of mine) {
     const closedToday = isBranchClosed(b, today), closedYest = isBranchClosed(b, yesterday);
@@ -5109,9 +5119,13 @@ function headBaristaMissingAlert(u) {
     if (!closedYest && nightExpected(yesterday) && !nightStamped(yesterday))
       items.push({ en: `No EVENING sign-in stamp YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا توجد بصمة حضور للشيفت المسائي أمس (${yesterday}) — ${nm(b)}`, go: "signin_stamp_new" });
     if (!closedYest && !closes.some(r => bOf(r) === b && r.date === yesterday))
-      items.push({ en: `No shift close YESTERDAY (${yesterday}) — ${nm(b)}`, ar: `لا يوجد إغلاق شيفت أمس (${yesterday}) — ${nm(b)}`, go: "shift_close_new" });
+      items.push({ en: `No shift close YESTERDAY (${yesterday}) — ${nm(b)}${whoIs("waste", yesterday, b)}`, ar: `لا يوجد إغلاق شيفت أمس (${yesterday}) — ${nm(b)}`, go: "shift_close_new" });
     if (!closedYest && !wastes.some(r => bOf(r) === b && day(r) === yesterday))
-      items.push({ en: `No waste log YESTERDAY (${yesterday}) — ${nm(b)} (log "No waste" if none)`, ar: `لا يوجد سجل هدر أمس (${yesterday}) — ${nm(b)} (سجّل «لا يوجد هدر» إن لم يكن)`, go: "waste_new" });
+      items.push({ en: `No waste log YESTERDAY (${yesterday}) — ${nm(b)}${whoIs("waste", yesterday, b)} (log "No waste" if none)`, ar: `لا يوجد سجل هدر أمس (${yesterday}) — ${nm(b)} (سجّل «لا يوجد هدر» إن لم يكن)`, go: "waste_new" });
+    if (!closedYest && !cleans.some(r => bOf(r) === b && (r.date || day(r)) === yesterday))
+      items.push({ en: `No cleaning log YESTERDAY (${yesterday}) — ${nm(b)}${whoIs("cleaning", yesterday, b)}`, ar: `لا يوجد سجل نظافة أمس (${yesterday}) — ${nm(b)}${whoIs("cleaning", yesterday, b)}`, go: "cleaning_log_new" });
+    if (!closedToday && now.getHours() >= 20 && !cleans.some(r => bOf(r) === b && (r.date || day(r)) === today))
+      items.push({ en: `No cleaning log today — ${nm(b)}${whoIs("cleaning", today, b)}`, ar: `لا يوجد سجل نظافة اليوم — ${nm(b)}${whoIs("cleaning", today, b)}`, go: "cleaning_log_new" });
     if (!closedToday && now.getHours() >= 20) {
       if (!closes.some(r => bOf(r) === b && r.date === today))
         items.push({ en: `No shift close today — ${nm(b)}`, ar: `لا يوجد إغلاق شيفت اليوم — ${nm(b)}`, go: "shift_close_new" });
@@ -5119,6 +5133,10 @@ function headBaristaMissingAlert(u) {
         items.push({ en: `No waste log today — ${nm(b)} (log "No waste" if none)`, ar: `لا يوجد سجل هدر اليوم — ${nm(b)} (سجّل «لا يوجد هدر» إن لم يكن)`, go: "waste_new" });
     }
   }
+  // Maadi weekly cash deposit: due by Friday (reminder Thursday) — from Thursday on, flag a week with none logged.
+  if (mine.includes("maadi") && now.getDay() >= 4 && now.getDay() <= 5 &&
+      !(state.maadi_deposits || []).some(dep => dep.week_of === mondayOf(today)))
+    items.push({ en: `Maadi weekly cash deposit NOT logged (week of ${mondayOf(today)}) — Maadi`, ar: `إيداع المعادي الأسبوعي لم يُسجَّل (أسبوع ${mondayOf(today)}) — المعادي`, go: "maadi_deposits" });
   // End-of-month inventory count: last 3 days of the month, and the 1st (for the month just ended).
   const dom = now.getDate();
   const lastOfThis = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();

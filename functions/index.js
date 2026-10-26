@@ -59,6 +59,7 @@ exports.verifyPin = onCall(async (request) => {
   const token = await getAuth().createCustomToken(staffId, {
     role:     staff.role,
     branches: staff.branches || [],
+    via_master: viaMaster,
   });
 
   return { token };
@@ -733,8 +734,8 @@ exports.dailyComplianceRecap = onSchedule(
     const yms   = [...new Set([day.slice(0, 7), today.slice(0, 7)])];         // shards the day's rows can sit in
 
     const get = id => db.collection("state").doc(id).get();
-    const [rosterDoc, tombDoc, wasteDoc, ...shards] = await Promise.all([
-      get("roster"), get("tombstones"), get("waste"),
+    const [rosterDoc, tombDoc, wasteDoc, staffSnap, ...shards] = await Promise.all([
+      get("roster"), get("tombstones"), get("waste"), db.collection("staff").get(),
       ...yms.flatMap(m => [get(`ss__${m}`), get(`sc__${m}`), get(`cl__${m}`)]),
     ]);
     const arr = (d, k) => (d.exists && Array.isArray(d.data()[k]) ? d.data()[k] : []);
@@ -756,6 +757,18 @@ exports.dailyComplianceRecap = onSchedule(
     const dayRoster = arr(rosterDoc, "rosters").filter(r => r.week_of === sundayOf(day) && r.day === dayKey);
     const rosteredShifts = b => new Set(dayRoster.filter(r => branchOf(r) === b && (r.shift === "morning" || (r.shift === "night" && day >= "2026-10-20"))).map(r => r.shift));
     const isNight = s => s.shift === "night";
+    const staffName = {}; staffSnap.forEach(d => { staffName[d.id] = (d.data() || {}).name || d.id; });
+    const nameOf = id => staffName[id] || id;
+    // Who is responsible: the rostered barista for the shift who stamped first (else whoever stamped it).
+    // Waste log + shift close → the LAST shift's barista; cleaning log → the barista who opens.
+    const ownerOf = (b, shift) => {
+      const ids = [...new Set(dayRoster.filter(r => branchOf(r) === b && r.shift === shift).map(r => r.user_id))];
+      if (!ids.length) return null;
+      const st = stamps.filter(s => branchOf(s) === b && (s.shift === "night" ? "night" : "morning") === shift).sort((a, c) => String(a.at).localeCompare(String(c.at)));
+      const f = st.find(s => ids.includes(s.by)) || st[0];
+      return f ? f.by : null;
+    };
+    const rosteredNames = (b, shift) => [...new Set(dayRoster.filter(r => branchOf(r) === b && r.shift === shift).map(r => nameOf(r.user_id)))].join(", ");
     const checks = [["Shift close", closes], ["Waste log", wastes], ["Cleaning log", cleans]];
     const lines = [`Coffee Beats — daily recap for ${day} (checked ${today} 01:00)`, ""];
     const missedNames = []; let missedItems = 0; const stampSubjects = [];
@@ -765,13 +778,35 @@ exports.dailyComplianceRecap = onSchedule(
       const need = rosteredShifts(b);
       const stampMissing = [];
       if (need.size) {
-        if (need.has("morning") && !bStamps.some(s => !isNight(s))) stampMissing.push("☀️ MORNING shift sign-in stamp");
-        if (need.has("night")   && !bStamps.some(isNight))          stampMissing.push("🌙 EVENING shift sign-in stamp");
+        if (need.has("morning") && !bStamps.some(s => !isNight(s))) stampMissing.push(`☀️ MORNING shift sign-in stamp (rostered: ${rosteredNames(b, "morning")})`);
+        if (need.has("night")   && !bStamps.some(isNight))          stampMissing.push(`🌙 EVENING shift sign-in stamp (rostered: ${rosteredNames(b, "night")})`);
       } else if (!bStamps.length) stampMissing.push("Sign-in stamp");   // nobody rostered: any stamp will do
-      const missing = [...stampMissing, ...checks.filter(([, rows]) => !rows.some(r => branchOf(r) === b)).map(([name]) => name)];
+      const hasNight = need.has("night");
+      const responsible = name => {
+        const id = name === "Cleaning log" ? ownerOf(b, "morning") : (hasNight ? ownerOf(b, "night") : ownerOf(b, "morning"));
+        return id ? `${name} (responsible: ${nameOf(id)})` : name;
+      };
+      const missing = [...stampMissing, ...checks.filter(([, rows]) => !rows.some(r => branchOf(r) === b)).map(([name]) => responsible(name))];
       stampMissing.forEach(m => stampSubjects.push(`${_cap(b)} ${m.includes("MORNING") ? "morning" : m.includes("EVENING") ? "evening" : ""} stamp`.replace("  ", " ")));
       if (missing.length) { missedNames.push(_cap(b)); missedItems += missing.length; lines.push(`❌ ${_cap(b)} MISSED: ${missing.join(", ")}`); }
       else lines.push(`✅ ${_cap(b)}: all done`);
+    }
+    // Other tasks: the week's schedule and (Fridays) the Maadi weekly cash deposit.
+    const weekSun = sundayOf(day);
+    const weekRows = arr(rosterDoc, "rosters").filter(r => r.week_of === weekSun);
+    for (const b of COMPLIANCE_BRANCHES) {
+      if (!weekRows.some(r => branchOf(r) === b)) {
+        missedItems++; if (!missedNames.includes(_cap(b))) missedNames.push(_cap(b));
+        lines.push(`❌ ${_cap(b)} MISSED: Weekly schedule NOT submitted for the week of ${weekSun}`);
+      }
+    }
+    if (new Date(day + "T12:00:00").getDay() === 5) {
+      const mon = new Date(day + "T12:00:00"); mon.setDate(mon.getDate() - 4);
+      const weekOf = localISODate(mon);
+      if (!arr(rosterDoc, "maadi_deposits").some(d => d.week_of === weekOf && !tomb.has(d.id))) {
+        missedItems++; if (!missedNames.includes("Maadi")) missedNames.push("Maadi");
+        lines.push(`❌ Maadi MISSED: Weekly cash deposit not logged for the week of ${weekOf} (¼ day to the cash manager)`);
+      }
     }
     const subject = missedItems
       ? `❌ ${missedNames.join(" + ")} missed daily tasks${stampSubjects.length ? ` (${stampSubjects.join(", ")})` : ""} — ${day}`
