@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-001 -->
+<!-- CB_BUILD:20261026-003 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-001";
+  var BUILD = "20261026-003";
   (function() {
     function checkFresh() {
       try {
@@ -17395,6 +17395,13 @@ routes.signin_stamp_new = function (u) {
               toast(T(`⭐ Substitute cover recorded for ${who.name} — +50 punctuality bonus`, `⭐ تم تسجيل تغطية بديلة لـ ${who.name} — +50 نقطة انضباط`), "ok");
             }
             return; // not today's assigned barista for this shift — no late penalty
+          }
+
+          // October 2026 only: a back-dated stamp (old photo attached by leadership) never
+          // creates a late penalty or alert — it just records attendance.
+          if (_backPhoto && _uploadAt.slice(0, 7) === "2026-10" && localISODate(_backPhoto) < localISODate(new Date(_uploadAt))) {
+            toast(T(`Back-dated stamp for ${who.name} recorded — no late penalty applied`, `تم تسجيل بصمة بتاريخ سابق لـ ${who.name} — بدون خصم تأخير`), "ok");
+            return;
           }
 
           const minsLate  = _stampMinsLate; // photo capture time vs morning opening
