@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-812 -->
+<!-- CB_BUILD:20261026-813 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-812";
+  var BUILD = "20261026-813";
   (function() {
     function checkFresh() {
       try {
@@ -1213,14 +1213,9 @@ function migrateState(s) {
   s.maadi_deposits = s.maadi_deposits || [];
   s.zawya_cash_received = s.zawya_cash_received || []; // payments Zawya hands over for a sales month — [{id,month,amount,date,note,by,by_name,at}] (see zawyaCashByMonth)
   s.maadi_cash_log = s.maadi_cash_log || []; // manual Maadi sales-cash movements — [{id,type:"in"|"out"|"count",amount,date,note,by,by_name,at}] (see maadiCashLedger)
-  // One-time fresh start 2026-10-26: drawer topped up to 5,000 (was 0). Opening count; the ledger
-  // then adds Maadi shift-close cash and subtracts cash-paid purchases/overheads/deposits from today.
-  if (!s._maadi_cash_fresh_20261026) {
-    if (!s.maadi_cash_log.some(m => m.id === "maadi_cash_open_20261026"))
-      s.maadi_cash_log.push({ id: "maadi_cash_open_20261026", type: "count", amount: 5000, date: "2026-10-26",
-        note: "Fresh start — drawer topped up to 5,000", opening: true, by_name: "Owner", at: "2026-10-26T00:00:00.000Z" });
-    s._maadi_cash_fresh_20261026 = true;
-  }
+  // Fresh start 2026-10-26: Maadi drawer counts from 0 (the 5,000 top-up went to PETTY cash, not the drawer).
+  // An earlier build wrote an opening 5,000 row here by mistake — drop it.
+  s.maadi_cash_log = s.maadi_cash_log.filter(m => m.id !== "maadi_cash_open_20261026");
   s.overheads     = s.overheads     || [];
   s.overhead_presets        = s.overhead_presets        || {}; // category → default amount
   s.overhead_monthly_amts   = s.overhead_monthly_amts   || {}; // branch|category|month → amount override
@@ -4289,7 +4284,7 @@ function pettyCashLedger(branch) {
 //   counted — the running balance restarts from the counted amount.
 // Movements before MAADI_CASH_START are ignored (tracker went live that day).
 // ==============================================================
-const MAADI_CASH_START = "2026-10-26"; // fresh start: drawer topped up to 5,000 (was 0) — see _maadi_cash_fresh_20261026
+const MAADI_CASH_START = "2026-10-26"; // fresh start: drawer counts from 0 today
 const MAADI_CASH_PAID_FROM_OPT = { label: "💰 Maadi sales cash (drawer)", value: "maadi_cash" };
 
 // How an overhead was paid, as a short note shown next to every paid overhead line.
@@ -4377,7 +4372,7 @@ function maadiCashMovements() {
       by_name: d.by_name });
   }
   for (const m of state.maadi_cash_log || []) {
-    if (!notTest(m)) continue;
+    if (!notTest(m) || m.id === "maadi_cash_open_20261026") continue; // mistaken opening row from an earlier build
     const a = Number(m.amount) || 0;
     if (m.type === "count") {
       push({ id: m.id, date: m.date, at: m.at, amount: a, kind: "count", manual: true, opening: !!m.opening,
