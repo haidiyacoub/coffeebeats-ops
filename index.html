@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-764 -->
+<!-- CB_BUILD:20261026-779 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-764";
+  var BUILD = "20261026-779";
   (function() {
     function checkFresh() {
       try {
@@ -19438,6 +19438,57 @@ routes.handbook = function (u) {
         { type: "para", text: "يجب الحفاظ على تحديث بيانات الاتصال. أبلغ رئيس البريستا فوراً إذا تغيّرت جهة الاتصال للطوارئ." },
       ]
     },
+    {
+      number: "15", title: "Penalties & Deductions — Full Guide", ar_title: "الخصومات والعقوبات — الدليل الكامل",
+      content: [
+        { type: "para", text: "Every deduction is a share of one day's pay: monthly salary ÷ 30. Most are applied automatically by the app; the rest are logged by the owner or head barista on the Penalties screen. Every penalty appears in your My HR view with its date and reason." },
+        { type: "subheader", text: "⭐ Head Barista — the penalties that also apply to YOU" },
+        { type: "para", text: "<strong>The head barista automatically acts as Schedule Manager, Inventory Manager and Cash Manager, so on top of every rule below that applies to all baristas, these deductions are yours:</strong>" },
+        { type: "bullets", items: ["<strong>Weekly schedule not submitted</strong> for a branch you run, for a completed week (Sun–Sat): <strong>½ day</strong> per week.", "<strong>Inventory not updated</strong> — no inventory snapshot for the last day of the month: <strong>½ day</strong> (checked at the End-of-Month Check).", "<strong>Maadi cash deposit not logged</strong> for the week by the end of Friday (you get a reminder every Thursday): <strong>¼ day</strong> per missed week.", "Missing stamps, missing waste logs and missing cleaning logs on your own shifts: same deductions as every barista.", "Your leadership results also count inside your own Leadership KPI (Section 12)."] },
+        { type: "subheader", text: "The deduction sizes" },
+        { type: "bullets", items: ["¼ day = a quarter of one day's pay.", "½ day = half a day's pay.", "1 day = one full day's pay.", "2 days / 3 days = two or three days' pay (3 days is a \"no show\")."] },
+        { type: "subheader", text: "1. Lateness (automatic, from your stamp)" },
+        { type: "bullets", items: ["Up to 10 min after opening: nothing (grace period).", "10–60 min late: ½ day. 60–120 min: 1 day. More than 120 min: 2 days.", "Lateness is measured from the time the clock photo was taken. A photo whose time can't be read counts as a no show (3 days).", "From your 2nd late stamp in a calendar month, every further late penalty that month is doubled.", "Applies to every morning AND evening shift."] },
+        { type: "subheader", text: "2. No show — no stamp (automatic)" },
+        { type: "bullets", items: ["If you are on the schedule for a shift and nobody stamps that shift: 3 days deducted, applied the next day.", "If someone who is NOT on that shift's schedule stamps instead, it is a Shift Cover: no no-show — 1 day comes off your annual-leave balance and 1 day is added to the balance of whoever stamped (see Section 9).", "From your 2nd no show in a month, each further no show that month is doubled."] },
+        { type: "subheader", text: "3. Missing daily logs — ¼ day each (automatic, from 1 Nov 2026)" },
+        { type: "bullets", items: ["Waste log: the barista on the LAST shift of the day (who also does the Shift Close) is charged if no waste entry is recorded for that branch and day. \"No waste\" counts as an entry.", "Cleaning log: the barista who STARTS the day (morning shift) is charged if no cleaning log is submitted for that branch and day.", "If the log is added later, the deduction is withdrawn."] },
+        { type: "subheader", text: "4. Leave" },
+        { type: "bullets", items: ["Annual leave: 4 paid days per calendar month. Each approved annual day beyond the 4th: 1 day's pay.", "Days you are simply not on the submitted weekly schedule count toward those 4 days; each one beyond the 4th is a no show (3 days' pay).", "Sick leave: ¼ day per sick day.", "Shift covers move days between balances as explained above."] },
+        { type: "subheader", text: "5. Conduct (logged by the owner / head barista)" },
+        { type: "bullets", items: ["Not following the rules, or not updating the app/site as required: ½ day.", "Hygiene or uniform violation: ½ day.", "A no show logged by hand rather than by the automatic check: 3 days.", "From your 2nd conduct penalty in a month, every further conduct penalty that month is doubled."] },
+        { type: "subheader", text: "6. Schedule and leadership duties" },
+        { type: "bullets", items: ["Head barista: weekly schedule not submitted for a branch they run, for a completed week: ½ day.", "Budget & Inventory Manager: inventory not updated at month end: ½ day.", "Cash-status role: weekly Maadi cash deposit not logged: ¼ day.", "Rostering rule: a barista cannot be put on the same day and shift at two branches."] },
+        { type: "subheader", text: "7. KPI effects (separate from pay)" },
+        { type: "para", text: "Besides the salary deduction, the Punctuality KPI moves with every shift (early +5/+10, late −20/−50, no stamp −100, covering a shift +50), and a day with no waste entry costs Waste Control points. See Sections 9 and 12." },
+        { type: "subheader", text: "If you think a penalty is wrong" },
+        { type: "para", text: "Raise it with the head barista or owner within seven days of month-end. Stamps and penalties can be corrected by the owner, and automatic deductions are recalculated or withdrawn when the underlying stamp or log is corrected." },
+      ],
+      ar_content: [
+        { type: "para", text: "كل خصم هو جزء من أجر يوم واحد: الراتب الشهري ÷ 30. معظمها يُطبَّق تلقائياً من التطبيق، والباقي يسجّله المالك أو رئيس البريستا من شاشة الخصومات. يظهر كل خصم في صفحة الموارد البشرية الخاصة بك مع تاريخه وسببه." },
+        { type: "subheader", text: "⭐ رئيس البريستا — الخصومات التي تنطبق عليك أنت أيضاً" },
+        { type: "para", text: "<strong>يعمل رئيس البريستا تلقائياً كمدير الجدول ومدير المخزون ومدير النقدية، لذلك إضافة إلى كل القواعد أدناه التي تنطبق على جميع الباريستا، هذه الخصومات عليك:</strong>" },
+        { type: "bullets", items: ["<strong>عدم تقديم الجدول الأسبوعي</strong> لفرع تديره عن أسبوع منتهٍ (الأحد–السبت): <strong>نصف يوم</strong> عن كل أسبوع.", "<strong>عدم تحديث المخزون</strong> — لا يوجد جرد مخزون لآخر يوم من الشهر: <strong>نصف يوم</strong> (يُفحص في الفحص الشهري).", "<strong>عدم تسجيل إيداع المعادي</strong> للأسبوع قبل نهاية يوم الجمعة (يصلك تذكير كل خميس): <strong>ربع يوم</strong> عن كل أسبوع فائت.", "البصمات المفقودة وسجلات الهدر والنظافة المفقودة في شيفتاتك: نفس خصومات كل البريستا.", "نتائجك القيادية تُحتسب أيضاً داخل مؤشر القيادة الخاص بك (القسم 12)."] },
+        { type: "subheader", text: "أحجام الخصم" },
+        { type: "bullets", items: ["ربع يوم = ربع أجر يوم واحد.", "نصف يوم = نصف أجر يوم.", "يوم = أجر يوم كامل.", "يومان / 3 أيام = أجر يومين أو ثلاثة (3 أيام = غياب no show)."] },
+        { type: "subheader", text: "1. التأخير (تلقائي من بصمتك)" },
+        { type: "bullets", items: ["حتى 10 دقائق بعد الفتح: لا شيء (فترة سماح).", "تأخر 10–60 دقيقة: نصف يوم. 60–120 دقيقة: يوم. أكثر من 120 دقيقة: يومان.", "يُحسب التأخير من وقت التقاط صورة الساعة. صورة لا يمكن قراءة وقتها تُعتبر غياباً (3 أيام).", "من بصمتك المتأخرة الثانية في الشهر، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر.", "ينطبق على كل شيفت صباحي ومسائي."] },
+        { type: "subheader", text: "2. الغياب بدون بصمة (تلقائي)" },
+        { type: "bullets", items: ["إذا كنت في الجدول لشيفت ولم يسجّل أحد بصمته: خصم 3 أيام، يُطبَّق في اليوم التالي.", "إذا سجّل بصمة شخص غير مُجدول في ذلك الشيفت فهذه تغطية: لا غياب — يُخصم يوم من رصيد إجازتك السنوية ويُضاف يوم لرصيد من سجّل البصمة (راجع القسم 9).", "من الغياب الثاني في الشهر، يُضاعَف كل غياب لاحق في ذلك الشهر."] },
+        { type: "subheader", text: "3. السجلات اليومية المفقودة — ربع يوم لكل منها (تلقائي، من 1 نوفمبر 2026)" },
+        { type: "bullets", items: ["سجل الهدر: يُخصم من الباريستا في آخر شيفت من اليوم (وهو من يقوم بإغلاق الشيفت) إذا لم يُسجَّل أي إدخال هدر لذلك الفرع واليوم. إدخال \"لا هدر\" يُحتسب.", "سجل النظافة: يُخصم من الباريستا الذي يبدأ اليوم (الشيفت الصباحي) إذا لم يُقدَّم سجل نظافة لذلك الفرع واليوم.", "إذا أُضيف السجل لاحقاً يُسحب الخصم."] },
+        { type: "subheader", text: "4. الإجازات" },
+        { type: "bullets", items: ["الإجازة السنوية: 4 أيام مدفوعة في كل شهر ميلادي. كل يوم سنوي معتمد بعد الرابع: خصم أجر يوم.", "الأيام التي لا يكون اسمك فيها في الجدول الأسبوعي المقدَّم تُحتسب من هذه الأيام الأربعة؛ وكل يوم بعد الرابع يُعتبر غياباً (خصم 3 أيام).", "الإجازة المرضية: ربع يوم لكل يوم مرضي.", "التغطية تنقل الأيام بين الأرصدة كما شُرح أعلاه."] },
+        { type: "subheader", text: "5. السلوك (يسجّله المالك / رئيس البريستا)" },
+        { type: "bullets", items: ["عدم الالتزام بالقواعد أو عدم تحديث التطبيق/الموقع كما هو مطلوب: نصف يوم.", "مخالفة النظافة الشخصية أو الزي الموحد: نصف يوم.", "غياب مُسجَّل يدوياً وليس عبر الفحص التلقائي: 3 أيام.", "من خصم السلوك الثاني في الشهر، يُضاعَف كل خصم سلوك لاحق في ذلك الشهر."] },
+        { type: "subheader", text: "6. مهام الجدول والقيادة" },
+        { type: "bullets", items: ["رئيس البريستا: عدم تقديم الجدول الأسبوعي لفرع يديره عن أسبوع منتهٍ: نصف يوم.", "مدير الميزانية والمخزون: عدم تحديث المخزون في نهاية الشهر: نصف يوم.", "دور حالة النقد: عدم تسجيل إيداع المعادي الأسبوعي: ربع يوم.", "قاعدة الجدول: لا يمكن وضع باريستا في نفس اليوم والشيفت في فرعين."] },
+        { type: "subheader", text: "7. تأثيرات مؤشرات الأداء (منفصلة عن الراتب)" },
+        { type: "para", text: "إلى جانب خصم الراتب، يتحرك مؤشر الانضباط مع كل شيفت (مبكر +5/+10، متأخر −20/−50، بدون بصمة −100، تغطية شيفت +50)، ويكلّف اليوم بدون إدخال هدر نقاطاً من مؤشر ضبط الهدر. راجع القسمين 9 و12." },
+        { type: "subheader", text: "إذا كنت ترى أن الخصم خاطئ" },
+        { type: "para", text: "ارفعه إلى رئيس البريستا أو المالك خلال سبعة أيام من نهاية الشهر. يمكن للمالك تصحيح البصمات والخصومات، وتُعاد حسبة الخصومات التلقائية أو تُسحب عند تصحيح البصمة أو السجل الأصلي." },
+      ]
+    },
   ];
 
   if (!state.om_overrides)    state.om_overrides    = {};
@@ -22017,7 +22068,7 @@ function getLeadershipAssignment(month) {
   // Head barista is auto-assigned to all leadership roles — no manual entry needed.
   const headBarista = (state.users || []).find(u => u.role === "head_barista" && u.active !== false);
   if (headBarista) {
-    return { month, weekly_schedule: headBarista.id, budget_inventory: headBarista.id, _auto: true };
+    return { month, weekly_schedule: headBarista.id, budget_inventory: headBarista.id, inventory_management: headBarista.id, cash_status: headBarista.id, _auto: true };
   }
   // No head barista — use manual assignment for regular barista substitutes.
   const assignments = state.leadership_assignments || [];
