@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-806 -->
+<!-- CB_BUILD:20261026-809 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-806";
+  var BUILD = "20261026-809";
   (function() {
     function checkFresh() {
       try {
@@ -8099,6 +8099,13 @@ routes.petty_cash = function (u) {
     const combinedCard = el("div", { class: "card", style: { borderColor: "var(--accent)" } });
     combinedCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, T("Combined (Maadi + Zawya)","الإجمالي (معادي + زاوية)")));
     combinedCard.appendChild(el("div", { style: { fontSize: "30px", fontWeight: "700", color: combinedBal < PETTY_CASH_ALERT ? "var(--bad)" : "var(--ink)" } }, money(combinedBal)));
+    {
+      const _mc = maadiCashLedger().balance;
+      combinedCard.appendChild(el("div", { class: "kv" }, [
+        el("div", { class: "k" }, T(`Total cash = petty ${money(combinedBal)} + Maadi drawer ${money(_mc)}`, `إجمالي النقدية = عهدة ${money(combinedBal)} + درج المعادي ${money(_mc)}`)),
+        el("div", { class: "v", style: { fontWeight: "700" } }, money(combinedBal + _mc)),
+      ]));
+    }
     combinedCard.appendChild(el("div", { class: "muted small" }, T(`Weekly outflow: ${money(weeklyExpenditure("combined"))}`, `المصروف الأسبوعي: ${money(weeklyExpenditure("combined"))}`)));
     // Monthly budget + this month's top-ups
     const _cbBudget = pettyCashBudget();
@@ -9809,7 +9816,9 @@ function pettyCashTile() {
       const month = new Date().toISOString().slice(0, 7);
       const total = brs.reduce((a, b) => a + pettyCashBalance(b), 0);
       const top = brs.reduce((a, b) => a + pettyCashToppedUp(b, month), 0);
+      const mcash = all ? maadiCashLedger().balance : 0;
       sub = (brs.length > 1 ? T(`On hand ${money(total)} · `, `الرصيد ${money(total)} · `) : "") + parts.join(" · ")
+        + (all ? T(` · + Maadi drawer ${money(mcash)} = ${money(total + mcash)} total`, ` · + درج المعادي ${money(mcash)} = ${money(total + mcash)} إجمالي`) : "")
         + T(` · topped up ${money(top)} this month`, ` · شحن ${money(top)} هذا الشهر`);
     }
   } catch (e) { console.warn("petty cash tile", e); }
