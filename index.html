@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-981 -->
+<!-- CB_BUILD:20261026-001 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-981";
+  var BUILD = "20261026-001";
   (function() {
     function checkFresh() {
       try {
@@ -17313,6 +17313,11 @@ routes.signin_stamp_new = function (u) {
         const who = forUserId === u.id ? u : (staffDir.resolve(forUserId) || u);
         const onBehalf = who.id !== u.id;
         const s = stamp();
+        // Exception: when leadership stamps in FOR another barista, the date/time of the stamp is
+        // the clock photo's capture time (can be days old), not the moment of upload.
+        const _uploadAt = s.at;
+        const _backPhoto = onBehalf ? await photoClockTime(photoBlobs, s.at, true) : null;
+        if (_backPhoto) s.at = _backPhoto.toISOString();
         // The roster decides the shift: if this barista is on the schedule at this branch today
         // only for the OTHER shift (e.g. night while the picker said morning), stamp that shift.
         {
@@ -17331,7 +17336,7 @@ routes.signin_stamp_new = function (u) {
         // Score against the owner's latest opening times, not this device's cached copy.
         await refreshOpeningTimes();
         // Score against the time the clock photo was taken (EXIF), falling back to upload time.
-        const _photoTime       = await photoClockTime(photoBlobs, s.at);
+        const _photoTime       = _backPhoto || await photoClockTime(photoBlobs, s.at);
         const _clockAt         = _photoTime ? _photoTime.toISOString() : s.at;
         const _stampMinsLate   = minsLateAt(branch, _clockAt, shift);
         const _earlyBonus      = _stampMinsLate <= -15;
@@ -17339,6 +17344,7 @@ routes.signin_stamp_new = function (u) {
         state.signin_stamps.push({
           id: uuid(), at: s.at, by: who.id, by_name: who.name, device: s.device,
           ...(onBehalf ? { entered_by: s.by, entered_by_name: s.by_name } : {}),
+          ...(_backPhoto ? { uploaded_at: _uploadAt } : {}),
           branch, shift,
           photo_id: photoIds[0], photo_name: photoNames[0],
           photo_ids: photoIds, photo_names: photoNames,
@@ -17576,7 +17582,8 @@ async function exifTakenAt(blob) {
 // Earliest usable capture time across a stamp's photos. A photo only counts if it was taken
 // on the same local day as the upload and not after it (small clock-skew allowance) — so an
 // old photo from another day can't be reused to look on time.
-async function photoClockTime(blobs, uploadIso) {
+// `anyPastDay` (leadership stamping for someone else): the photo may be from an earlier day.
+async function photoClockTime(blobs, uploadIso, anyPastDay) {
   const up = new Date(uploadIso);
   let best = null;
   for (const b of blobs) {
@@ -17584,7 +17591,7 @@ async function photoClockTime(blobs, uploadIso) {
     let d = await exifTakenAt(b);
     if (!d && b.lastModified) d = new Date(b.lastModified);
     if (!d || isNaN(d)) continue;
-    if (localISODate(d) !== localISODate(up)) continue;
+    if (!anyPastDay && localISODate(d) !== localISODate(up)) continue;
     if (d.getTime() > up.getTime() + 5 * 60000) continue;
     if (!best || d < best) best = d;
   }
