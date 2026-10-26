@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261025-565 -->
+<!-- CB_BUILD:20261026-764 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261025-565";
+  var BUILD = "20261026-764";
   (function() {
     function checkFresh() {
       try {
@@ -8012,7 +8012,7 @@ function checkNoStampAlert() {
 
 function startNoStampCheck() {
   if (_noStampCheckInterval) return;
-  const run = () => { checkNoStampAlert(); try { autoApplyMissingStamps(); } catch (e) { console.warn("autoApplyMissingStamps", e); } try { autoApplyMissingSchedulePenalties(); } catch (e) { console.warn("autoApplyMissingSchedulePenalties", e); } };
+  const run = () => { checkNoStampAlert(); try { autoApplyMissingStamps(); } catch (e) { console.warn("autoApplyMissingStamps", e); } try { autoApplyMissingSchedulePenalties(); } catch (e) { console.warn("autoApplyMissingSchedulePenalties", e); } try { autoApplyMissingLogPenalties(); } catch (e) { console.warn("autoApplyMissingLogPenalties", e); } };
   run();
   _noStampCheckInterval = setInterval(run, 5 * 60 * 1000); // every 5 min
 }
@@ -9238,6 +9238,8 @@ const PENALTY_REASONS = [
   { label: "Not wearing the uniform",                      value: "no_uniform",   defaultKind: "half_day" },
   { label: "Personal hygiene",                             value: "hygiene",      defaultKind: "half_day" },
   { label: "Weekly schedule not submitted",                value: "schedule_not_submitted", defaultKind: "half_day" },
+  { label: "Missing waste log (last shift)",               value: "missing_waste_log",    defaultKind: "quarter_day" },
+  { label: "Missing cleaning log (opening shift)",         value: "missing_cleaning_log", defaultKind: "quarter_day" },
   { label: "Other",                                        value: "other",        defaultKind: null },
 ];
 // Repeat-offender doubling for MANUALLY recorded penalties (mirrors the automatic
@@ -10728,6 +10730,48 @@ function workedDaysReport(uid, month, flatSalary) {
 // full day's salary (monthly salary ÷ 30), and each roster-absence day beyond the 4th
 // counts as a no-show (3 days' salary). Returns per-day counts for `month`
 // (YYYY-MM) plus the deduction amount at the given salary.
+// Shift cover. The barista named on the roster for a branch+day+shift is the one expected to
+// stamp. If they don't but someone NOT on that slot's roster does, the stamp is a cover: it
+// shows green, one day comes off the absent barista's annual-leave balance (instead of a
+// no-show) and one day is added to the stamper's. If nobody stamps, it stays a no-show.
+// Derived on the fly from rosters + stamps, never stored, so it needs no sync.
+function slotCovers(ds, branch, shift) {
+  branch = String(branch || "").toLowerCase();
+  const dk = ROSTER_DAYS[new Date(ds + "T12:00:00").getDay()], wk = sundayOf(ds);
+  const rostered = [...new Set((state.rosters || []).filter(r => r.week_of === wk && r.day === dk &&
+    String(r.branch || "").toLowerCase() === branch && r.shift === shift).map(r => r.user_id))];
+  if (!rostered.length) return [];
+  const stamps = (state.signin_stamps || []).filter(s => notTest(s) && localISODate(new Date(s.at)) === ds &&
+    String(s.branch || "").toLowerCase() === branch && stampShift(s) === shift);
+  const stampedBy = new Set(stamps.map(s => s.by));
+  const isStaff = id => { const x = (state.users || []).find(u => u.id === id); return x && (x.role === "barista" || x.role === "head_barista"); };
+  const absent = rostered.filter(id => !stampedBy.has(id) && isStaff(id) &&
+    !(state.leaves || []).some(l => l.user_id === id && l.status === "approved" && l.from_date <= ds && (l.to_date || l.from_date) >= ds)).sort();
+  const covering = stamps.filter(s => !rostered.includes(s.by) && isStaff(s.by)).sort((a, b) => a.at.localeCompare(b.at) || String(a.id).localeCompare(String(b.id)));
+  return absent.slice(0, covering.length).map((a, i) => ({ date: ds, branch, shift, absent: a, cover: covering[i].by, stamp: covering[i] }));
+}
+function shiftCoversForMonth(month) {
+  const [y, m] = month.split("-").map(Number), today = localISODate(new Date()), out = [];
+  for (let dn = 1; dn <= new Date(y, m, 0).getDate(); dn++) {
+    const ds = `${month}-${String(dn).padStart(2, "0")}`;
+    if (ds < STAMP_RULES_2026_10 || ds >= today) continue;
+    for (const b of ["maadi", "zawya"]) {
+      if (isBranchClosed(b, ds)) continue;
+      for (const sh of ["morning", "night"]) if (shiftStampRuleActive(sh, ds)) out.push(...slotCovers(ds, b, sh));
+    }
+  }
+  return out;
+}
+function isCoverStamp(s) {
+  if (s.substitute_cover) return true;
+  const ds = localISODate(new Date(s.at));
+  return slotCovers(ds, s.branch, stampShift(s)).some(c => c.stamp.id === s.id);
+}
+function coverDaysFor(uid, month) {
+  const cv = shiftCoversForMonth(month);
+  return { out: cv.filter(c => c.absent === uid).length, in: cv.filter(c => c.cover === uid).length };
+}
+
 function annualLeaveOverage(uid, month, salary) {
   const FREE_DAYS = 4;
   const toDate = s => { const [yy, mm, dd] = s.split("-").map(Number); return new Date(yy, mm - 1, dd); };
@@ -10743,13 +10787,16 @@ function annualLeaveOverage(uid, month, salary) {
   // Days the barista simply isn't on the submitted weekly schedule count as annual days off too.
   const scheduleDays = scheduleDayOffs(uid, month);
   usedDays += scheduleDays.length;
+  // Shifts someone else stamped for come off this barista's balance; shifts they covered are credited.
+  const cover = coverDaysFor(uid, month);
+  usedDays += cover.out - cover.in;
   const excessDays = Math.max(0, usedDays - FREE_DAYS);
   // Days off beyond the 4 free ones that come from simply not being on the roster are treated as
   // a no-show: 3 days' pay each. Excess days from approved annual leave stay at 1 day's pay.
   const noShowDays = Math.min(excessDays, scheduleDays.length);
   const deductDays = (excessDays - noShowDays) + noShowDays * 3;
   const amount = Math.round((Number(salary) || 0) / 30 * deductDays * 100) / 100;
-  return { freeDays: FREE_DAYS, usedDays, excessDays, noShowDays, deductDays, amount, scheduleDays };
+  return { freeDays: FREE_DAYS, usedDays, excessDays, noShowDays, deductDays, amount, scheduleDays, coverOut: cover.out, coverIn: cover.in };
 }
 
 // Schedule-derived days off. Rules start the week of 2026-10-11 so nothing earlier is touched.
@@ -17618,6 +17665,83 @@ routes.signin_stamp_list = function (u) {
     wrap.appendChild(el("div", { style: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "10px" } }, [
       el("span", { class: "muted small" }, T("Rescore from","إعادة الاحتساب من")), rsFrom, rsBtn,
     ]));
+
+    // Owner: align every stamp in a chosen period to the actual weekly schedule — each stamp is
+    // kept, but moved to the barista rostered for that branch + shift and its clock time set to
+    // that shift's scheduled opening (on time). Honours the branch / barista filters above.
+    // Edited stamps are written as new records (old id tombstoned), like a manual stamp edit,
+    // and the auto late penalty of the old stamp is removed.
+    const rvFrom = el("input", { type: "date", style: selStyle });
+    const rvTo   = el("input", { type: "date", style: selStyle });
+    const rvBtn  = el("button", { class: "btn ghost", style: { width: "auto", padding: "6px 12px" } }, T("🔁 Align to schedule","🔁 مطابقة الجدول"));
+    rvBtn.addEventListener("click", () => {
+      if (!rvFrom.value || !rvTo.value || rvFrom.value > rvTo.value) return toast(T("Pick a valid from / to period.","اختر فترة صحيحة (من / إلى)."), "error");
+      const inPeriod = state.signin_stamps.filter(s => {
+        const d = localISODate(new Date(s.at));
+        return notTest(s) && d >= rvFrom.value && d <= rvTo.value &&
+          (fBranch === "all" || (s.branch||"").toLowerCase() === fBranch) &&
+          (fStaff === "all" || s.by_name === fStaff);
+      });
+      // Real covers (someone else stamped for an absent rostered barista) are left alone.
+      const covers = inPeriod.filter(isCoverStamp);
+      const hit = inPeriod.filter(s => !covers.includes(s));
+      if (!hit.length) return toast(T("No stamps to align in that period (with the current filters).","لا توجد بصمات للمطابقة في هذه الفترة (حسب الفلاتر الحالية)."), "warn");
+      // Plan: per branch+day+shift slot, stamps already by a rostered barista stay with them;
+      // the rest go to rostered baristas who have no stamp yet.
+      const slots = {};
+      hit.forEach(s => { const ds = localISODate(new Date(s.at)); (slots[`${ds}|${String(s.branch||"").toLowerCase()}|${stampShift(s)}`] ||= []).push(s); });
+      const plan = [], skipped = [];
+      for (const [key, group] of Object.entries(slots)) {
+        const [ds, br, sh] = key.split("|");
+        const dk = ROSTER_DAYS[new Date(ds + "T12:00:00").getDay()], wk = sundayOf(ds);
+        const rostered = [...new Set((state.rosters || []).filter(r => r.week_of === wk && r.day === dk &&
+          String(r.branch||"").toLowerCase() === br && r.shift === sh).map(r => r.user_id))];
+        if (!rostered.length) { skipped.push(...group); continue; }
+        const stampedAll = new Set((state.signin_stamps || []).filter(x => notTest(x) && localISODate(new Date(x.at)) === ds &&
+          String(x.branch||"").toLowerCase() === br && stampShift(x) === sh && !group.includes(x) && rostered.includes(x.by)).map(x => x.by));
+        group.forEach(s => { if (rostered.includes(s.by)) stampedAll.add(s.by); });
+        const free = rostered.filter(id => !stampedAll.has(id));
+        group.sort((a, b) => a.at.localeCompare(b.at)).forEach(s => {
+          const who = rostered.includes(s.by) ? s.by : free.shift();
+          if (!who) { skipped.push(s); return; }
+          plan.push({ s, who, ds, br, sh });
+        });
+      }
+      if (!plan.length) return toast(T("None of those stamps has a matching roster slot.","لا توجد بصمات لها خانة مطابقة في الجدول."), "warn");
+      const moves = plan.filter(p => p.who !== p.s.by).length;
+      if (!confirm(T(`Align ${plan.length} stamp(s) from ${rvFrom.value} to ${rvTo.value} to the schedule? ${moves} will move to the rostered barista; all get the scheduled opening time (on time) and their auto late penalty is removed.${skipped.length ? ` ${skipped.length} with no roster slot are left unchanged.` : ""}${covers.length ? ` ${covers.length} real cover(s) are left as they are.` : ""}`,
+                     `مطابقة ${plan.length} بصمة من ${rvFrom.value} إلى ${rvTo.value} مع الجدول؟ سيتم نقل ${moves} إلى الباريستا المسجّل في الجدول، وتُضبط كلها على وقت الفتح المجدول (في الموعد) ويُحذف خصم التأخير التلقائي.${skipped.length ? ` ${skipped.length} بدون خانة في الجدول تبقى كما هي.` : ""}${covers.length ? ` ${covers.length} تغطية فعلية تبقى كما هي.` : ""}`))) return;
+      const cu = currentUser(), stampedAt = now(), ids = new Set(), pens = [];
+      for (const { s, who, ds, br, sh } of plan) {
+        const w = staffDir.resolve(who) || (state.users || []).find(x => x.id === who) || { id: who, name: who };
+        const clockAt = new Date(ds + "T" + branchShiftOpen(br, sh, ds) + ":00").toISOString();
+        const pen = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === ds && stampShift(x) === sh);
+        if (pen) pens.push(pen);
+        const { substitute_cover, entered_by, entered_by_name, ...rest } = s;
+        state.signin_stamps = state.signin_stamps.filter(x => x.id !== s.id);
+        recordDeletion(s.id);
+        state.signin_stamps.push({
+          ...rest, id: uuid(), by: w.id, by_name: w.name,
+          clock_at: clockAt, clock_source: "manual", mins_late: 0, early_bonus: false,
+          last_edited_at: stampedAt, last_edited_by_name: cu.name,
+          edit_note: `Aligned to schedule by ${cu.name} · ${fmtDate(stampedAt)} (was ${s.by_name} · ${fmtDate(stampClockTime(s))})`,
+        });
+      }
+      if (pens.length) {
+        const pids = new Set(pens.map(p => p.id)), by = cu.name || "?";
+        state.penalties = state.penalties.filter(p => !pids.has(p.id));
+        state.deleted_penalties = [...pens.map(p => ({ ...p, deleted_at: stampedAt, deleted_by: by })), ...(state.deleted_penalties || [])].slice(0, 300);
+        recordDeletion(...pids);
+      }
+      saveState();
+      toast(T(`${plan.length} stamp(s) aligned to the schedule (${moves} reassigned, ${pens.length} late penalty removed)`,
+              `تمت مطابقة ${plan.length} بصمة مع الجدول (${moves} أُعيد إسنادها، ${pens.length} خصم تأخير أُزيل)`), "ok");
+      go("signin_stamp_list");
+    });
+    wrap.appendChild(el("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", marginBottom: "10px" } }, [
+      el("span", { class: "muted small" }, T("Align stamps to schedule, from","مطابقة البصمات مع الجدول، من")), rvFrom,
+      el("span", { class: "muted small" }, T("to","إلى")), rvTo, rvBtn,
+    ]));
   }
 
   const summaryEl = el("div", { class: "muted small", style: { marginBottom: "6px" } });
@@ -17652,7 +17776,8 @@ routes.signin_stamp_list = function (u) {
     if (shown.length === 0) { list.appendChild(el("div", { class: "muted" }, T("No sign-in stamps match these filters.","لا توجد بصمات حضور مطابقة لهذه الفلاتر."))); return; }
 
     for (const { s, minsLate, status } of shown) {
-      const meta = SIGNIN_STATUS_META[status];
+      const covered = isCoverStamp(s);
+      const meta = covered ? { color: "var(--ok)", bg: "rgba(47,138,85,0.18)", label: () => T("🤝 Cover","🤝 تغطية") } : SIGNIN_STATUS_META[status];
       const badge = el("span", { class: "pill", style: { background: meta.color, color: "#fff" } }, meta.label());
       const minStr = status === "early" ? T(`${Math.abs(minsLate)} min early`, `مبكر ${Math.abs(minsLate)} دقيقة`)
                    : minsLate > 0 ? T(`${minsLate} min late`, `متأخر ${minsLate} دقيقة`)
@@ -17667,6 +17792,13 @@ routes.signin_stamp_list = function (u) {
           el("div", { class: "title" }, [`${s.by_name} · ${s.branch}`, stampShift(s) === "night" ? T(" · 🌙 Evening"," · 🌙 مسائي") : "", hasPhoto ? " 📷" : "", s.is_test ? testBadge() : null]),
           el("div", { class: "sub" }, `${fmtDate(stampClockTime(s))} · ${minStr}${s.note ? " · " + s.note : ""}`),
           s.edit_note ? el("div", { class: "muted small" }, "✎ " + s.edit_note) : null,
+          covered ? (() => {
+            const c = slotCovers(localISODate(new Date(s.at)), s.branch, stampShift(s)).find(x => x.stamp.id === s.id);
+            const who = c && (state.users || []).find(x => x.id === c.absent);
+            return el("div", { class: "muted small", style: { fontWeight: "600" } }, who
+              ? T(`🤝 Covered ${who.name}'s shift — 1 day off ${who.name}'s leave balance, +1 day to ${s.by_name}`, `🤝 غطّى شيفت ${who.name} — يُخصم يوم من رصيد إجازته ويُضاف يوم لرصيد ${s.by_name}`)
+              : T("🤝 Substitute cover", "🤝 تغطية بديلة"));
+          })() : null,
           s.entered_by_name ? el("div", { class: "muted small", style: { fontWeight: "600" } },
             T(`✍ Signed in by ${s.entered_by_name} for ${s.by_name} · ${fmtDate(s.at)}`, `✍ سجّله ${s.entered_by_name} نيابةً عن ${s.by_name} · ${fmtDate(s.at)}`)) : null,
           (s.clock_source === "photo" || s.clock_source === "manual") && Math.abs(new Date(s.at) - new Date(s.clock_at)) >= 60000
@@ -18553,7 +18685,8 @@ routes.leave_list = function (u) {
       const rows = activeStaff.map(p => {
         const own = approved.filter(l => l.user_id === p.id);
         const schedDays = scheduleDayOffs(p.id, summaryMonth);
-        const annualDays = own.filter(l => l.type === "annual").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0) + schedDays.length;
+        const cvr = coverDaysFor(p.id, summaryMonth);
+        const annualDays = own.filter(l => l.type === "annual").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0) + schedDays.length + cvr.out - cvr.in;
         const sickDays   = own.filter(l => l.type === "sick").reduce((s,l) => s + leaveDaysInMonth(l, summaryMonth), 0);
         const salary = getSalaryForMonth(p.id, summaryMonth);
         const over = annualLeaveOverage(p.id, summaryMonth, salary); // { freeDays, usedDays, excessDays, amount }
@@ -18985,6 +19118,8 @@ routes.handbook = function (u) {
         { type: "para", text: "You must arrive early enough to finish every step below and have the bar ready to serve at the published opening time — not to start opening at that time. Aim to be in the branch at least 30 minutes before opening." },
         { type: "subheader", text: "Before the first customer" },
         { type: "bullets", items: ["Submit your Sign-In Stamp the moment you arrive (see Section 9).", "Turn on the espresso machine and allow it to reach operating temperature.", "Calibrate the grinder and verify espresso extraction is within the target profile.", "Prepare milk and all perishable ingredients.", "Check syrup, sauce, and topping levels — replenish as needed.", "Clean and prepare the workspace and bar area.", "Verify the POS system is running correctly.", "Prepare cups, lids, and all service items."] },
+        { type: "subheader", text: "Cleaning Log — ¼ Day Deduction" },
+        { type: "para", text: "From 1 November 2026, the daily cleaning log for each branch is the responsibility of the barista who STARTS the day (the morning shift). If no cleaning log is submitted for that branch and day, ¼ day of that barista's pay is deducted automatically the next day; if the log is added later the deduction is withdrawn." },
       ],
       ar_content: [
         { type: "subheader", text: "موعد الفتح" },
@@ -18992,6 +19127,8 @@ routes.handbook = function (u) {
         { type: "para", text: "يجب أن تصل مبكراً بما يكفي لإنهاء كل الخطوات أدناه وأن يكون البار جاهزاً للخدمة عند موعد الفتح المعلن — وليس أن تبدأ الفتح في ذلك الوقت. احرص على التواجد في الفرع قبل الفتح بـ 30 دقيقة على الأقل." },
         { type: "subheader", text: "قبل أول زبون" },
         { type: "bullets", items: ["سجّل بصمة الحضور فور وصولك (انظر القسم 9).", "شغّل ماكينة الإسبريسو واتركها تصل إلى درجة حرارة التشغيل.", "اضبط الطاحونة وتحقق من أن استخلاص الإسبريسو ضمن المواصفات المستهدفة.", "حضّر الحليب وجميع المكونات سريعة التلف.", "تحقق من مستويات الشراب والصوص والإضافات — أعد التعبئة عند الحاجة.", "نظّف مساحة العمل والبار وجهّزها.", "تحقق من تشغيل نظام نقاط البيع بشكل صحيح.", "حضّر الأكواب والأغطية وجميع أدوات الخدمة."] },
+        { type: "subheader", text: "سجل النظافة — خصم ربع يوم" },
+        { type: "para", text: "اعتباراً من 1 نوفمبر 2026، سجل النظافة اليومي لكل فرع هو مسؤولية الباريستا الذي يبدأ اليوم (الشيفت الصباحي). إذا لم يُقدَّم سجل نظافة لذلك الفرع واليوم، يُخصم ربع يوم من أجر هذا الباريستا تلقائياً في اليوم التالي؛ وإذا أُضيف السجل لاحقاً يُسحب الخصم." },
       ]
     },
     {
@@ -19077,6 +19214,8 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Open the Record Waste screen.", "Select the item wasted from the ingredient list.", "Enter the quantity wasted and the reason.", "Add any additional notes if relevant, then tap Submit.", "If there was no waste during the shift, tap <strong>No Waste</strong> to log a clear shift — this is mandatory."] },
         { type: "subheader", text: "KPI Impact" },
         { type: "bullets", items: ["Every morning shift day with no waste entry at all (not even No Waste) deducts <strong>−10 pts</strong> from your Waste Control KPI score.", "Logging No Waste counts as a clean day (100 pts for that day)."] },
+        { type: "subheader", text: "Missing Waste Log — ¼ Day Deduction" },
+        { type: "para", text: "From 1 November 2026, the waste log for each branch and day is the responsibility of the barista on the LAST shift of the day — the same barista who does the Shift Close. If no waste entry is recorded for that branch and day (a \"No waste\" entry counts), ¼ day of that barista's pay is deducted automatically the next day. If the entry is added later the deduction is withdrawn. Evening-shift entries logged after midnight (before 6am) count for the previous day." },
         { type: "subheader", text: "Updating an Existing Entry" },
         { type: "para", text: "Waste entries are editable after submission. Tap the entry in the Waste Log, make corrections, and tap Save. Only the shift manager can edit entries from previous shifts." },
       ],
@@ -19086,6 +19225,8 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["افتح شاشة تسجيل الهدر.", "اختر العنصر المهدر من قائمة المكونات.", "أدخل الكمية المهدرة والسبب.", "أضف أي ملاحظات إضافية إن وُجدت، ثم اضغط تقديم.", "إذا لم يكن هناك هدر خلال الشيفت، اضغط <strong>لا هدر</strong> لتسجيل شيفت نظيف — هذا إلزامي."] },
         { type: "subheader", text: "التأثير على مؤشرات الأداء" },
         { type: "bullets", items: ["كل يوم شيفت صباحي بدون أي إدخال هدر (حتى لو لا هدر) يخصم <strong>−10 نقاط</strong> من مؤشر ضبط الهدر.", "تسجيل لا هدر يُحتسب كيوم نظيف كامل (100 نقطة لذلك اليوم)."] },
+        { type: "subheader", text: "سجل هدر مفقود — خصم ربع يوم" },
+        { type: "para", text: "اعتباراً من 1 نوفمبر 2026، سجل الهدر لكل فرع ويوم هو مسؤولية الباريستا في آخر شيفت من اليوم — وهو نفسه من يقوم بإغلاق الشيفت. إذا لم يُسجَّل أي إدخال هدر لذلك الفرع واليوم (يُحتسب إدخال \"لا هدر\")، يُخصم ربع يوم من أجر هذا الباريستا تلقائياً في اليوم التالي. وإذا أُضيف الإدخال لاحقاً يُسحب الخصم. إدخالات الشيفت المسائي المسجّلة بعد منتصف الليل (قبل 6 صباحاً) تُحتسب لليوم السابق." },
         { type: "subheader", text: "تحديث إدخال موجود" },
         { type: "para", text: "يمكن تعديل إدخالات الهدر بعد التقديم. اضغط على الإدخال في سجل الهدر، أجرِ التصحيحات، واضغط حفظ. فقط مشرف الشيفت يمكنه تعديل إدخالات من الشيفتات السابقة." },
       ]
@@ -19100,7 +19241,10 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or Zawya).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
         { type: "subheader", text: "Automatic Salary Deduction Tiers" },
         { type: "para", text: "Applied automatically the moment your stamp is uploaded. Each deduction is a share of one day's pay (monthly salary ÷ 30), so the EGP amount scales with your own salary." },
-        { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "Lateness is measured from the time the clock photo was taken — take the photo the moment you arrive. If the app can't read the photo's time (e.g. a screenshot, an edited or forwarded picture) it counts as a no show: 3 days deducted.", "No stamp at all for an assigned morning shift counts as a no show: 3 days deducted, applied automatically the next day.", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a morning shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points."] },
+        { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "Lateness is measured from the time the clock photo was taken — take the photo the moment you arrive. If the app can't read the photo's time (e.g. a screenshot, an edited or forwarded picture) it counts as a no show: 3 days deducted.", "No stamp at all for an assigned morning shift counts as a no show: 3 days deducted, applied automatically the next day.", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points (see Shift Cover below)."] },
+        { type: "subheader", text: "Who Must Stamp — Shift Cover" },
+        { type: "para", text: "The barista named on the Weekly Schedule for a branch, day and shift is the one who must stamp for that shift." },
+        { type: "bullets", items: ["Nobody stamps the shift: the scheduled barista is a no show — 3 days deducted.", "Someone who is NOT on that shift's schedule stamps instead: their stamp turns green (🤝 Cover) and the scheduled barista is NOT a no show. Instead, 1 day is taken off the scheduled barista's annual-leave balance and 1 day is added to the balance of the barista who stamped, who also gets the +50 Punctuality bonus.", "The scheduled barista's Punctuality KPI is not hit with the −100 no-stamp score for a covered shift.", "If the scheduled barista is on approved leave that day, nothing is deducted or credited.", "A cover is worked out automatically from the schedule and the stamps once the day has passed; if the schedule or a stamp is later corrected, the result follows it.", "A barista cannot be on the schedule for the same day and shift at two branches."] },
         { type: "subheader", text: "Other Penalties" },
         { type: "para", text: "Logged manually by the owner or head barista from the Penalties screen — same ½-day-of-salary math as above (monthly salary ÷ 30 × 0.5)." },
         { type: "bullets", items: ["Not following the rules, or not updating the app/site as required: ½ day deducted.", "Hygiene or uniform violation: ½ day deducted.", "No stamp (no show), logged manually rather than by the automatic missing-stamp check: 3 days deducted.", "Repeat-offender rule: from your 2nd \"no show\" this month onward, every further \"no show\" that month is doubled. Separately, from your 2nd conduct penalty (rules/site, hygiene, or uniform) this month onward, every further conduct penalty that month is doubled."] },
@@ -19117,7 +19261,10 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو زاوية).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
         { type: "subheader", text: "شرائح الخصم التلقائي من الراتب" },
         { type: "para", text: "تُطبَّق تلقائياً لحظة رفع البصمة. كل خصم هو جزء من أجر يوم واحد (الراتب الشهري ÷ 30)، فيتناسب المبلغ مع راتبك أنت." },
-        { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "يُحتسب التأخير من وقت التقاط صورة الساعة — التقط الصورة فور وصولك. إذا لم يتمكن التطبيق من قراءة وقت الصورة (مثل لقطة شاشة أو صورة معدّلة أو مُعاد توجيهها) يُعتبر غياباً: خصم 3 أيام.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك يُعتبر غياباً (no show): خصم 3 أيام، يُطبَّق تلقائياً في اليوم التالي.", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت صباحي غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط."] },
+        { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "يُحتسب التأخير من وقت التقاط صورة الساعة — التقط الصورة فور وصولك. إذا لم يتمكن التطبيق من قراءة وقت الصورة (مثل لقطة شاشة أو صورة معدّلة أو مُعاد توجيهها) يُعتبر غياباً: خصم 3 أيام.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك يُعتبر غياباً (no show): خصم 3 أيام، يُطبَّق تلقائياً في اليوم التالي.", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط (راجع التغطية أدناه)."] },
+        { type: "subheader", text: "من يجب أن يسجّل البصمة — تغطية الشيفت" },
+        { type: "para", text: "الباريستا المسجّل اسمه في الجدول الأسبوعي لفرع ويوم وشيفت معيّن هو من يجب أن يسجّل بصمة ذلك الشيفت." },
+        { type: "bullets", items: ["لم يسجّل أحد بصمة الشيفت: يُعتبر الباريستا المُجدول غياباً (no show) — خصم 3 أيام.", "إذا سجّل بصمة شخص غير مُجدول في ذلك الشيفت: تتحول بصمته إلى اللون الأخضر (🤝 تغطية) ولا يُعتبر الباريستا المُجدول غائباً بدون بصمة. بدلاً من ذلك يُخصم يوم من رصيد إجازته السنوية ويُضاف يوم إلى رصيد الباريستا الذي سجّل البصمة، ويحصل أيضاً على +50 نقطة انضباط.", "لا تُحتسب على الباريستا المُجدول نقاط −100 (بدون بصمة) في مؤشر الانضباط عن شيفت تمت تغطيته.", "إذا كان الباريستا المُجدول في إجازة معتمدة في ذلك اليوم: لا خصم ولا إضافة.", "تُحسب التغطية تلقائياً من الجدول والبصمات بعد انتهاء اليوم؛ وإذا عُدّل الجدول أو البصمة لاحقاً تتبعه النتيجة.", "لا يمكن وضع باريستا في نفس اليوم والشيفت في فرعين."] },
         { type: "subheader", text: "خصومات أخرى" },
         { type: "para", text: "يسجّلها المالك أو رئيس البريستا يدوياً من شاشة الخصومات — بنفس حساب نصف يوم من الراتب (الراتب الشهري ÷ 30 × 0.5)." },
         { type: "bullets", items: ["عدم الالتزام بالقواعد، أو عدم تحديث التطبيق/الموقع كما هو مطلوب: خصم نصف يوم.", "مخالفة النظافة الشخصية أو الزي الموحد: خصم نصف يوم.", "غياب بدون بصمة (no show) مُسجَّل يدوياً وليس عبر فحص البصمات المفقودة التلقائي: خصم 3 أيام.", "قاعدة التكرار: من الغياب بدون بصمة الثاني في نفس الشهر فصاعداً، يُضاعَف كل خصم غياب لاحق في ذلك الشهر. وبشكل منفصل، من خصم السلوك الثاني (قواعد/موقع، نظافة، أو زي) في نفس الشهر فصاعداً، يُضاعَف كل خصم سلوك لاحق في ذلك الشهر."] },
@@ -19246,6 +19393,8 @@ routes.handbook = function (u) {
         { type: "bullets", items: [
           "Every barista gets <strong>4 paid annual leave days per calendar month</strong>.",
           "Any approved annual leave day beyond the 4th in that same calendar month is unpaid — <strong>one full day's salary is deducted automatically</strong> from that month's payroll (daily rate = monthly salary ÷ 30) for every day past the 4th.",
+          "Days you are simply not on the submitted weekly schedule also count toward the 4 free days; each one beyond the 4th is treated as a no show — 3 days' pay.",
+          "A shift someone else stamped for (a cover) counts as 1 day off your balance; a shift you covered adds 1 day to your balance.",
           "The free-day count resets at the start of each calendar month and does not carry over or accumulate.",
           "Sick leave is separate and unaffected by this rule — it is auto-approved instantly with a ¼-day deduction per sick day, as recorded in HR.",
         ] },
@@ -19265,6 +19414,8 @@ routes.handbook = function (u) {
         { type: "bullets", items: [
           "يحصل كل بريستا على <strong>4 أيام إجازة سنوية مدفوعة لكل شهر ميلادي</strong>.",
           "أي يوم إجازة سنوية معتمد بعد اليوم الرابع في نفس الشهر يكون بدون أجر — <strong>يُخصم يوم كامل من الراتب تلقائياً</strong> من رواتب ذلك الشهر (أجر اليوم = الراتب الشهري ÷ 30) عن كل يوم بعد الرابع.",
+          "الأيام التي لا يكون اسمك فيها في الجدول الأسبوعي المقدَّم تُحتسب أيضاً من الأيام الأربعة المجانية؛ وكل يوم بعد الرابع يُعتبر غياباً (no show) — خصم 3 أيام.",
+          "الشيفت الذي سجّل بصمته شخص آخر (تغطية) يُحتسب يوماً واحداً من رصيدك؛ والشيفت الذي غطّيته يُضيف يوماً إلى رصيدك.",
           "يُعاد ضبط عدد الأيام المجانية في بداية كل شهر ميلادي ولا يتراكم أو يُرحَّل.",
           "الإجازة المرضية منفصلة ولا تتأثر بهذه القاعدة — تُعتمد فوراً مع خصم ربع يوم لكل يوم مرضي، كما هو مسجّل في الموارد البشرية.",
         ] },
@@ -21464,7 +21615,8 @@ function kpiPunctualityScore(userId, cutoff) {
       const branch  = (entry.branch||"maadi").toLowerCase();
       const st      = stampMap[dateStr + "|" + branch + "|" + stampShift(entry)];
       if (!st) {
-        delta -= 100;
+        // Covered by someone else = a leave day, not a no-show.
+        if (!slotCovers(dateStr, branch, stampShift(entry)).some(c => c.absent === userId)) delta -= 100;
       } else {
         const diff = _signinMinsLate(st);
         if      (diff <= -30) delta += 10;
@@ -21478,7 +21630,7 @@ function kpiPunctualityScore(userId, cutoff) {
 
   // Substitute cover bonus: +50 per shift covered for someone else
   const subCovers = (state.signin_stamps||[]).filter(s =>
-    notTest(s) && s.by === userId && s.substitute_cover && new Date(s.at).getTime() >= cutoff
+    notTest(s) && s.by === userId && new Date(s.at).getTime() >= cutoff && isCoverStamp(s)
   );
   delta += subCovers.length * 50;
 
@@ -21530,6 +21682,8 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
       (s.branch||"").toLowerCase() === branch && stampShift(s) === entShift
     );
     if (hasStamp) continue;
+    // Someone else stamped this shift → a cover (leave day), not a no-show.
+    if (slotCovers(dateStr, branch, entShift).some(c => c.absent === uid)) continue;
     // Approved leave that day → not a no-show.
     const onLeave = (state.leaves||[]).some(l =>
       l.user_id === uid && l.status === "approved" && l.from_date <= dateStr && (l.to_date || l.from_date) >= dateStr
@@ -21587,8 +21741,9 @@ function autoApplyMissingStamps() {
   }
   const stale = (state.penalties || []).filter(p =>
     p.auto_no_stamp && typeof p.id === "string" && p.id.startsWith("nostamp_") &&
-    (state.signin_stamps || []).some(s => notTest(s) && s.by === p.user_id &&
-      localISODate(new Date(s.at)) === p.date && (s.branch || "").toLowerCase() === p.branch && stampShift(s) === stampShift(p))
+    ((state.signin_stamps || []).some(s => notTest(s) && s.by === p.user_id &&
+      localISODate(new Date(s.at)) === p.date && (s.branch || "").toLowerCase() === p.branch && stampShift(s) === stampShift(p)) ||
+     slotCovers(p.date, p.branch, stampShift(p)).some(c => c.absent === p.user_id))
   );
   if (stale.length) {
     const ids = new Set(stale.map(p => p.id));
@@ -21598,6 +21753,93 @@ function autoApplyMissingStamps() {
   }
   return changed;
 }
+// From 1 Nov 2026: a missing daily log deducts ¼ day (automatically, like the no-stamp check).
+//  • Waste log → the barista on the LAST shift of the day at that branch (the one who also does
+//    the shift close). Missed = no waste entry for that branch+day ("No waste" counts).
+//  • Cleaning log → the barista who STARTS the day (morning shift). Missed = no cleaning log.
+// The responsible barista is the one on the roster for that shift who stamped first; if none of
+// the rostered baristas stamped, whoever stamped that shift (a cover); if nobody stamped the
+// shift there is no one to charge (the no-show rules already apply). Owner/head-barista devices
+// run it for the last 7 days; deterministic ids keep it to one penalty per branch+day+log and
+// let a deleted one stay deleted; a penalty is withdrawn if the log shows up later.
+const MISSING_LOG_RULES_START = "2026-11-01";
+function _wasteDayOf(w) { const d = new Date(w.at); if (d.getHours() < 6) d.setDate(d.getDate() - 1); return localISODate(d); }
+function _logOwner(ds, branch, shift) {
+  const dk = ROSTER_DAYS[new Date(ds + "T12:00:00").getDay()], wk = sundayOf(ds);
+  const rostered = [...new Set((state.rosters || []).filter(r => r.week_of === wk && r.day === dk &&
+    String(r.branch || "").toLowerCase() === branch && r.shift === shift).map(r => r.user_id))];
+  if (!rostered.length) return null;
+  const stamps = (state.signin_stamps || []).filter(x => notTest(x) && localISODate(new Date(x.at)) === ds &&
+    String(x.branch || "").toLowerCase() === branch && stampShift(x) === shift).sort((a, b) => a.at.localeCompare(b.at));
+  const first = stamps.find(x => rostered.includes(x.by)) || stamps[0];
+  return first ? first.by : null;
+}
+function missingLogOwners(ds, branch) {
+  const out = {};
+  const dk = ROSTER_DAYS[new Date(ds + "T12:00:00").getDay()], wk = sundayOf(ds);
+  const hasNight = (state.rosters || []).some(r => r.week_of === wk && r.day === dk && String(r.branch || "").toLowerCase() === branch && r.shift === "night");
+  const closer = hasNight ? _logOwner(ds, branch, "night") : _logOwner(ds, branch, "morning"); // no evening shift → the morning barista closes
+  const opener = _logOwner(ds, branch, "morning");
+  if (closer) out.waste = closer;
+  if (opener) out.cleaning = opener;
+  return out;
+}
+function autoApplyMissingLogPenalties() {
+  const cu = typeof currentUser === "function" ? currentUser() : null;
+  if (!state._auth || !cu || !["owner", "head_barista"].includes(cu.role)) return 0;
+  if (!_pulledThisSession) return 0;
+  const today = localISODate(new Date());
+  const tomb = _tombstoneSet();
+  state.penalties = state.penalties || [];
+  let changed = 0;
+  const logExists = (kind, ds, branch) => kind === "waste"
+    ? (state.waste || []).some(w => notTest(w) && String(w.branch || "").toLowerCase() === branch && _wasteDayOf(w) === ds)
+    : (state.cleaning_logs || []).some(c => notTest(c) && String(c.branch || "").toLowerCase() === branch &&
+        (c.date || localISODate(new Date(c.at))) === ds);
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const ds = localISODate(d);
+    if (ds < MISSING_LOG_RULES_START || ds >= today) continue;
+    for (const branch of ["maadi", "zawya"]) {
+      if (isBranchClosed(branch, ds)) continue;
+      const owners = missingLogOwners(ds, branch);
+      for (const kind of ["waste", "cleaning"]) {
+        const uid = owners[kind];
+        if (!uid || logExists(kind, ds, branch)) continue;
+        const pid = `nolog_${kind}_${branch}_${ds}`;
+        if (tomb.has(pid) || state.penalties.some(p => p.id === pid)) continue;
+        if ((state.leaves || []).some(l => l.user_id === uid && l.status === "approved" && l.from_date <= ds && (l.to_date || l.from_date) >= ds)) continue;
+        const user = (state.users || []).find(x => x.id === uid);
+        if (!user) continue;
+        const salary = getSalaryForMonth(uid, ds.slice(0, 7));
+        const label = kind === "waste" ? "waste log" : "cleaning log";
+        state.penalties.push({
+          id: pid, at: now(), by: cu.id, by_name: "Auto (missing log)",
+          user_id: uid, barista: user.name,
+          kind: "quarter_day", kind_label: "Quarter day",
+          reason: "missing_log", reason_code: kind === "waste" ? "missing_waste_log" : "missing_cleaning_log",
+          date: ds, month: ds.slice(0, 7), branch,
+          amount: penaltyAmount("quarter_day", salary),
+          note: `Auto: no ${label} at ${branch} for ${ds} — ¼ day deducted`,
+          auto_missing_log: true, log_kind: kind,
+        });
+        notifyLeadershipRole("weekly_schedule", `Missing ${label} — ${user.name}`, `No ${label} at ${branch} for ${ds}. ¼ day deducted.`);
+        changed++;
+      }
+    }
+  }
+  // Withdraw an auto penalty whose log has since been recorded (a phone that synced late).
+  const stale = state.penalties.filter(p => p.auto_missing_log && logExists(p.log_kind, p.date, p.branch));
+  if (stale.length) {
+    const ids = new Set(stale.map(p => p.id));
+    state.penalties = state.penalties.filter(p => !ids.has(p.id));
+    recordDeletion(...ids);
+    changed++;
+  }
+  if (changed) saveState();
+  return changed;
+}
+
 function kpiWasteScore(userId, cutoff) {
   const entries = (state.waste||[]).filter(w => notTest(w) && w.by === userId && new Date(w.at).getTime() >= cutoff);
   // Group submitted entries by calendar day
