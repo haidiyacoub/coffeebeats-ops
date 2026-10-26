@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-783 -->
+<!-- CB_BUILD:20261026-798 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-783";
+  var BUILD = "20261026-798";
   (function() {
     function checkFresh() {
       try {
@@ -17234,6 +17234,17 @@ routes.signin_stamp_new = function (u) {
         const who = forUserId === u.id ? u : (staffDir.resolve(forUserId) || u);
         const onBehalf = who.id !== u.id;
         const s = stamp();
+        // The roster decides the shift: if this barista is on the schedule at this branch today
+        // only for the OTHER shift (e.g. night while the picker said morning), stamp that shift.
+        {
+          const sd = localISODate(new Date(s.at)), dk = ROSTER_DAYS[new Date(s.at).getDay()], wk = sundayOf(sd);
+          const mineToday = (state.rosters || []).filter(r => r.week_of === wk && r.day === dk &&
+            String(r.branch || "").toLowerCase() === String(branch || "").toLowerCase() && r.user_id === who.id).map(r => r.shift);
+          if (mineToday.length && !mineToday.includes(shift)) {
+            const fixed = mineToday.includes("night") ? "night" : "morning";
+            if (fixed !== shift) { shift = fixed; shiftSel.value = fixed; toast(T(`Shift set to ${fixed === "night" ? "Evening" : "Morning"} to match the schedule`, `تم ضبط الشيفت على ${fixed === "night" ? "المسائي" : "الصباحي"} حسب الجدول`), "warn"); }
+          }
+        }
         const photoIds = photoBlobs.map(() => uuid());
         for (let i = 0; i < photoBlobs.length; i++) {
           try { await IDB.put(photoIds[i], photoBlobs[i]); } catch (e) { console.warn(e); }
@@ -17707,7 +17718,19 @@ routes.signin_stamp_list = function (u) {
       // Plan: per branch+day+shift slot, stamps already by a rostered barista stay with them;
       // the rest go to rostered baristas who have no stamp yet.
       const slots = {};
-      hit.forEach(s => { const ds = localISODate(new Date(s.at)); (slots[`${ds}|${String(s.branch||"").toLowerCase()}|${stampShift(s)}`] ||= []).push(s); });
+      const rosteredFor = (ds, br, sh) => {
+        const dk = ROSTER_DAYS[new Date(ds + "T12:00:00").getDay()], wk = sundayOf(ds);
+        return [...new Set((state.rosters || []).filter(r => r.week_of === wk && r.day === dk &&
+          String(r.branch||"").toLowerCase() === br && r.shift === sh).map(r => r.user_id))];
+      };
+      hit.forEach(s => {
+        const ds = localISODate(new Date(s.at)), br = String(s.branch||"").toLowerCase();
+        let sh = stampShift(s);
+        // Nobody is rostered on the stamped shift but this barista is on the other one → wrong shift picked.
+        const other = sh === "night" ? "morning" : "night";
+        if (!rosteredFor(ds, br, sh).length && rosteredFor(ds, br, other).includes(s.by)) sh = other;
+        (slots[`${ds}|${br}|${sh}`] ||= []).push(s);
+      });
       const plan = [], skipped = [];
       for (const [key, group] of Object.entries(slots)) {
         const [ds, br, sh] = key.split("|");
@@ -17733,13 +17756,13 @@ routes.signin_stamp_list = function (u) {
       for (const { s, who, ds, br, sh } of plan) {
         const w = staffDir.resolve(who) || (state.users || []).find(x => x.id === who) || { id: who, name: who };
         const clockAt = new Date(ds + "T" + branchShiftOpen(br, sh, ds) + ":00").toISOString();
-        const pen = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === ds && stampShift(x) === sh);
+        const pen = (state.penalties || []).find(x => x.auto_late && x.user_id === s.by && x.date === ds && stampShift(x) === stampShift(s));
         if (pen) pens.push(pen);
         const { substitute_cover, entered_by, entered_by_name, ...rest } = s;
         state.signin_stamps = state.signin_stamps.filter(x => x.id !== s.id);
         recordDeletion(s.id);
         state.signin_stamps.push({
-          ...rest, id: uuid(), by: w.id, by_name: w.name,
+          ...rest, id: uuid(), by: w.id, by_name: w.name, shift: sh,
           clock_at: clockAt, clock_source: "manual", mins_late: 0, early_bonus: false,
           last_edited_at: stampedAt, last_edited_by_name: cu.name,
           edit_note: `Aligned to schedule by ${cu.name} · ${fmtDate(stampedAt)} (was ${s.by_name} · ${fmtDate(stampClockTime(s))})`,
