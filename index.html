@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-806 -->
+<!-- CB_BUILD:20261026-812 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-806";
+  var BUILD = "20261026-812";
   (function() {
     function checkFresh() {
       try {
@@ -7314,8 +7314,8 @@ routes.purchase_new = function (u) {
     form.appendChild(el("label", {}, T("Paid by","طريقة الدفع")));
     const paySel = el("select", {},
       [
-        ["petty_cash",T("Petty cash (head barista)","العهدة النقدية (رئيس البريستا)")],
-        ["maadi_cash",T("💰 Maadi sales cash (drawer)","💰 نقدية مبيعات المعادي (الدرج)")],
+        ["petty_cash",T("💵 Petty cash (topped-up float)","💵 العهدة النقدية (المشحونة)")],
+        ["maadi_cash",T("💰 Maadi cash (drawer — from shift close)","💰 نقدية المعادي (الدرج — من إغلاق الشيفت)")],
         ["owner_bank",T("Bank transfer (owner)","تحويل بنكي (المالك)")],
         ["credit_card",T("Credit card","بطاقة ائتمان")],
         ["owner_personal",T("Paid personally (reimburse later)","دُفع شخصياً (يُسدَّد لاحقاً)")],
