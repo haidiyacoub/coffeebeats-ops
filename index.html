@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-815 -->
+<!-- CB_BUILD:20261026-970 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-815";
+  var BUILD = "20261026-970";
   (function() {
     function checkFresh() {
       try {
@@ -18196,6 +18196,75 @@ function handbookSeedRecipes() {
   ];
 }
 
+// Recipes taken from "Coffee Beats Menu Analysis ver2.xlsx" (Receipe tab = source of truth) that were
+// missing from the handbook. Ingredient amounts are from the sheet; steps are modelled on similar drinks.
+// Deterministic ids so several devices running the one-time fill never create duplicates.
+function handbookExcelFillRecipes() {
+  const T1  = "Coffee Type 1 · Extraction: 26–30 sec · Brew Ratio 1:2";
+  const T2  = "Coffee Type 2 · Extraction: ~32 sec · Brew Ratio 1:2.5";
+  const TK  = "Traditional Cezve Brew · Fine Turkish Grind · Low & Slow";
+  const R = (slug, category, name, size, time, coffee_notes, ingredients, steps) =>
+    ({ id: "hb_xl_" + slug, category, name, size, time, ...(coffee_notes ? { coffee_notes } : {}), ingredients, steps });
+  return [
+    R("cortado_team", "Hot Espresso", "Cortado Team", "4 oz", "5 min", T2,
+      ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 100 ml"],
+      ["Extract espresso into cup (Type 2).", "Steam milk 60°C, silky, low foam.", "Pour milk gently, preserve crema.", "Serve immediately."]),
+    R("french_coffee", "Hot Espresso", "French Coffee", "8 oz", "6 min", TK,
+      ["Turkish coffee grounds: 12 g", "Whole milk: 100 ml"],
+      ["Add 12 g grounds and 100 ml milk to cezve.", "Heat over low flame, stir gently, until foam rises.", "Remove from heat before boiling.", "Pour carefully including foam. Serve."]),
+    R("queen_moka", "Iced Coffee", "Queen Moka", "16 oz", "5 min", T2,
+      ["Espresso: 18 g (Coffee Type 2)", "Ice cream: 1 scoop"],
+      ["Place 1 scoop of ice cream in the cup.", "Extract espresso (Type 2).", "Pour hot espresso over the ice cream.", "Serve immediately."]),
+    R("lady_moka", "Iced Coffee", "Lady Moka", "16 oz", "5 min", T2,
+      ["Espresso: 18 g (Coffee Type 2)", "Ice cream: 1 scoop"],
+      ["Place 1 scoop of ice cream in the cup.", "Extract espresso (Type 2).", "Pour hot espresso over the ice cream.", "Serve immediately."]),
+    R("director_blended", "Signature Drinks", "The Director Blended", "12 oz", "6 min", T2,
+      ["Espresso: 18 g (Coffee Type 2)", "Cold milk: 90 ml", "Ice: 200 g", "Vanilla powder: 30 g", "Sea salt vanilla sauce: 30 g"],
+      ["Add milk and espresso to blender.", "Add ice and vanilla powder.", "Add sea salt vanilla sauce.", "Blend ~35 sec. Pour into cup, serve with lid."]),
+    R("dancer", "Signature Drinks", "The Dancer", "12 oz", "5 min", "",
+      ["Matcha powder: 3 g", "Sea salt vanilla sauce: 30 g", "Steamed whole milk: 280 ml"],
+      ["Combine matcha and sea salt vanilla sauce. Whisk until smooth paste.", "Steam milk with light foam.", "Pour milk over matcha base, stir gently.", "Serve with lid."]),
+    R("dancer_blended", "Signature Drinks", "The Dancer Blended", "12 oz", "5 min", "",
+      ["Matcha powder: 3 g", "Ice: 220 g", "Whole milk: 150 ml", "Vanilla powder: 30 g", "Sea salt vanilla sauce: 25 g"],
+      ["Add milk to blender.", "Add ice, matcha, vanilla powder and sea salt vanilla sauce.", "Blend until smooth and creamy.", "Pour into cup, serve with lid."]),
+    R("green_apple_mojito", "Mojitos", "Green Apple Mojito", "16 oz", "6 min", "",
+      ["Virgin mojito base (V7 can): 1 can", "Lemon slices: 2", "Fresh mint leaves: 2", "Green apple puree: 35 g", "Ice: full cup"],
+      ["Fill cup with ice.", "Add lemon, muddle gently.", "Add mint and green apple puree.", "Pour V7 can over ice. Serve with lid."]),
+    R("green_ice_tea", "Non-Coffee & Tea", "Green Iced Tea", "16 oz", "6 min", "",
+      ["Tea bags: 2", "Green apple puree: 35 g", "Sugar syrup: 15 ml", "Ice: full cup"],
+      ["Brew tea bags in hot water. Allow to cool.", "Fill cup with ice.", "Add green apple puree and sugar syrup, stir.", "Pour over ice, serve with lid."]),
+    // ── EXTRAS & ADD-ONS ──
+    R("x_decaf_shot", "Extras & Add-ons", "Decaf Shot", "—", "3 min", "Decaf coffee",
+      ["Decaf coffee: 18 g"], ["Dose 18 g decaf into portafilter.", "Extract into the drink, replacing the regular shot.", "Serve as the drink's recipe."]),
+    R("x_decaf_extra_shot", "Extras & Add-ons", "Decaf Extra Shot", "—", "3 min", "Decaf coffee",
+      ["Decaf coffee: 18 g"], ["Dose 18 g decaf into portafilter.", "Extract the extra shot into the drink.", "Serve as the drink's recipe."]),
+    R("x_coffee_shot", "Extras & Add-ons", "Coffee Shot", "—", "3 min", T2,
+      ["Espresso: 18 g (Coffee Type 2)"], ["Dose 18 g into portafilter.", "Extract the extra shot into the drink.", "Serve as the drink's recipe."]),
+    R("x_white_mocha_sauce", "Extras & Add-ons", "White Mocha Sauce", "—", "1 min", "",
+      ["White chocolate sauce: 20 g"], ["Add 20 g white chocolate sauce to the drink base.", "Mix well before adding milk."]),
+    R("x_dark_mocha_sauce", "Extras & Add-ons", "Dark Mocha Sauce", "—", "1 min", "",
+      ["Dark chocolate sauce: 20 g"], ["Add 20 g dark chocolate sauce to the drink base.", "Mix well before adding milk."]),
+    R("x_salted_caramel", "Extras & Add-ons", "Salted Caramel Syrup", "—", "1 min", "",
+      ["Salted caramel sauce: 20 g"], ["Add 20 g salted caramel sauce to the drink base.", "Mix well before adding milk."]),
+    R("x_condensed_milk", "Extras & Add-ons", "Condensed Milk", "—", "1 min", "",
+      ["Condensed milk: 20 g"], ["Add 20 g condensed milk to the drink base.", "Stir until dissolved."]),
+    R("x_honey", "Extras & Add-ons", "Honey", "—", "1 min", "",
+      ["Honey: 20 g"], ["Add 20 g honey to the drink base.", "Stir until dissolved."]),
+    R("x_whipped_cream", "Extras & Add-ons", "Whipped Cream", "—", "1 min", "",
+      ["Whipped cream: 10 g"], ["Top the finished drink with 10 g whipped cream.", "Serve immediately."]),
+    R("x_oat_milk", "Extras & Add-ons", "Oat Milk", "—", "2 min", "",
+      ["Oat milk: 250 ml"], ["Use oat milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
+    R("x_coconut_milk", "Extras & Add-ons", "Coconut Milk", "—", "2 min", "",
+      ["Coconut milk: 250 ml"], ["Use coconut milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
+    R("x_almond_milk", "Extras & Add-ons", "Almond Milk", "—", "2 min", "",
+      ["Almond milk: 250 ml"], ["Use almond milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
+    R("x_full_cream_milk", "Extras & Add-ons", "Full Cream Milk", "—", "2 min", "",
+      ["Full cream milk: 150 ml"], ["Use full cream milk in place of the standard milk.", "Steam to light microfoam.", "Continue with the drink's recipe."]),
+    R("x_skimmed_milk", "Extras & Add-ons", "Skimmed Milk", "—", "2 min", "",
+      ["Skimmed milk: 150 ml"], ["Use skimmed milk in place of the standard milk.", "Steam to light microfoam.", "Continue with the drink's recipe."]),
+  ];
+}
+
 // Legacy IndexedDB kept for any previously stored uploads
 (function setupHandbookDB() {
   const DB = "coffee-beats-handbook", STORE = "files";
@@ -18904,6 +18973,20 @@ routes.handbook = function (u) {
   });
   if (_migrated) saveState();
 
+  // One-time fill: add Excel-sheet recipes the handbook lacks (matched by name, never overwrites).
+  if (!state._hb_excel_fill_v1) {
+    const _norm = n => String(n || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const _have = new Set(state.handbook_recipes.map(r => _norm(r.name)));
+    const _ALIAS = { greenicedtea: ["greenicetea"] };
+    const _add = handbookExcelFillRecipes().filter(r => {
+      const k = _norm(r.name);
+      return !_have.has(k) && !(_ALIAS[k] || []).some(a => _have.has(a));
+    });
+    if (_add.length) state.handbook_recipes.push(..._add);
+    state._hb_excel_fill_v1 = true;
+    saveState();
+  }
+
   const canEdit = (u.role === "owner" || u.role === "head_barista");
   const CATEGORIES = [...new Set(state.handbook_recipes.map(r => r.category))];
 
@@ -19076,6 +19159,7 @@ routes.handbook = function (u) {
     "Non-Coffee & Tea": "بدون قهوة وشاي",
     "Mojitos": "موهيتو",
     "Flavoured Espresso": "إسبريسو بالنكهات",
+    "Extras & Add-ons": "إضافات",
   };
   function catLabel(cat) { return lang === "ar" ? (CAT_AR[cat] || cat) : (cat === "all" ? "All Drinks" : cat); }
 
