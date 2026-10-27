@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-013 -->
+<!-- CB_BUILD:20261027-333 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-013";
+  var BUILD = "20261027-333";
   (function() {
     function checkFresh() {
       try {
@@ -4740,7 +4740,7 @@ function topbar(u) {
     el("img", { class: "logo", src: CB_LOGO_SRC, alt: "Coffee Beats", style: { height: "52px" } }),
     el("div", { style: { flex: "1" } }),
   ];
-  if (u.role === "barista" || u.role === "head_barista") {
+  {
     children.push(el("button", {
       class: "chip",
       style: { fontWeight: "800" },
