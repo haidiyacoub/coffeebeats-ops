@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-975 -->
+<!-- CB_BUILD:20261027-986 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-975";
+  var BUILD = "20261027-986";
   (function() {
     function checkFresh() {
       try {
@@ -22122,7 +22122,9 @@ function autoApplyMissingStamps() {
     p.auto_no_stamp && typeof p.id === "string" && p.id.startsWith("nostamp_") &&
     ((state.signin_stamps || []).some(s => notTest(s) && s.by === p.user_id &&
       localISODate(new Date(s.at)) === p.date && stampShift(s) === stampShift(p)) ||
-     slotCovers(p.date, p.branch, stampShift(p)).some(c => c.absent === p.user_id))
+     slotCovers(p.date, p.branch, stampShift(p)).some(c => c.absent === p.user_id) ||
+     (state.leaves || []).some(l => l.user_id === p.user_id && l.status === "approved" &&
+       l.from_date <= p.date && (l.to_date || l.from_date) >= p.date))
   );
   if (stale.length) {
     const ids = new Set(stale.map(p => p.id));
