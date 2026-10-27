@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-969 -->
+<!-- CB_BUILD:20261027-975 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-969";
+  var BUILD = "20261027-975";
   (function() {
     function checkFresh() {
       try {
@@ -8692,6 +8692,7 @@ routes.salaries = function (u) {
     state.deleted_sick_leave_deductions = state.deleted_sick_leave_deductions || [];
     // Self-heal: an approved sick leave whose deduction never saved/synced (stale phone,
     // sync loss) gets its deduction created here. Skips ones the owner deleted on purpose.
+    autoApproveSickLeaves();
     {
       const have = new Set([...state.sick_leave_deductions, ...state.deleted_sick_leave_deductions].map(x => x.leave_id).filter(Boolean));
       let added = 0;
@@ -18399,6 +18400,20 @@ function handbookExcelFillRecipes() {
 // Leave must start at least 7 days from today.
 // On submit: mailto: → head barista (To:), owner (CC:)
 // ==============================================================
+// Sick leave is never pending: approve any that got stuck (the Approve button is hidden for sick).
+function autoApproveSickLeaves() {
+  let n = 0;
+  for (const lv of (state.leaves || [])) {
+    if (lv.type !== "sick" || lv.status !== "pending") continue;
+    const s = stamp();
+    lv.status = "approved"; lv.reviewed_by = s.by; lv.reviewed_by_name = s.by_name;
+    lv.reviewed_at = s.at; lv.updated_at = s.at; lv.review_note = "Auto-approved";
+    n++;
+  }
+  if (n) saveState();
+  return n;
+}
+
 routes.leave_new = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Request Leave","طلب إجازة"), T("Submit annual or sick leave. Annual leave requires 1 week notice; sick leave is recorded immediately.","قدّم إجازة سنوية أو مرضية. الإجازة السنوية تتطلب إشعاراً أسبوعاً مسبقاً؛ الإجازة المرضية تُسجّل فوراً.")));
@@ -18626,6 +18641,7 @@ routes.leave_new = function (u) {
 // Barista: sees only their own leaves, can cancel pending ones.
 // ==============================================================
 routes.leave_list = function (u) {
+  autoApproveSickLeaves();
   const wrap = el("div", {});
   wrap.appendChild(header(T("Leave Requests","طلبات الإجازة"), T("View, approve, and reject leave requests.","عرض واعتماد ورفض طلبات الإجازة.")));
 
