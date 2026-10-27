@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-003 -->
+<!-- CB_BUILD:20261027-013 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-003";
+  var BUILD = "20261027-013";
   (function() {
     function checkFresh() {
       try {
@@ -5243,7 +5243,10 @@ routes.home = function (u) {
   wrap.appendChild(el("div", { class: "banner-arch" }, [ `Signed in as `, el("b", {}, u.name), ` · ${branchInfo}`]));
 
   // ── Head barista: highly visible missing-items alert ──
-  if (u.role === "head_barista") { try { wrap.appendChild(headBaristaMissingAlert(u)); } catch (e) { console.warn(e); } }
+  if (u.role === "head_barista") {
+    try { const a = scheduleGapAlert(u); if (a) wrap.appendChild(a); } catch (e) { console.warn(e); }
+    try { wrap.appendChild(headBaristaMissingAlert(u)); } catch (e) { console.warn(e); }
+  }
 
   const tiles = el("div", { id: "home-grid", class: "grid c2" });
 
@@ -8123,7 +8126,7 @@ function checkNoStampAlert() {
 
 function startNoStampCheck() {
   if (_noStampCheckInterval) return;
-  const run = () => { checkNoStampAlert(); try { autoApplyMissingStamps(); } catch (e) { console.warn("autoApplyMissingStamps", e); } try { autoApplyMissingSchedulePenalties(); } catch (e) { console.warn("autoApplyMissingSchedulePenalties", e); } try { autoApplyMissingLogPenalties(); } catch (e) { console.warn("autoApplyMissingLogPenalties", e); } };
+  const run = () => { checkNoStampAlert(); try { autoApplyMissingStamps(); } catch (e) { console.warn("autoApplyMissingStamps", e); } try { autoApplyMissingSchedulePenalties(); } catch (e) { console.warn("autoApplyMissingSchedulePenalties", e); } try { autoRemindScheduleGaps(); } catch (e) { console.warn("autoRemindScheduleGaps", e); } try { autoApplyMissingLogPenalties(); } catch (e) { console.warn("autoApplyMissingLogPenalties", e); } };
   run();
   _noStampCheckInterval = setInterval(run, 5 * 60 * 1000); // every 5 min
 }
@@ -10985,8 +10988,57 @@ function scheduleDayOffs(uid, month) {
   return out;
 }
 
-// Head barista owes half a day for every completed week (Sun–Sat) in which a branch they run
-// has no schedule at all. Owner/head-barista devices run it; deterministic id keeps it to one
+// Weeks (the current one and the next) in which a branch a head barista runs has no schedule yet.
+// daysLeft = days until the week starts (0 or less → it already started, so the ½-day penalty applies).
+function scheduleGapsFor(hb) {
+  const todayStr = localISODate(new Date());
+  const thisWeek = sundayOf(todayStr);
+  const nx = new Date(thisWeek + "T12:00:00"); nx.setDate(nx.getDate() + 7);
+  const out = [];
+  for (const weekOf of [thisWeek, localISODate(nx)]) {
+    if (weekOf < SCHEDULE_RULES_START) continue;
+    const wholeWeekClosed = b => ROSTER_DAYS.every((_, di) => { const d = new Date(weekOf + "T12:00:00"); d.setDate(d.getDate() + di); return isBranchClosed(b, localISODate(d)); });
+    const bad = _schedBranches(hb).filter(b => !wholeWeekClosed(b) && !(state.rosters || []).some(r => r.week_of === weekOf && String(r.branch || "").toLowerCase() === b));
+    if (!bad.length) continue;
+    const daysLeft = Math.round((new Date(weekOf + "T12:00:00") - new Date(todayStr + "T12:00:00")) / 86400000);
+    out.push({ weekOf, bad, daysLeft });
+  }
+  return out;
+}
+// Red alert on the head barista's home + profile; amber reminder for next week from 3 days before.
+function scheduleGapAlert(hb) {
+  const gaps = scheduleGapsFor(hb).filter(g => g.daysLeft <= 3);
+  if (!gaps.length) return null;
+  const late = gaps.some(g => g.daysLeft <= 0);
+  const card = el("div", { class: "card", style: { marginBottom: "12px", border: "2px solid " + (late ? "var(--bad, #c23b3b)" : "#c2610c"), background: late ? "rgba(194,59,59,0.10)" : "rgba(245,140,20,0.12)" } });
+  card.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } }, late ? T("🚨 Weekly schedule overdue","🚨 الجدول الأسبوعي متأخر") : T("⏰ Weekly schedule reminder","⏰ تذكير بالجدول الأسبوعي")));
+  for (const g of gaps) {
+    const br = g.bad.map(b => b.charAt(0).toUpperCase() + b.slice(1)).join(" + ");
+    const en = g.daysLeft <= 0 ? `Week of ${g.weekOf} has no schedule for ${br} — ½ day deducted from ${hb.name}. Submit it now.`
+             : `Week of ${g.weekOf} starts in ${g.daysLeft} day${g.daysLeft === 1 ? "" : "s"} and ${br} has no schedule yet. If it's not submitted by then, ½ day is deducted.`;
+    const ar = g.daysLeft <= 0 ? `أسبوع ${g.weekOf} بدون جدول لـ ${br} — خصم نصف يوم من ${hb.name}. أرسل الجدول الآن.`
+             : `أسبوع ${g.weekOf} يبدأ بعد ${g.daysLeft} يوم وجدول ${br} لم يُرسل بعد. إن لم يُرسل قبل بدايته يُخصم نصف يوم.`;
+    card.appendChild(el("div", { class: "small", style: { margin: "2px 0" } }, T(en, ar)));
+  }
+  card.appendChild(el("button", { class: "btn", style: { marginTop: "8px", width: "auto" }, onClick: () => go("roster") }, T("Open weekly schedule","فتح الجدول الأسبوعي")));
+  return card;
+}
+// Push the reminder to the schedule manager (and owner) 3 days and 1 day before a week starts.
+function autoRemindScheduleGaps() {
+  const cu = typeof currentUser === "function" ? currentUser() : null;
+  if (!state._auth || !cu || !["owner", "head_barista"].includes(cu.role)) return;
+  if (!_pulledThisSession) return;
+  for (const hb of (state.users || []).filter(x => x.role === "head_barista" && x.active !== false)) {
+    for (const g of scheduleGapsFor(hb)) {
+      if (g.daysLeft !== 3 && g.daysLeft !== 1) continue;
+      const br = g.bad.join(", ");
+      notifyLeadershipRole("weekly_schedule", `Weekly schedule reminder — ${hb.name}`,
+        `The week of ${g.weekOf} starts in ${g.daysLeft} day${g.daysLeft === 1 ? "" : "s"} and no schedule has been submitted for ${br}. Submit it before then to avoid a ½-day deduction.`);
+    }
+  }
+}
+// Head barista owes half a day for every week (Sun–Sat) that has STARTED with no schedule at all
+// for a branch they run (checked from the Sunday the week begins). Owner/head-barista devices run it; deterministic id keeps it to one
 // penalty per head barista per week across devices and lets a deleted one stay deleted.
 function autoApplyMissingSchedulePenalties() {
   const cu = typeof currentUser === "function" ? currentUser() : null;
@@ -10998,11 +11050,10 @@ function autoApplyMissingSchedulePenalties() {
   state.penalties = state.penalties || [];
   const tomb = _tombstoneSet();
   let created = 0;
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 0; i <= 6; i++) {
     const wd = new Date(); wd.setDate(wd.getDate() - 7 * i);
     const weekOf = sundayOf(localISODate(wd));
-    const sat = new Date(weekOf + "T12:00:00"); sat.setDate(sat.getDate() + 6);
-    if (weekOf < SCHEDULE_RULES_START || localISODate(sat) >= todayStr) continue; // week not over yet
+    if (weekOf < SCHEDULE_RULES_START || weekOf > todayStr) continue; // week hasn't started yet — still time to submit
     const missing = b => !(state.rosters || []).some(r => r.week_of === weekOf && String(r.branch || "").toLowerCase() === b);
     const wholeWeekClosed = b => ROSTER_DAYS.every((_, di) => { const d = new Date(weekOf + "T12:00:00"); d.setDate(d.getDate() + di); return isBranchClosed(b, localISODate(d)); });
     for (const hb of heads) {
@@ -19773,7 +19824,7 @@ routes.handbook = function (u) {
         { type: "para", text: "Every deduction is a share of one day's pay: monthly salary ÷ 30. Most are applied automatically by the app; the rest are logged by the owner or head barista on the Penalties screen. Every penalty appears in your My HR view with its date and reason." },
         { type: "subheader", text: "⭐ Head Barista — the penalties that also apply to YOU" },
         { type: "para", text: "<strong>The head barista automatically acts as Schedule Manager, Inventory Manager and Cash Manager, so on top of every rule below that applies to all baristas, these deductions are yours:</strong>" },
-        { type: "bullets", items: ["<strong>Weekly schedule not submitted</strong> for a branch you run, for a completed week (Sun–Sat): <strong>½ day</strong> per week.", "<strong>Inventory not updated</strong> — no inventory snapshot for the last day of the month: <strong>½ day</strong> (checked at the End-of-Month Check).", "<strong>Maadi cash deposit not logged</strong> for the week by the end of Friday (you get a reminder every Thursday): <strong>¼ day</strong> per missed week.", "Missing stamps, missing waste logs and missing cleaning logs on your own shifts: same deductions as every barista.", "Your leadership results also count inside your own Leadership KPI (Section 12)."] },
+        { type: "bullets", items: ["<strong>Weekly schedule not submitted</strong> for a branch you run, for a week that has started with no schedule (Sun–Sat): <strong>½ day</strong> per week. Reminders appear on the head barista's home and profile 3 days and 1 day before the week starts.", "<strong>Inventory not updated</strong> — no inventory snapshot for the last day of the month: <strong>½ day</strong> (checked at the End-of-Month Check).", "<strong>Maadi cash deposit not logged</strong> for the week by the end of Friday (you get a reminder every Thursday): <strong>¼ day</strong> per missed week.", "Missing stamps, missing waste logs and missing cleaning logs on your own shifts: same deductions as every barista.", "Your leadership results also count inside your own Leadership KPI (Section 12)."] },
         { type: "subheader", text: "The deduction sizes" },
         { type: "bullets", items: ["¼ day = a quarter of one day's pay.", "½ day = half a day's pay.", "1 day = one full day's pay.", "2 days / 3 days = two or three days' pay (3 days is a \"no show\")."] },
         { type: "subheader", text: "1. Lateness (automatic, from your stamp)" },
@@ -23454,6 +23505,8 @@ routes.my_hr = function(u, params) {
   state.overtime_logs  = state.overtime_logs  || [];
   state.salary_loans   = state.salary_loans   || [];
   state.leaves         = state.leaves         || [];
+
+  if (isHead) { try { const a = scheduleGapAlert(targetUser); if (a) wrap.appendChild(a); } catch (e) { console.warn(e); } }
 
   // Header
   const hdr = el("div", { class: "card", style: { textAlign: "center", marginBottom: "12px", background: "var(--ink)", color: "var(--accent-2)" } });
