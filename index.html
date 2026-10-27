@@ -17360,6 +17360,18 @@ routes.signin_stamp_new = function (u) {
             if (fixed !== shift) { shift = fixed; shiftSel.value = fixed; toast(T(`Shift set to ${fixed === "night" ? "Evening" : "Morning"} to match the schedule`, `تم ضبط الشيفت على ${fixed === "night" ? "المسائي" : "الصباحي"} حسب الجدول`), "warn"); }
           }
         }
+        // One stamp per barista, per day, per branch, per shift — a second one would double-score
+        // lateness (and double the penalty), so it is refused.
+        {
+          const sd = localISODate(new Date(s.at));
+          const dup = (state.signin_stamps || []).find(x => notTest(x) && x.by === who.id && localISODate(new Date(x.at)) === sd &&
+            String(x.branch || "").toLowerCase() === String(branch || "").toLowerCase() && stampShift(x) === shift);
+          if (dup) {
+            if (_stampBtn) _stampBtn.disabled = false;
+            return toast(T(`${who.name} already has a ${shift === "night" ? "evening" : "morning"} sign-in stamp at ${branch} on ${sd}. Only one stamp per barista per day per branch.`,
+                           `${who.name} لديه بالفعل بصمة ${shift === "night" ? "مسائية" : "صباحية"} في ${branch} بتاريخ ${sd}. بصمة واحدة فقط لكل باريستا في اليوم لكل فرع.`), "error");
+          }
+        }
         const photoIds = photoBlobs.map(() => uuid());
         for (let i = 0; i < photoBlobs.length; i++) {
           try { await IDB.put(photoIds[i], photoBlobs[i]); } catch (e) { console.warn(e); }
@@ -18033,6 +18045,13 @@ function editSigninStamp(s) {
       last_edited_at: stampedAt, last_edited_by_name: cu.name,
       edit_note: `Edited by ${cu.name} · ${fmtDate(stampedAt)} (was ${s.by_name} · ${localISODate(oldAt)}${String(s.branch || "").toLowerCase() !== branchSel.value ? " · " + s.branch : ""})`,
     };
+    {
+      const nd = localISODate(new Date(ns.at));
+      const dup = (state.signin_stamps || []).find(x => x.id !== s.id && notTest(x) && x.by === ns.by && localISODate(new Date(x.at)) === nd &&
+        String(x.branch || "").toLowerCase() === String(ns.branch || "").toLowerCase() && stampShift(x) === ns.shift);
+      if (dup) return toast(T(`${ns.by_name} already has a stamp for that shift at ${ns.branch} on ${nd}. One stamp per barista per day per branch.`,
+                              `${ns.by_name} لديه بالفعل بصمة لهذا الشيفت في ${ns.branch} بتاريخ ${nd}.`), "error");
+    }
     ns.mins_late = minsLateAt(ns.branch, ns.clock_at, ns.shift);
     ns.early_bonus = ns.mins_late <= -15;
     // The owner has reviewed this stamp by saving it, so even a "no readable photo time" penalty
