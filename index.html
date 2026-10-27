@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-333 -->
+<!-- CB_BUILD:20261027-344 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-333";
+  var BUILD = "20261027-344";
   (function() {
     function checkFresh() {
       try {
@@ -1170,6 +1170,16 @@ function migrateState(s) {
   // New rule (2026-06): a double shift = the normal 8 h shift (in base salary) + 5 extra
   // hours of OT at ×1.5 (5 × 1.5 = 7.5 h-equivalent). Recorrect any older-shape entries.
   // Idempotent: only touches entries that aren't already 5 h × 1.5×.
+  // One-time: penalties dated the 26th+ move to the next month's payout (25-to-25 cycle).
+  if (!s._pen_paycycle_migrated) {
+    (s.penalties || []).forEach(r => {
+      if (!r || !r.date || String(r.date).length < 10) return;
+      if (+String(r.date).slice(8, 10) < 26) return;
+      if (r.month && r.month !== String(r.date).slice(0, 7)) return; // already custom
+      r.month = payMonth(r.date);
+    });
+    s._pen_paycycle_migrated = true;
+  }
   if (!s._double_shift_5x15_migrated) {
     s.overtime_logs.forEach(r => {
       if (r.kind !== "double_shift") return;
@@ -3569,7 +3579,7 @@ function scanCashDepositPenalties() {
     user_id: cashMgrId, barista: cashMgr ? cashMgr.name : cashMgrId,
     kind: "quarter_day", kind_label: "Quarter day",
     reason: "leadership_fail", reason_code: "cash_deposit_missed",
-    date: todayStr, month: currentMonth,
+    date: todayStr, month: payMonth(todayStr),
     amount,
     note: "Auto: Maadi deposit not logged for week of " + weekOf,
     auto_cash_deposit: true,
@@ -9392,6 +9402,15 @@ function penaltyDoubleCategory(reasonCode) {
   return null;
 }
 
+// Salary cycle runs 26th -> 25th, paid on the 1st. A penalty dated the 26th or later is
+// deducted from the FOLLOWING month's payout (e.g. 26 Oct -> shows on the Nov payout).
+function payMonth(dateStr) {
+  const ds = String(dateStr || "");
+  if (ds.length < 10) return ds.slice(0, 7);
+  let y = +ds.slice(0, 4), m = +ds.slice(5, 7);
+  if (+ds.slice(8, 10) >= 26) { m++; if (m > 12) { m = 1; y++; } }
+  return y + "-" + String(m).padStart(2, "0");
+}
 function penaltyAmount(kind, monthlySalary) {
   const s = Number(monthlySalary) || 0;
   const day = s / 30;
@@ -9683,7 +9702,7 @@ routes.penalties = function (u) {
 
         // Repeat-offender doubling: 2nd+ manual "no show" or conduct penalty
         // (rules/uniform/hygiene) for this barista in the same month.
-        const penMonth = (vals.date || "").slice(0,7);
+        const penMonth = payMonth(vals.date);
         const category = penaltyDoubleCategory(reasonSpec.value);
         let doubled = false;
         if (category) {
@@ -11066,7 +11085,7 @@ function autoApplyMissingSchedulePenalties() {
         id: pid, at: now(), by: cu.id, by_name: "Auto (weekly schedule)",
         user_id: hb.id, barista: hb.name,
         kind: "half_day", reason: "schedule_not_submitted", reason_code: "schedule_not_submitted",
-        date: weekOf, month: weekOf.slice(0, 7), branch: bad.join("+"),
+        date: weekOf, month: payMonth(weekOf), branch: bad.join("+"),
         amount: penaltyAmount("half_day", salary),
         note: `Auto: weekly schedule not submitted (${bad.join(", ")}) for the week of ${weekOf} — half day deducted`,
         auto_schedule: true,
@@ -17551,7 +17570,7 @@ routes.signin_stamp_new = function (u) {
           let amount   = penaltyAmount(kind, salary);
 
           // Doubling rule: 2nd+ late incident from the same barista this month → double the penalty
-          const thisMonth      = todayStr.slice(0, 7);
+          const thisMonth      = payMonth(todayStr);
           const priorLateCount = (state.penalties || []).filter(p =>
             p.auto_late && p.user_id === who.id && p.month === thisMonth
           ).length;
@@ -17766,7 +17785,7 @@ function _retierLatePenalty(s, stampedAt) {
   }
   const kind = mins > 120 ? "two_days" : mins > 60 ? "full_day" : "half_day";
   const doubled = state.penalties.some(x => x.auto_late && x.id !== p.id && x.user_id === p.user_id && x.month === p.month && x.date < p.date);
-  const amount = penaltyAmount(kind, getSalaryForMonth(p.user_id, p.month)) * (doubled ? 2 : 1);
+  const amount = penaltyAmount(kind, getSalaryForMonth(p.user_id, (p.date || p.month || '').slice(0, 7))) * (doubled ? 2 : 1);
   if (kind !== p.kind || amount !== p.amount) {
     const kLabel = { half_day: "Half day", full_day: "Full day", two_days: "2 days" }[kind];
     log.push(`   ↳ penalty ${money(p.amount)} → ${money(amount)} (${kLabel}${doubled ? " ×2" : ""})`);
@@ -22138,7 +22157,7 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
       user_id: uid, barista: user.name,
       kind: nsKind, reason: "no_show",
       ...(entShift === "night" ? { shift: "night" } : {}),
-      date: dateStr, month: dateStr.slice(0, 7), branch,
+      date: dateStr, month: payMonth(dateStr), branch,
       amount,
       note: `Auto: no ${entShift === "night" ? "evening-shift " : ""}sign-in stamp — 3 days deducted`,
       auto_no_stamp: true,
@@ -22257,7 +22276,7 @@ function autoApplyMissingLogPenalties() {
           user_id: uid, barista: user.name,
           kind: "quarter_day", kind_label: "Quarter day",
           reason: "missing_log", reason_code: kind === "waste" ? "missing_waste_log" : "missing_cleaning_log",
-          date: ds, month: ds.slice(0, 7), branch,
+          date: ds, month: payMonth(ds), branch,
           amount: penaltyAmount("quarter_day", salary),
           note: `Auto: no ${label} at ${branch} for ${ds} — ¼ day deducted`,
           auto_missing_log: true, log_kind: kind,
