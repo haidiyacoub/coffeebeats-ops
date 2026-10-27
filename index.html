@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-763 -->
+<!-- CB_BUILD:20261027-768 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-763";
+  var BUILD = "20261027-768";
   (function() {
     function checkFresh() {
       try {
@@ -5743,17 +5743,31 @@ routes.waste_new = function (u) {
 // or a day the branch was marked closed. Header shows how many days were missed.
 // Optional `shiftOf(row)` + `requiredShifts(branch, iso)` (sign-in stamps): a past day where only some of the
 // rostered shifts have an entry is orange (partial); green needs every required shift, red needs none.
-function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts }) {
+function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts, lateOf }) {
   const viewAll = u.role === "owner" || u.role === "accountant";
   const branches = ["maadi", "zawya"].filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
   const card = el("div", { class: "card", style: { marginBottom: "14px" } });
   if (!branches.length) return card;
-  const live = (rows || []).filter(r => notTest(r) && !r.deleted);
   const bOf = r => String(r.branch || "").toLowerCase();
-  const byBranch = {};
-  const shiftsByDay = {};   // branch|iso → Set of shifts that have an entry
-  branches.forEach(b => { const set = new Set(); live.filter(r => bOf(r) === b).forEach(r => { try { const d = dayOf(r); if (d) { set.add(d); if (shiftOf) (shiftsByDay[b + "|" + d] = shiftsByDay[b + "|" + d] || new Set()).add(shiftOf(r)); } } catch (e) {} }); byBranch[b] = set; });
-  const closed = new Set((state.branch_closures || []).map(c => bOf(c) + "|" + c.date));
+  // Rebuilt from live state on every draw so the colours follow status changes (rescore, edit,
+  // back-dated fix, sync) instead of the snapshot taken when the card was first built.
+  let byBranch = {}, shiftsByDay = {}, lateByDay = {}, closed = new Set();
+  const collect = () => {
+    const live = ((typeof rows === "function" ? rows() : rows) || []).filter(r => notTest(r) && !r.deleted);
+    byBranch = {}; shiftsByDay = {}; lateByDay = {};
+    branches.forEach(b => {
+      const set = new Set();
+      live.filter(r => bOf(r) === b).forEach(r => { try {
+        const d = dayOf(r); if (!d) return;
+        set.add(d);
+        if (shiftOf) (shiftsByDay[b + "|" + d] = shiftsByDay[b + "|" + d] || new Set()).add(shiftOf(r));
+        // lateOf(row) → 0 fine / 1 half-day late / 2 full-day-or-worse late; a day shows its worst row.
+        if (lateOf) { const v = lateOf(r) || 0, k = b + "|" + d; if (v > (lateByDay[k] || 0)) lateByDay[k] = v; }
+      } catch (e) {} });
+      byBranch[b] = set;
+    });
+    closed = new Set((state.branch_closures || []).map(c => bOf(c) + "|" + c.date));
+  };
   const todayISO = localISODate(new Date());
   let month = todayISO.slice(0, 7);
   const body = el("div", {});
@@ -5761,6 +5775,7 @@ function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts }) {
   const shift = n => { const [y, m] = month.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); month = d.toISOString().slice(0, 7); draw(); };
   const navBtn = (t, n) => el("button", { class: "btn ghost", style: { padding: "2px 10px" }, onClick: () => shift(n) }, t);
   function draw() {
+    collect();
     body.innerHTML = "";
     label.textContent = month;
     const [y, m] = month.split("-").map(Number);
@@ -5784,9 +5799,10 @@ function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts }) {
         const part = has && lacking.length > 0;
         if (miss) missed++;
         if (part) partial++;
-        const bg = part ? "rgba(245,140,20,.28)" : has ? "rgba(34,160,90,.18)" : miss ? "rgba(200,40,40,.28)" : "transparent";
-        const col = part ? "#c2610c" : has ? "var(--ok)" : miss ? "var(--danger, #b91c1c)" : "var(--muted, #888)";
-        const tip = part ? " ◐ missing " + lacking.map(sh => sh === "night" ? "evening" : sh).join(" + ") + " stamp" : has ? " ✓" : miss ? " ✗ missing" : "";
+        const late = has ? (lateByDay[b + "|" + iso] || 0) : 0;
+        const bg = part ? "rgba(245,140,20,.28)" : late === 2 ? "rgba(200,40,40,.28)" : late === 1 ? "rgba(245,140,20,.28)" : has ? "rgba(34,160,90,.18)" : miss ? "rgba(200,40,40,.28)" : "transparent";
+        const col = part ? "#c2610c" : late === 2 ? "var(--danger, #b91c1c)" : late === 1 ? "#c2610c" : has ? "var(--ok)" : miss ? "var(--danger, #b91c1c)" : "var(--muted, #888)";
+        const tip = part ? " ◐ missing " + lacking.map(sh => sh === "night" ? "evening" : sh).join(" + ") + " stamp" : late ? " ⏰ late stamp" : has ? " ✓" : miss ? " ✗ missing" : "";
         grid.appendChild(el("div", { title: iso + tip, style: { textAlign: "center", fontSize: "12px", padding: "5px 0", borderRadius: "6px", border: "1px solid var(--border)", background: bg, color: col, fontWeight: (miss || part) ? "700" : "500" } }, String(d)));
       }
       body.appendChild(el("div", { style: { fontWeight: "600", margin: "8px 0 4px", textTransform: "capitalize" } },
@@ -5798,10 +5814,12 @@ function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts }) {
     el("div", { style: { fontWeight: "700" } }, title),
     el("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, [navBtn("‹", -1), label, navBtn("›", 1)]),
   ]));
-  card.appendChild(el("div", { class: "muted small", style: { margin: "4px 0 2px" } }, (requiredShifts ? T("Green = all stamps · Orange = only some of the rostered shifts stamped · Red = no stamp · Grey = not counted (today, future, closed, or before first entry).", "أخضر = كل البصمات · برتقالي = بعض الشيفتات فقط · أحمر = لا بصمة · رمادي = غير محسوب.")
+  card.appendChild(el("div", { class: "muted small", style: { margin: "4px 0 2px" } }, (requiredShifts ? T("Green = all stamps on time · Orange = a stamp half-day late, or only some rostered shifts stamped · Red = no stamp · Grey = not counted (today, future, closed, or before first entry).", "أخضر = كل البصمات · برتقالي = بعض الشيفتات فقط · أحمر = لا بصمة · رمادي = غير محسوب.")
     : T("Green = logged · Red = missed day · Grey = not counted (today, future, closed, or before first entry).", "أخضر = تم · أحمر = يوم ناقص · رمادي = غير محسوب."))));
   card.appendChild(body);
   draw();
+  // Keep the calendar live while it is on screen (stamps can change via sync or rescoring).
+  const _liveTimer = setInterval(() => { if (!card.isConnected) return clearInterval(_liveTimer); draw(); }, 4000);
   return card;
 }
 
@@ -17729,8 +17747,9 @@ async function rescoreSigninStamps(fromDate) {
 routes.signin_stamp_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Sign-In Stamps","بصمات الحضور"), T("Attendance record — every clock-in, color-coded by punctuality.","سجل الحضور — كل تسجيل دخول، مع ترميز لوني حسب الانضباط.")));
-  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — sign-in stamp","الأيام الناقصة — بصمة الحضور"), rows: state.signin_stamps, dayOf: s => localISODate(new Date(s.at)),
+  wrap.appendChild(missingDaysCard(u, { title: T("Missing days per month — sign-in stamp","الأيام الناقصة — بصمة الحضور"), rows: () => state.signin_stamps, dayOf: s => localISODate(new Date(s.at)),
     shiftOf: stampShift,
+    lateOf: s => { if (isCoverStamp(s)) return 0; const st = _signinStatus(_signinMinsLate(s)); return st === "half" ? 1 : (st === "full" || st === "two") ? 2 : 0; },
     // Every shift on the roster that day needs its own stamp (evening only from NIGHT_STAMP_RULES_START).
     requiredShifts: (b, iso) => {
       const dk = ROSTER_DAYS[new Date(iso + "T12:00:00").getDay()], wk = sundayOf(iso);
