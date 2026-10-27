@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-998 -->
+<!-- CB_BUILD:20261027-003 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-998";
+  var BUILD = "20261027-003";
   (function() {
     function checkFresh() {
       try {
@@ -17484,7 +17484,7 @@ routes.signin_stamp_new = function (u) {
 
           // Prevent duplicate auto-penalty for same person on same date
           const already = (state.penalties || []).find(p =>
-            p.auto_late && p.user_id === who.id && p.date === todayStr && stampShift(p) === shift
+            p.auto_late && p.user_id === who.id && p.date === todayStr   // one late penalty per barista per day
           );
           if (already) return;
 
@@ -22058,8 +22058,8 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
     // Check for existing stamp that day+branch
     const entShift = stampShift(entry);
     const hasStamp = (state.signin_stamps||[]).some(s =>
-      notTest(s) && s.by === uid && localISODate(new Date(s.at)) === dateStr && stampShift(s) === entShift
-    ); // any branch: a stamp that shift means they showed up (one penalty per shift per day)
+      notTest(s) && s.by === uid && localISODate(new Date(s.at)) === dateStr
+    ); // any shift/branch: a stamp that day means they showed up — never "late" and "no show" on one day
     if (hasStamp) continue;
     // Someone else stamped this shift → a cover (leave day), not a no-show.
     if (slotCovers(dateStr, branch, entShift).some(c => c.absent === uid)) continue;
@@ -22069,8 +22069,9 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
     );
     if (onLeave) continue;
     // Check no duplicate auto_no_stamp penalty for same user+date
+    // One auto penalty (late or no-show) per barista per day, whatever the shift.
     const already = state.penalties.find(p =>
-      p.auto_no_stamp && p.user_id === uid && p.date === dateStr && stampShift(p) === entShift
+      (p.auto_no_stamp || p.auto_late) && p.user_id === uid && p.date === dateStr
     );
     if (already) continue;
     // Deterministic id: owner + head barista devices both run the auto check, and the
@@ -22118,10 +22119,16 @@ function autoApplyMissingStamps() {
     if (dateStr < STAMP_RULES_2026_10 || dateStr >= today) continue;
     changed += applyMissingStampPenalties(dateStr, { by: cu.id, by_name: "Auto (no stamp)" });
   }
-  const stale = (state.penalties || []).filter(p =>
-    p.auto_no_stamp && typeof p.id === "string" && p.id.startsWith("nostamp_") &&
-    ((state.signin_stamps || []).some(s => notTest(s) && s.by === p.user_id &&
-      localISODate(new Date(s.at)) === p.date && stampShift(s) === stampShift(p)) ||
+  // Withdraw a no-show when the barista has any stamp that day (they showed up), a late penalty
+  // that day, or someone covered the shift; and keep only one no-show per barista per day.
+  const _ns = (state.penalties || []).filter(p => p.auto_no_stamp && typeof p.id === "string" && p.id.startsWith("nostamp_"));
+  const _keep = new Map();
+  _ns.slice().sort((a, b) => (stampShift(a) === "night") - (stampShift(b) === "night") || String(a.id).localeCompare(String(b.id)))
+     .forEach(p => { const k = p.user_id + "|" + p.date; if (!_keep.has(k)) _keep.set(k, p.id); });
+  const stale = _ns.filter(p =>
+    _keep.get(p.user_id + "|" + p.date) !== p.id ||
+    ((state.signin_stamps || []).some(s => notTest(s) && s.by === p.user_id && localISODate(new Date(s.at)) === p.date) ||
+     (state.penalties || []).some(x => x.auto_late && x.user_id === p.user_id && x.date === p.date) ||
      slotCovers(p.date, p.branch, stampShift(p)).some(c => c.absent === p.user_id) ||
      (state.leaves || []).some(l => l.user_id === p.user_id && l.status === "approved" &&
        l.from_date <= p.date && (l.to_date || l.from_date) >= p.date))
