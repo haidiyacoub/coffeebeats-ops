@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-776 -->
+<!-- CB_BUILD:20261027-796 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-776";
+  var BUILD = "20261027-796";
   (function() {
     function checkFresh() {
       try {
@@ -22000,9 +22000,8 @@ function applyMissingStampPenalties(dateStr, appliedBy) {
     // Check for existing stamp that day+branch
     const entShift = stampShift(entry);
     const hasStamp = (state.signin_stamps||[]).some(s =>
-      notTest(s) && s.by === uid && localISODate(new Date(s.at)) === dateStr &&
-      (s.branch||"").toLowerCase() === branch && stampShift(s) === entShift
-    );
+      notTest(s) && s.by === uid && localISODate(new Date(s.at)) === dateStr && stampShift(s) === entShift
+    ); // any branch: a stamp that shift means they showed up (one penalty per shift per day)
     if (hasStamp) continue;
     // Someone else stamped this shift → a cover (leave day), not a no-show.
     if (slotCovers(dateStr, branch, entShift).some(c => c.absent === uid)) continue;
@@ -22064,7 +22063,7 @@ function autoApplyMissingStamps() {
   const stale = (state.penalties || []).filter(p =>
     p.auto_no_stamp && typeof p.id === "string" && p.id.startsWith("nostamp_") &&
     ((state.signin_stamps || []).some(s => notTest(s) && s.by === p.user_id &&
-      localISODate(new Date(s.at)) === p.date && (s.branch || "").toLowerCase() === p.branch && stampShift(s) === stampShift(p)) ||
+      localISODate(new Date(s.at)) === p.date && stampShift(s) === stampShift(p)) ||
      slotCovers(p.date, p.branch, stampShift(p)).some(c => c.absent === p.user_id))
   );
   if (stale.length) {
