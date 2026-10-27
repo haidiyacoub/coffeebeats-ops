@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-986 -->
+<!-- CB_BUILD:20261027-987 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-986";
+  var BUILD = "20261027-987";
   (function() {
     function checkFresh() {
       try {
@@ -10928,10 +10928,12 @@ function annualLeaveOverage(uid, month, salary) {
   const cover = coverDaysFor(uid, month);
   usedDays += cover.out - cover.in;
   const excessDays = Math.max(0, usedDays - FREE_DAYS);
-  // Days off beyond the 4 free ones that come from simply not being on the roster are treated as
-  // a no-show: 3 days' pay each. Excess days from approved annual leave stay at 1 day's pay.
-  const noShowDays = Math.min(excessDays, scheduleDays.length);
-  const deductDays = (excessDays - noShowDays) + noShowDays * 3;
+  // A day the barista isn't on the roster is a day off, never a no-show: beyond the 4 free days it
+  // costs 1 day's pay like any annual-leave day (a real sick leave on it is a ¼-day sick deduction
+  // instead, and is excluded from scheduleDays). The ×3 no-show only applies to a shift they WERE
+  // rostered for and skipped (applyMissingStampPenalties).
+  const noShowDays = 0;
+  const deductDays = excessDays;
   const amount = Math.round((Number(salary) || 0) / 30 * deductDays * 100) / 100;
   return { freeDays: FREE_DAYS, usedDays, excessDays, noShowDays, deductDays, amount, scheduleDays, coverOut: cover.out, coverIn: cover.in };
 }
