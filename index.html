@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-993 -->
+<!-- CB_BUILD:20261027-998 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-993";
+  var BUILD = "20261027-998";
   (function() {
     function checkFresh() {
       try {
@@ -18622,48 +18622,7 @@ routes.leave_new = function (u) {
     // Count calendar days
     const days = Math.round((new Date(to) - new Date(from)) / 86400000) + 1;
 
-    // Send notification email
-    const hbEmail    = (state.settings.head_barista_email || "").trim();
-    const ownerEmail = (state.settings.owner_email || "coffeebeats@haidiyacoub.com").trim();
-    const typeLabel  = leave.type === "annual" ? "Annual Leave" : "Sick Leave";
-    const subj = encodeURIComponent(
-      isSick
-        ? `[Sick Leave Recorded] ${person.name} · ${from} → ${to} (${days}d) — deduction applied`
-        : `[Leave Request] ${person.name} · ${typeLabel} · ${from} → ${to} (${days}d)`
-    );
-    const body = encodeURIComponent(
-      isSick
-        ? `Sick leave has been recorded and the salary deduction applied automatically.\n\n` +
-          `Barista: ${person.name}\nFrom: ${from}\nTo: ${to}\n` +
-          `Duration: ${days} day${days > 1 ? "s" : ""}\nReason: ${leave.reason || "—"}\n` +
-          `Deduction: ¼ day × ${days} = EGP ${(getSalaryForMonth(person.id, from.slice(0,7)) / 30 / 4 * days).toFixed(2)}\n` +
-          `Submitted by: ${s.by_name}\n— Coffee Beats Operations`
-        : `A leave request has been submitted and is pending your approval.\n\n` +
-          `Barista: ${person.name}\n` +
-          `Leave type: ${typeLabel}\n` +
-          `From: ${from}\n` +
-          `To: ${to}\n` +
-          `Duration: ${days} day${days > 1 ? "s" : ""}\n` +
-          `Reason: ${leave.reason || "—"}\n` +
-          `Submitted by: ${s.by_name}\n\n` +
-          `Please log in to the Operations app → Leave Requests to approve or reject.\n\n` +
-          `— Coffee Beats Operations`
-    );
-
-    const rosterNote = rosterGone.length
-      ? `\n\nRemoved from the weekly roster — please arrange cover:\n` + rosterGone.map(x => `• ${x.date} · ${x.branch} · ${x.shift}`).join("\n")
-      : `\n\n(${person.name} was not on the roster for those days.)`;
-    const to_addr    = hbEmail || ownerEmail;
-    const cc_part    = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
-    const leaveSubj  = hbEmail ? subj : encodeURIComponent(
-      isSick
-        ? `[PRIORITY — No Head Barista] [Sick Leave Recorded] ${person.name} · ${from} → ${to} (${days}d) — deduction applied`
-        : `[PRIORITY — No Head Barista] [Leave Request] ${person.name} · ${typeLabel} · ${from} → ${to} (${days}d)`
-    );
-    try {
-      window.open(`mailto:${encodeURIComponent(to_addr)}?subject=${leaveSubj}${cc_part}&body=${body}${encodeURIComponent(rosterNote)}`, "_blank");
-    } catch(e) {}
-
+    // Email (owner + head barista, with the removed roster shifts) is sent by the leaveAlert Cloud Function.
     toast(isSick
       ? T(`Sick leave recorded · ${days} day${days > 1 ? "s" : ""} · deduction applied automatically ✓`, `تم تسجيل الإجازة المرضية · ${days} يوم · تم تطبيق الخصم تلقائياً ✓`)
       : T(`Leave request submitted for ${person.name} · ${days} day${days > 1 ? "s" : ""} · Email sent ✉️`, `تم إرسال طلب إجازة لـ ${person.name} · ${days} يوم · تم إرسال البريد ✉️`)
