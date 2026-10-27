@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-768 -->
+<!-- CB_BUILD:20261027-776 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-768";
+  var BUILD = "20261027-776";
   (function() {
     function checkFresh() {
       try {
@@ -18035,6 +18035,9 @@ function editSigninStamp(s) {
     };
     ns.mins_late = minsLateAt(ns.branch, ns.clock_at, ns.shift);
     ns.early_bonus = ns.mins_late <= -15;
+    // The owner has reviewed this stamp by saving it, so even a "no readable photo time" penalty
+    // is re-scored against the stamp's time (green → penalty goes, otherwise re-tiered).
+    if (pen && pen.no_photo_time) ns.clock_source = "manual";
     state.signin_stamps = state.signin_stamps.filter(x => x.id !== s.id);
     recordDeletion(s.id);
     state.signin_stamps.push(ns);
@@ -18044,7 +18047,9 @@ function editSigninStamp(s) {
       pen.date = localISODate(at); pen.month = pen.date.slice(0, 7);
       pen.last_edited_at = stampedAt;
       const log = _retierLatePenalty(ns, stampedAt);
-      penMsg = log.length ? T(" · late penalty updated"," · تم تحديث خصم التأخير") : T(" · late penalty moved"," · تم نقل خصم التأخير");
+      const gone = !(state.penalties || []).some(x => x.id === pen.id);
+      penMsg = gone ? T(" · late penalty removed"," · تم حذف خصم التأخير")
+             : log.length ? T(" · late penalty updated"," · تم تحديث خصم التأخير") : T(" · late penalty moved"," · تم نقل خصم التأخير");
     }
     saveState();
     toast(T(`Stamp updated → ${who.name} · ${dateInp.value} ${timeInp.value}${penMsg}`, `تم تعديل البصمة → ${who.name}${penMsg}`), "ok");
