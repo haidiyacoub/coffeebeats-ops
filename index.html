@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-344 -->
+<!-- CB_BUILD:20261027-526 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-344";
+  var BUILD = "20261027-526";
   (function() {
     function checkFresh() {
       try {
@@ -6689,6 +6689,80 @@ routes.snapshot_new = function (u) {
       el("div", { class: "form-field" }, [ el("label", {}, "Category"), catIn ]),
       el("button", { class: "btn", style: { marginTop: "8px" }, onClick: addMgmtItem }, "＋ Add item"),
     ]));
+    // ── Export / import the inventory list (CSV or Excel) ──
+    const exportItemsBtn = el("button", {
+      class: "btn ghost", style: { fontSize: "12px", marginTop: "8px" },
+      onClick: () => {
+        const rows = (state.items || []).slice()
+          .sort((a, b) => (a.category || "").localeCompare(b.category || "") || a.name.localeCompare(b.name))
+          .map(it => ({ id: it.id, name: it.name, unit: it.unit || "", category: it.category || "", active: it.active === false ? "no" : "yes" }));
+        if (!rows.length) { toast("No inventory items to export.", "error"); return; }
+        download(`cb-inventory-list-${new Date().toISOString().slice(0, 10)}.csv`,
+          new Blob(["﻿" + toCSV(rows)], { type: "text/csv;charset=utf-8" }));
+        toast(`Exported ${rows.length} items`);
+      }
+    }, "⬇ Export inventory list");
+
+    const importFileIn = el("input", { type: "file", accept: ".csv,.xlsx,.xls", style: { display: "none" } });
+    importFileIn.addEventListener("change", async () => {
+      const file = importFileIn.files && importFileIn.files[0];
+      importFileIn.value = "";
+      if (!file) return;
+      try {
+        const wb = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: "array" });
+        const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+        // Normalise header names so "Item", "Name", "ID" etc. all work.
+        const rows = raw.map(r => {
+          const o = {};
+          for (const [k, v] of Object.entries(r)) o[String(k).trim().toLowerCase()] = typeof v === "string" ? v.trim() : v;
+          return o;
+        }).filter(r => r.name || r.item || r.id);
+        if (!rows.length) { toast("No item rows found. Expected columns: name, unit, category, active (id optional).", "error"); return; }
+        const isOff = v => /^(no|false|0|inactive)$/i.test(String(v).trim());
+        let added = 0, updated = 0, seq = 0;
+        const by = currentUser() ? currentUser().name : "—";
+        for (const r of rows) {
+          const name = String(r.name || r.item || "").trim();
+          if (!name) continue;
+          const unit = String(r.unit || "").trim();
+          const category = String(r.category || "").trim();
+          const hasActive = r.active !== undefined && r.active !== "";
+          const existing = (r.id && state.items.find(i => i.id === String(r.id).trim()))
+            || state.items.find(i => i.name.toLowerCase() === name.toLowerCase());
+          if (existing) {
+            if (existing.name !== name) existing.name = name;
+            if (unit) existing.unit = unit;
+            if (category) existing.category = category;
+            if (hasActive) existing.active = !isOff(r.active);
+            existing.modified_by = by; existing.modified_at = now();
+            updated++;
+          } else {
+            if (!unit) continue;
+            state.items.push({
+              id: "inv_" + String(Date.now() + seq++),
+              name, unit, category: category || "Other",
+              active: hasActive ? !isOff(r.active) : true,
+              added_by: by, added_at: now(),
+            });
+            added++;
+          }
+        }
+        if (!added && !updated) { toast("Nothing imported — new items need a unit.", "error"); return; }
+        saveState();
+        toast(`Import done: ${added} added, ${updated} updated ✓`);
+        drawMgmt();
+        draw();
+      } catch (e) {
+        console.warn("Inventory import failed", e);
+        toast("Couldn't read that file. Use the exported CSV/Excel format.", "error");
+      }
+    });
+    const importItemsBtn = el("button", {
+      class: "btn ghost", style: { fontSize: "12px", marginTop: "8px" },
+      onClick: () => importFileIn.click()
+    }, "⬆ Import inventory list");
+
+    panelBody.appendChild(el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } }, [exportItemsBtn, importItemsBtn, importFileIn]));
     panelBody.appendChild(toggleInactiveBtn);
     panelBody.appendChild(mgmtList);
 
