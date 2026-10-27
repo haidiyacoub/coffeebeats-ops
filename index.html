@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261026-003 -->
+<!-- CB_BUILD:20261027-755 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261026-003";
+  var BUILD = "20261027-755";
   (function() {
     function checkFresh() {
       try {
@@ -17307,8 +17307,9 @@ routes.signin_stamp_new = function (u) {
         if (!photoBlobs.length) return toast(T("Please attach at least one clock-in photo","أرفق صورة واحدة على الأقل لتسجيل الحضور"), "error");
         // Saving is slow (photo store + EXIF read + opening-times refresh); without this guard
         // every extra tap while it runs pushed another duplicate stamp.
-        if (ev && ev.currentTarget && ev.currentTarget.disabled) return;
-        if (ev && ev.currentTarget) ev.currentTarget.disabled = true;
+        const _stampBtn = ev && ev.currentTarget;
+        if (_stampBtn && _stampBtn.disabled) return;
+        if (_stampBtn) _stampBtn.disabled = true;
         const photoNames = photoBlobs.map(f => f.name);
         const who = forUserId === u.id ? u : (staffDir.resolve(forUserId) || u);
         const onBehalf = who.id !== u.id;
@@ -17316,7 +17317,20 @@ routes.signin_stamp_new = function (u) {
         // Exception: when leadership stamps in FOR another barista, the date/time of the stamp is
         // the clock photo's capture time (can be days old), not the moment of upload.
         const _uploadAt = s.at;
-        const _backPhoto = onBehalf ? await photoClockTime(photoBlobs, s.at, true) : null;
+        // Back-dating is restricted: the owner always, Alaa only during Oct 2026. For everyone
+        // else a photo taken on an earlier day than the sign-in date is rejected outright.
+        const _oldPhoto = await photoClockTime(photoBlobs, s.at, true);
+        let _backPhoto = null;
+        if (_oldPhoto && localISODate(_oldPhoto) < localISODate(new Date(_uploadAt))) {
+          const isAlaa = /ala+a|علاء/i.test(u.name || "");
+          const canBackdate = u.role === "owner" || (isAlaa && _uploadAt.slice(0, 7) === "2026-10");
+          if (!canBackdate) {
+            if (_stampBtn) _stampBtn.disabled = false;
+            return toast(T(`Upload rejected — this photo is from ${localISODate(_oldPhoto)}, an old date that doesn't match today's sign-in date. Take a new clock photo.`,
+                           `تم رفض الرفع — هذه الصورة بتاريخ ${localISODate(_oldPhoto)}، وهو تاريخ قديم لا يطابق تاريخ تسجيل الحضور اليوم. التقط صورة جديدة للساعة.`), "error");
+          }
+          _backPhoto = _oldPhoto;
+        }
         if (_backPhoto) s.at = _backPhoto.toISOString();
         // The roster decides the shift: if this barista is on the schedule at this branch today
         // only for the OTHER shift (e.g. night while the picker said morning), stamp that shift.
