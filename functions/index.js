@@ -274,7 +274,7 @@ async function _headBaristaEmail() {
 }
 const PENALTY_NOTE = "\n\n⚠ Missing items will result in penalties.";
 
-async function _sendEmail(subject, text, { urgent = false, toHeadBarista = false } = {}) {
+async function _sendEmail(subject, text, { urgent = false, toHeadBarista = false, penaltyNote = true } = {}) {
   const hb = toHeadBarista ? await _headBaristaEmail() : null;
   const transporter = nodemailer.createTransport({
     service: "gmail",
@@ -284,7 +284,7 @@ async function _sendEmail(subject, text, { urgent = false, toHeadBarista = false
     from: `"Coffee Beats" <${GMAIL_USER.value()}>`,
     to:   hb ? `${NOTIFY_TO.value()}, ${hb}` : NOTIFY_TO.value(),
     subject,
-    text: toHeadBarista ? text + PENALTY_NOTE : text,
+    text: toHeadBarista && penaltyNote ? text + PENALTY_NOTE : text,
     ...(urgent ? { priority: "high", headers: { "X-Priority": "1", Importance: "high" } } : {}),
   });
 }
@@ -644,6 +644,41 @@ exports.inventoryMonthEndCheck = onSchedule(
     } else if (day >= lastN - 1) {
       await _sendEmail(`⚠️ Inventory count not done yet — ${ym}`,
         `No inventory count dated ${lastDay} has been submitted for: ${missing.map(_cap).join(" and ")}. ${lastN - day + 1} day(s) left.`, { toHeadBarista: true });
+    }
+  }
+);
+
+// ─── leaveAlert ───────────────────────────────────────────────────────────────
+// Fires when the HR chunk is saved. Any leave request that wasn't there before (annual or sick)
+// emails the owner + head barista like the missing-items alerts, including the roster shifts the
+// app removed for those days so cover can be arranged. A flag doc per leave id de-dupes retries
+// and the several devices that re-save the same chunk.
+exports.leaveAlert = onDocumentUpdated(
+  { document: "state/hr", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO] },
+  async (event) => {
+    const before = new Set(((event.data.before.data() || {}).leaves || []).map(l => l && l.id));
+    const fresh  = ((event.data.after.data() || {}).leaves || [])
+      .filter(l => l && l.id && !before.has(l.id) && (l.status === "pending" || l.status === "approved"));
+    for (const l of fresh) {
+      const flag = getDb().collection("system_flags").doc(`leave_alert_${l.id}`);
+      if ((await flag.get()).exists) continue;
+      await flag.set({ at: new Date().toISOString() });
+      const sick = l.type === "sick";
+      const days = Math.round((new Date(l.to_date) - new Date(l.from_date)) / 86400000) + 1;
+      const removed = Array.isArray(l.roster_removed) ? l.roster_removed : [];
+      const lines = [
+        `Coffee Beats — ${sick ? "sick" : "annual"} leave ${sick ? "recorded" : "requested"}`, "",
+        `Barista: ${l.user_name || "—"}`,
+        `Dates: ${l.from_date} → ${l.to_date} (${days} day${days > 1 ? "s" : ""})`,
+        `Status: ${l.status}${sick ? " (sick leave is approved automatically — ¼ day deducted per day)" : " — awaiting approval in the app"}`,
+        `Reason: ${l.reason || "—"}`,
+        `Submitted by: ${l.requested_by_name || "—"}`, "",
+        removed.length
+          ? `Removed from the weekly roster — please arrange cover:\n${removed.map(x => `• ${x.date} · ${_cap(x.branch)} · ${x.shift}`).join("\n")}`
+          : `${l.user_name || "The barista"} was not on the roster for those days.`,
+      ];
+      await _sendEmail(`🌴 ${sick ? "Sick" : "Annual"} leave — ${l.user_name || "barista"} · ${l.from_date} → ${l.to_date}`,
+        lines.join("\n"), { toHeadBarista: true, penaltyNote: false });
     }
   }
 );

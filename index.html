@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-988 -->
+<!-- CB_BUILD:20261027-993 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-988";
+  var BUILD = "20261027-993";
   (function() {
     function checkFresh() {
       try {
@@ -10865,7 +10865,7 @@ function workedDaysReport(uid, month, flatSalary) {
 // Annual leave policy: every barista gets 4 paid annual leave days per calendar
 // month; each approved annual leave day beyond the 4th in that month deducts one
 // full day's salary (monthly salary ÷ 30), and each roster-absence day beyond the 4th
-// counts as a no-show (3 days' salary). Returns per-day counts for `month`
+// with no leave requested/approved counts as a no-show (3 days' salary). Returns per-day counts for `month`
 // (YYYY-MM) plus the deduction amount at the given salary.
 // Shift cover. The barista named on the roster for a branch+day+shift is the one expected to
 // stamp. If they don't but someone NOT on that slot's roster does, the stamp is a cover: it
@@ -10913,27 +10913,29 @@ function annualLeaveOverage(uid, month, salary) {
   const FREE_DAYS = 4;
   const toDate = s => { const [yy, mm, dd] = s.split("-").map(Number); return new Date(yy, mm - 1, dd); };
   const iso    = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  let usedDays = 0;
+  // Every day off this month, tagged by kind: an approved annual leave day ("leave") or a day the
+  // barista simply isn't on the roster with no leave requested/approved ("schedule").
+  const days = [];
   for (const lv of (state.leaves || [])) {
     if (lv.user_id !== uid || lv.status !== "approved" || lv.type !== "annual") continue;
     if (!lv.from_date || !lv.to_date) continue;
     for (let d = toDate(lv.from_date), end = toDate(lv.to_date); d <= end; d.setDate(d.getDate() + 1)) {
-      if (iso(d).slice(0, 7) === month) usedDays++;
+      if (iso(d).slice(0, 7) === month) days.push({ ds: iso(d), kind: "leave" });
     }
   }
-  // Days the barista simply isn't on the submitted weekly schedule count as annual days off too.
   const scheduleDays = scheduleDayOffs(uid, month);
-  usedDays += scheduleDays.length;
+  for (const ds of scheduleDays) days.push({ ds, kind: "schedule" });
+  days.sort((a, b) => a.ds.localeCompare(b.ds));
   // Shifts someone else stamped for come off this barista's balance; shifts they covered are credited.
   const cover = coverDaysFor(uid, month);
-  usedDays += cover.out - cover.in;
+  const coverNet = cover.out - cover.in;
+  const free = FREE_DAYS - coverNet;
+  const usedDays = days.length + coverNet;
   const excessDays = Math.max(0, usedDays - FREE_DAYS);
-  // A day the barista isn't on the roster is a day off, never a no-show: beyond the 4 free days it
-  // costs 1 day's pay like any annual-leave day (a real sick leave on it is a ¼-day sick deduction
-  // instead, and is excluded from scheduleDays). The ×3 no-show only applies to a shift they WERE
-  // rostered for and skipped (applyMissingStampPenalties).
-  const noShowDays = 0;
-  const deductDays = excessDays;
+  // The first 4 days off are free. After that a day that was requested AND approved costs 1 day's
+  // pay; a day off with no request/approval (just not on the roster) is a no-show: 3 days' pay.
+  let deductDays = Math.max(0, -free), noShowDays = 0;
+  days.slice(Math.max(0, free)).forEach(x => { if (x.kind === "schedule") { noShowDays++; deductDays += 3; } else deductDays += 1; });
   const amount = Math.round((Number(salary) || 0) / 30 * deductDays * 100) / 100;
   return { freeDays: FREE_DAYS, usedDays, excessDays, noShowDays, deductDays, amount, scheduleDays, coverOut: cover.out, coverIn: cover.in };
 }
@@ -19822,7 +19824,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "3. Missing daily logs — ¼ day each (automatic, from 1 Nov 2026)" },
         { type: "bullets", items: ["Waste log: the barista on the LAST shift of the day (who also does the Shift Close) is charged if no waste entry is recorded for that branch and day. \"No waste\" counts as an entry.", "Cleaning log: the barista who STARTS the day (morning shift) is charged if no cleaning log is submitted for that branch and day.", "If the log is added later, the deduction is withdrawn."] },
         { type: "subheader", text: "4. Leave" },
-        { type: "bullets", items: ["Annual leave: 4 paid days per calendar month. Each approved annual day beyond the 4th: 1 day's pay.", "Days you are simply not on the submitted weekly schedule count toward those 4 days; each one beyond the 4th is a no show (3 days' pay).", "Sick leave: ¼ day per sick day.", "Shift covers move days between balances as explained above."] },
+        { type: "bullets", items: ["Annual leave: 4 paid days off per calendar month.", "A day off you REQUESTED and that was APPROVED: each one beyond the 4th costs 1 day's pay.", "A day off you did NOT request (you are simply not on the submitted weekly schedule and there is no approved leave): each one beyond the 4th is a no show — 3 days' pay.", "Submitting an annual or sick leave takes your name off the roster for those days automatically, and the head barista and owner are alerted by email to arrange cover. If the leave is rejected, cancelled or revoked, you go back on the roster.", "Sick leave: ¼ day per sick day. Sick days do not count toward the 4 annual days.", "Shift covers move days between balances as explained above."] },
         { type: "subheader", text: "5. Conduct (logged by the owner / head barista)" },
         { type: "bullets", items: ["Not following the rules, or not updating the app/site as required: ½ day.", "Hygiene or uniform violation: ½ day.", "A no show logged by hand rather than by the automatic check: 3 days.", "From your 2nd conduct penalty in a month, every further conduct penalty that month is doubled."] },
         { type: "subheader", text: "6. Schedule and leadership duties" },
@@ -19846,7 +19848,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "3. السجلات اليومية المفقودة — ربع يوم لكل منها (تلقائي، من 1 نوفمبر 2026)" },
         { type: "bullets", items: ["سجل الهدر: يُخصم من الباريستا في آخر شيفت من اليوم (وهو من يقوم بإغلاق الشيفت) إذا لم يُسجَّل أي إدخال هدر لذلك الفرع واليوم. إدخال \"لا هدر\" يُحتسب.", "سجل النظافة: يُخصم من الباريستا الذي يبدأ اليوم (الشيفت الصباحي) إذا لم يُقدَّم سجل نظافة لذلك الفرع واليوم.", "إذا أُضيف السجل لاحقاً يُسحب الخصم."] },
         { type: "subheader", text: "4. الإجازات" },
-        { type: "bullets", items: ["الإجازة السنوية: 4 أيام مدفوعة في كل شهر ميلادي. كل يوم سنوي معتمد بعد الرابع: خصم أجر يوم.", "الأيام التي لا يكون اسمك فيها في الجدول الأسبوعي المقدَّم تُحتسب من هذه الأيام الأربعة؛ وكل يوم بعد الرابع يُعتبر غياباً (خصم 3 أيام).", "الإجازة المرضية: ربع يوم لكل يوم مرضي.", "التغطية تنقل الأيام بين الأرصدة كما شُرح أعلاه."] },
+        { type: "bullets", items: ["الإجازة السنوية: 4 أيام مدفوعة في كل شهر ميلادي.", "يوم إجازة قمت بطلبه وتم اعتماده: كل يوم بعد الرابع يُخصم عنه أجر يوم واحد.", "يوم إجازة لم تطلبه (أي أن اسمك ليس في الجدول الأسبوعي المقدَّم ولا توجد إجازة معتمدة): كل يوم بعد الرابع يُعتبر غياباً no show — خصم 3 أيام.", "عند تقديم إجازة سنوية أو مرضية يُزال اسمك تلقائياً من الجدول في تلك الأيام، ويصل تنبيه بالبريد إلى رئيس البريستا والمالك لترتيب البديل. وإذا رُفضت الإجازة أو أُلغيت أو سُحب اعتمادها يعود اسمك إلى الجدول.", "الإجازة المرضية: ربع يوم لكل يوم مرضي. الأيام المرضية لا تُحتسب من الأيام السنوية الأربعة.", "التغطيات تنقل الأيام بين الأرصدة كما هو موضّح أعلاه."] },
         { type: "subheader", text: "5. السلوك (يسجّله المالك / رئيس البريستا)" },
         { type: "bullets", items: ["عدم الالتزام بالقواعد أو عدم تحديث التطبيق/الموقع كما هو مطلوب: نصف يوم.", "مخالفة النظافة الشخصية أو الزي الموحد: نصف يوم.", "غياب مُسجَّل يدوياً وليس عبر الفحص التلقائي: 3 أيام.", "من خصم السلوك الثاني في الشهر، يُضاعَف كل خصم سلوك لاحق في ذلك الشهر."] },
         { type: "subheader", text: "6. مهام الجدول والقيادة" },
