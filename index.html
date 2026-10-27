@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-987 -->
+<!-- CB_BUILD:20261027-988 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-987";
+  var BUILD = "20261027-988";
   (function() {
     function checkFresh() {
       try {
@@ -18402,6 +18402,36 @@ function handbookExcelFillRecipes() {
 // Leave must start at least 7 days from today.
 // On submit: mailto: → head barista (To:), owner (CC:)
 // ==============================================================
+// A leave takes the barista off the weekly roster for those days. The removed slots are kept on
+// the leave (roster_removed) so a rejected / cancelled / revoked leave puts them back.
+function removeLeaveFromRoster(leave) {
+  const removed = [];
+  if (!leave.from_date || !leave.to_date) return removed;
+  const toD = x => { const [y, m, d] = x.split("-").map(Number); return new Date(y, m - 1, d); };
+  for (let d = toD(leave.from_date), end = toD(leave.to_date); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = localISODate(d), wk = sundayOf(ds), dk = ROSTER_DAYS[d.getDay()];
+    for (const r of (state.rosters || []).filter(x => x.user_id === leave.user_id && x.week_of === wk && x.day === dk)) {
+      removed.push({ date: ds, week_of: r.week_of, branch: r.branch, shift: r.shift, day: r.day });
+    }
+  }
+  if (removed.length) {
+    state.rosters = state.rosters.filter(r => !(r.user_id === leave.user_id &&
+      removed.some(x => x.week_of === r.week_of && x.day === r.day && x.branch === r.branch && x.shift === r.shift)));
+  }
+  leave.roster_removed = removed;
+  return removed;
+}
+function restoreLeaveToRoster(leave) {
+  const s = stamp(), person = (state.users || []).find(u => u.id === leave.user_id);
+  for (const x of (leave.roster_removed || [])) {
+    const taken = (state.rosters || []).some(r => r.week_of === x.week_of && r.day === x.day && r.branch === x.branch && r.shift === x.shift);
+    if (taken || !person) continue; // slot already refilled by someone else — leave it
+    state.rosters.push({ id: uuid(), week_of: x.week_of, branch: x.branch, shift: x.shift, day: x.day,
+      user_id: person.id, user_name: person.name, by: s.by, by_name: s.by_name, at: s.at });
+  }
+  leave.roster_removed = [];
+}
+
 // Sick leave is never pending: approve any that got stuck (the Approve button is hidden for sick).
 function autoApproveSickLeaves() {
   let n = 0;
@@ -18564,6 +18594,9 @@ routes.leave_new = function (u) {
       updated_at: s.at, // last-edit-wins key so a stale device can't revert an approval
     };
     state.leaves.push(leave);
+    const rosterGone = removeLeaveFromRoster(leave);
+    if (rosterGone.length) notifyLeadershipRole("weekly_schedule", `${typeSel.value === "sick" ? "Sick" : "Annual"} leave — ${person.name} removed from roster`,
+      rosterGone.map(x => `${x.date} ${x.branch} ${x.shift}`).join(", ") + " — arrange cover.");
 
     // Sick leave: immediately create salary deduction (¼ day per sick day)
     if (isSick) {
@@ -18615,6 +18648,9 @@ routes.leave_new = function (u) {
           `— Coffee Beats Operations`
     );
 
+    const rosterNote = rosterGone.length
+      ? `\n\nRemoved from the weekly roster — please arrange cover:\n` + rosterGone.map(x => `• ${x.date} · ${x.branch} · ${x.shift}`).join("\n")
+      : `\n\n(${person.name} was not on the roster for those days.)`;
     const to_addr    = hbEmail || ownerEmail;
     const cc_part    = hbEmail ? `&cc=${encodeURIComponent(ownerEmail)}` : "";
     const leaveSubj  = hbEmail ? subj : encodeURIComponent(
@@ -18623,7 +18659,7 @@ routes.leave_new = function (u) {
         : `[PRIORITY — No Head Barista] [Leave Request] ${person.name} · ${typeLabel} · ${from} → ${to} (${days}d)`
     );
     try {
-      window.open(`mailto:${encodeURIComponent(to_addr)}?subject=${leaveSubj}${cc_part}&body=${body}`, "_blank");
+      window.open(`mailto:${encodeURIComponent(to_addr)}?subject=${leaveSubj}${cc_part}&body=${body}${encodeURIComponent(rosterNote)}`, "_blank");
     } catch(e) {}
 
     toast(isSick
@@ -18770,6 +18806,7 @@ routes.leave_list = function (u) {
 
       // Helper: remove the linked sick_leave_deduction when sick leave is cancelled/rejected
       function removeSickDeduction() {
+        restoreLeaveToRoster(leave); // leave no longer stands → put the barista back on the roster
         if (leave.type !== "sick") return;
         state.sick_leave_deductions = (state.sick_leave_deductions || []).filter(x => x.leave_id !== leave.id);
       }
