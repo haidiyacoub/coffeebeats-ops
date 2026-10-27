@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-796 -->
+<!-- CB_BUILD:20261027-969 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-796";
+  var BUILD = "20261027-969";
   (function() {
     function checkFresh() {
       try {
@@ -8690,6 +8690,29 @@ routes.salaries = function (u) {
     // ---- 2.25) Sick leave deductions card ----
     state.sick_leave_deductions = state.sick_leave_deductions || [];
     state.deleted_sick_leave_deductions = state.deleted_sick_leave_deductions || [];
+    // Self-heal: an approved sick leave whose deduction never saved/synced (stale phone,
+    // sync loss) gets its deduction created here. Skips ones the owner deleted on purpose.
+    {
+      const have = new Set([...state.sick_leave_deductions, ...state.deleted_sick_leave_deductions].map(x => x.leave_id).filter(Boolean));
+      let added = 0;
+      for (const lv of (state.leaves || [])) {
+        if (lv.type !== "sick" || lv.status !== "approved" || have.has(lv.id)) continue;
+        const person = state.users.find(x => x.id === lv.user_id);
+        if (!person || !lv.from_date || !lv.to_date) continue;
+        const days = Math.round((new Date(lv.to_date) - new Date(lv.from_date)) / 86400000) + 1;
+        const mon  = lv.from_date.slice(0, 7);
+        const amount = Math.round((getSalaryForMonth(person.id, mon) / 30 / 4) * days * 100) / 100;
+        const s = stamp();
+        state.sick_leave_deductions.push({
+          id: uuid(), leave_id: lv.id, user_id: person.id, barista: person.name,
+          days, amount, date: lv.from_date, month: mon,
+          note: (lv.reason || "Sick leave") + " (auto-restored from leave request)",
+          by: s.by, by_name: s.by_name, at: s.at,
+        });
+        added++;
+      }
+      if (added) { saveState(); toast(`Restored ${added} missing sick-leave deduction${added > 1 ? "s" : ""} from leave requests`); }
+    }
     const sickCard = el("div", { class: "card", style: { marginTop: "12px" } });
     sickCard.appendChild(el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px" } }, T("Sick leaves (¼ day deducted per leave)","الإجازات المرضية (خصم ربع يوم لكل إجازة)")));
     if (u.role === "owner" || u.role === "accountant" || u.role === "head_barista") {
