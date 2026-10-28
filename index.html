@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261028-490 -->
+<!-- CB_BUILD:20261029-036 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261028-490";
+  var BUILD = "20261029-036";
   (function() {
     function checkFresh() {
       try {
@@ -5480,6 +5480,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🏦", "Bank Ledger", "All transfers", () => go("bank")));
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
     tiles.appendChild(tile("🛠️", "Equipment Register", "Fixed assets · purchase date & value", () => go("equipment_register")));
+    if (canAccess("counterpoint", u)) tiles.appendChild(tile("🔌", "Counterpoint POS", "Live sales & stock from the till", () => go("counterpoint")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(sectionHeader("HR"));
@@ -12425,6 +12426,110 @@ function assetAgeText(a) {
   return y < 1 ? `${Math.round(y * 12)} mo` : `${Math.round(y * 10) / 10} yr`;
 }
 
+// ==============================================================
+// COUNTERPOINT (POS mirror) — read-only view of data the
+// coffeebeats-counterpoint Worker writes into Firestore.
+// ==============================================================
+const COUNTERPOINT_WORKER = "https://coffeebeats-counterpoint.haidi-389.workers.dev";
+routes.counterpoint = function (u) {
+  const canSync = ["owner", "accountant", "manager"].includes(u.role);
+  const wrap = el("div", {});
+  wrap.appendChild(header("Counterpoint POS",
+    "Sales, products and stock mirrored from Counterpoint. Updates live via webhook and every 5 minutes."));
+
+  const body = el("div", {}, [el("div", { class: "card muted" }, "Loading Counterpoint data…")]);
+  const statusLine = el("div", { class: "muted small", style: { marginBottom: "10px" } }, "");
+
+  async function load() {
+    try {
+      const [salesSnap, prodSnap, stockSnap, locSnap, logSnap] = await Promise.all([
+        db.collection("counterpoint_sales").get(),
+        db.collection("counterpoint_products").get(),
+        db.collection("counterpoint_stock").get(),
+        db.collection("counterpoint_locations").get(),
+        u.role === "owner" ? db.collection("counterpoint_log").doc("last_sync").get() : Promise.resolve(null),
+      ]);
+      const sales = salesSnap.docs.map(d => d.data()).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      const prods = prodSnap.docs.map(d => d.data()).filter(p => !p.archived);
+      const locs = {}; locSnap.docs.forEach(d => { locs[d.id] = d.data().name || d.id; });
+      const stock = stockSnap.docs.map(d => d.data());
+      const prodById = {}; prodSnap.docs.forEach(d => { prodById[d.id] = d.data(); });
+      const last = logSnap && logSnap.exists ? logSnap.data().at : null;
+      if (last) statusLine.textContent = "Last full sync: " + new Date(last).toLocaleString();
+
+      body.innerHTML = "";
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const todaySales = sales.filter(s => String(s.createdAt || "").slice(0, 10) === todayKey);
+      const sum = (arr) => arr.reduce((t, s) => t + (Number(s.total) || 0), 0);
+
+      const card = (label, val) => el("div", {}, [el("div", { class: "muted small" }, label), el("div", { style: { fontSize: "20px", fontWeight: "700" } }, val)]);
+      body.appendChild(el("div", { class: "card", style: { marginBottom: "12px" } }, [
+        el("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } }, [
+          card("Sales today", String(todaySales.length)),
+          card("Revenue today", money(sum(todaySales))),
+          card("Products", String(prods.length)),
+          card("Recent sales loaded", String(sales.length)),
+        ]),
+      ]));
+
+      body.appendChild(el("h3", {}, "Recent sales"));
+      if (!sales.length) body.appendChild(el("div", { class: "card muted" }, "No sales yet."));
+      sales.slice(0, 25).forEach(s => {
+        const items = (s.lines || []).map(l => `${l.quantity || 1}× ${l.name || l.sku}`).join(", ");
+        body.appendChild(el("div", { class: "card", style: { marginBottom: "8px" } }, [
+          el("div", { style: { display: "flex", justifyContent: "space-between", gap: "8px" } }, [
+            el("strong", {}, `${s.kind === "refund.created" ? "↩ Refund " : ""}#${s.receiptNumber || String(s.id).slice(0, 8)}`),
+            el("strong", {}, money(Number(s.total) || 0)),
+          ]),
+          el("div", { class: "muted small" }, `${s.createdAt ? new Date(s.createdAt).toLocaleString() : ""} · ${s.tender || ""} · ${locs[s.locationId] || ""}`),
+          items ? el("div", { class: "small" }, items) : null,
+        ].filter(Boolean)));
+      });
+
+      body.appendChild(el("h3", { style: { marginTop: "16px" } }, "Stock on hand"));
+      if (!stock.length) body.appendChild(el("div", { class: "card muted" }, "No stock data yet."));
+      const byLoc = {};
+      stock.forEach(r => { (byLoc[r.locationId] = byLoc[r.locationId] || []).push(r); });
+      Object.keys(byLoc).forEach(lid => {
+        const rows = byLoc[lid].map(r => {
+          const p = prodById[r.productId || r.id] || {};
+          return { name: p.name || r.name || r.sku || "?", qty: Number(r.onHand ?? r.quantity ?? r.qty ?? 0) };
+        }).sort((a, b) => a.qty - b.qty);
+        const c = el("div", { class: "card", style: { marginBottom: "8px" } }, [el("strong", {}, locs[lid] || lid)]);
+        rows.slice(0, 30).forEach(r => c.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between" } }, [
+          el("span", {}, r.name), el("span", { style: { color: r.qty <= 0 ? "var(--danger, #c0392b)" : "inherit" } }, String(r.qty)),
+        ])));
+        if (rows.length > 30) c.appendChild(el("div", { class: "muted small" }, `+${rows.length - 30} more (lowest stock shown first)`));
+        body.appendChild(c);
+      });
+    } catch (e) {
+      body.innerHTML = "";
+      body.appendChild(el("div", { class: "card" }, "Couldn't load Counterpoint data: " + (e.message || e)));
+    }
+  }
+
+  if (canSync) {
+    const btn = el("button", { class: "btn", style: { marginBottom: "10px" }, onClick: async () => {
+      btn.disabled = true; btn.textContent = "Syncing…";
+      try {
+        const tok = await firebase.auth().currentUser.getIdToken();
+        const res = await fetch(COUNTERPOINT_WORKER + "/sync", { method: "POST", headers: { Authorization: "Bearer " + tok } });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || res.status);
+        toast(`Synced ${j.docs} records`);
+        await load();
+      } catch (e) { toast("Sync failed: " + (e.message || e)); }
+      btn.disabled = false; btn.textContent = "🔄 Sync now";
+    } }, "🔄 Sync now");
+    wrap.appendChild(btn);
+  }
+  wrap.appendChild(statusLine);
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+  load();
+  return wrap;
+};
+
 routes.equipment_register = function (u) {
   const canManage = u.role === "owner" || u.role === "accountant";
   const wrap = el("div", {});
@@ -14978,7 +15083,7 @@ const MANAGEABLE_ROUTES = [
   "sales_import","users","settings",
   "leave_new","leave_list",
   "my_id","my_hr","my_jd","my_scorecard",
-  "staff_hr","scorecard","leaderboard",
+  "staff_hr","scorecard","leaderboard","counterpoint",
 ];
 
 routes.users = function (u) {

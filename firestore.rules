@@ -49,6 +49,13 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
+    // Counterpoint POS mirror — written only by the Cloudflare Worker (service account)
+    match /counterpoint_sales/{id}     { allow read: if isStaff(); allow write: if false; }
+    match /counterpoint_products/{id}  { allow read: if isStaff(); allow write: if false; }
+    match /counterpoint_stock/{id}     { allow read: if isStaff(); allow write: if false; }
+    match /counterpoint_locations/{id} { allow read: if isStaff(); allow write: if false; }
+    match /counterpoint_log/{id}       { allow read: if isOwner(); allow write: if false; }
+
     // Deny everything else
     match /{document=**} {
       allow read, write: if false;

@@ -1,0 +1,18 @@
+name = "coffeebeats-counterpoint"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Pull sales, products and stock from Counterpoint every 5 minutes (backup to webhooks)
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+COUNTERPOINT_BASE = "https://counterpoint-api.fly.dev/v1"
+FIREBASE_PROJECT = "coffeebeats-79200"
+# Origins allowed to call /push (the ops site)
+ALLOWED_ORIGINS = "https://ops.coffeebeats.art,http://localhost:8080"
+
+# Secrets (set with `npx wrangler secret put <NAME>`):
+#   COUNTERPOINT_API_KEY     cp_test_... first, cp_live_... later
+#   COUNTERPOINT_WHSEC       whsec_... returned when the webhook is registered
+#   FIREBASE_SERVICE_ACCOUNT the full service-account JSON
