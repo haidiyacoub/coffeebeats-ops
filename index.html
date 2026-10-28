@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261028-485 -->
+<!-- CB_BUILD:20261028-490 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261028-485";
+  var BUILD = "20261028-490";
   (function() {
     function checkFresh() {
       try {
@@ -1146,6 +1146,7 @@ function migrateState(s) {
     low_salary_to:       "2026-08",
   };
   s.sick_leave_deductions   = s.sick_leave_deductions   || [];
+  s.leave_overage_waivers   = s.leave_overage_waivers   || [];
   s.salaries                = s.salaries                || [];
   s.overtime_logs  = s.overtime_logs  || [];
   // One-time fix: double-shift OT was historically paid at 8 h × 1.5× rate.
@@ -1569,7 +1570,7 @@ const STATE_CHUNKS = {
   // month-sharded (see MONTH_SHARDED / _syncMonthShards / the pull migration below).
   suggestions:   ["suggestions", "deleted_suggestions"],
   roster:        ["rosters", "branch_closures", "morning_open_overrides", "roaster_schedules", "maadi_deposits", "special_dates", "external_baristas"],
-  hr:            ["salaries", "salary_loans", "sick_leave_deductions", "overtime_logs", "penalties", "deleted_penalties", "leaves", "deleted_salary_loans", "deleted_sick_leave_deductions", "deleted_leaves", "deleted_salaries"],
+  hr:            ["salaries", "salary_loans", "sick_leave_deductions", "leave_overage_waivers", "overtime_logs", "penalties", "deleted_penalties", "leaves", "deleted_salary_loans", "deleted_sick_leave_deductions", "deleted_leaves", "deleted_salaries"],
   hr_meta:       ["barista_dates", "salary_snapshots", "staff_ids"], // per-barista history + ID uploads (URLs), kept separate to avoid crowding hr chunk
   overhead:      ["overheads", "overhead_presets", "overhead_monthly_amts", "overhead_preset_history", "overhead_custom_cats", "overhead_cat_overrides", "maintenance_config", "loan_payments"],
   equipment:     ["equipment"],   // fixed-asset register — small/bounded, generic merge-by-id + tombstones. Its paid-from side-effects write into petty_cash / bank_ledger, which sync via the "purchases" chunk.
@@ -9663,7 +9664,7 @@ routes.penalties = function (u) {
         const full = getSalaryForMonth(p.id, selMonth);
         const hc = hireProratedSalary(p.id, selMonth, full);
         const ov = annualLeaveOverage(p.id, selMonth, hc.prorated ? hc.amount : full);
-        if (ov.amount > 0) overages.set(p.id, { name: p.name, ov });
+        if (ov.amount > 0 || ov.waiver) overages.set(p.id, { name: p.name, ov, uid: p.id });
       }
     }
     const total = visible.reduce((s,r) => s + (Number(r.amount)||0), 0)
@@ -9707,8 +9708,19 @@ routes.penalties = function (u) {
                 `${o.excessDays} day${o.excessDays === 1 ? "" : "s"} beyond ${o.freeDays} free${o.noShowDays ? `, ${o.noShowDays} off-roster = no-show ×3` : ""} · ${o.deductDays} day-equivalents (auto-calculated)`,
                 `${o.excessDays} يوم بعد ${o.freeDays} أيام مجانية${o.noShowDays ? `، ${o.noShowDays} خارج الجدول = غياب ×3` : ""} · ${o.deductDays} يوم محسوب (تلقائي)`)),
             ]),
-            el("div", { class: "v" }, money(o.amount)),
+            el("div", { class: "v" }, o.waiver ? el("span", { style: { textDecoration: "line-through" } }, money(o.waivedAmount)) : money(o.amount)),
           ]));
+          if (o.waiver) box.appendChild(el("div", { class: "muted small", style: { marginTop: "2px" } },
+            T(`✓ Waived by ${o.waiver.by_name || "owner"} — nothing deducted`, `✓ أُلغي بواسطة ${o.waiver.by_name || "المالك"} — لا خصم`)));
+          if (u.role === "owner") box.appendChild(el("button", { class: "btn ghost", style: { width: "auto", marginTop: "6px" }, onClick: () => {
+            if (o.waiver) {
+              state.leave_overage_waivers = state.leave_overage_waivers.filter(w => w.id !== o.waiver.id);
+            } else {
+              if (!confirm(T(`Waive ${g.name}'s annual leave overage (${money(o.amount)}) for ${fmtYm(selMonth)}?`, `إلغاء خصم الإجازة السنوية لـ ${g.name} (${money(o.amount)}) عن ${fmtYm(selMonth)}؟`))) return;
+              state.leave_overage_waivers.push({ id: uuid(), user_id: gk, month: selMonth, amount: o.amount, ...stamp() });
+            }
+            saveState(); drawBody();
+          } }, o.waiver ? T("↩ Restore deduction", "↩ استعادة الخصم") : T("🚫 Waive this deduction", "🚫 إلغاء هذا الخصم")));
         }
         const notes = g.rows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText);
         if (notes.length) box.appendChild(el("div", { class: "muted small", style: { marginTop: "6px", fontStyle: "italic", lineHeight: "1.5" } },
@@ -11057,8 +11069,12 @@ function annualLeaveOverage(uid, month, salary) {
   // pay; a day off with no request/approval (just not on the roster) is a no-show: 3 days' pay.
   let deductDays = Math.max(0, -free), noShowDays = 0;
   days.slice(Math.max(0, free)).forEach(x => { if (x.kind === "schedule") { noShowDays++; deductDays += 3; } else deductDays += 1; });
-  const amount = Math.round((Number(salary) || 0) / 30 * deductDays * 100) / 100;
-  return { freeDays: FREE_DAYS, usedDays, excessDays, noShowDays, deductDays, amount, scheduleDays, coverOut: cover.out, coverIn: cover.in };
+  let amount = Math.round((Number(salary) || 0) / 30 * deductDays * 100) / 100;
+  // Owner can waive a barista's overage for a month (state.leave_overage_waivers) — amount drops to 0.
+  const waiver = (state.leave_overage_waivers || []).find(w => w.user_id === uid && w.month === month);
+  const waivedAmount = waiver ? amount : 0;
+  if (waiver) amount = 0;
+  return { freeDays: FREE_DAYS, usedDays, excessDays, noShowDays, deductDays, amount, waiver, waivedAmount, scheduleDays, coverOut: cover.out, coverIn: cover.in };
 }
 
 // Schedule-derived days off. Rules start the week of 2026-10-11 so nothing earlier is touched.
