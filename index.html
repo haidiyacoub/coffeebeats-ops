@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261027-526 -->
+<!-- CB_BUILD:20261028-485 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261027-526";
+  var BUILD = "20261028-485";
   (function() {
     function checkFresh() {
       try {
@@ -9656,7 +9656,18 @@ routes.penalties = function (u) {
         .slice().sort((a,b) => (b.at||"").localeCompare(a.at||""))
       : state.penalties.filter(x => x.user_id === selBaristaId)
         .slice().sort((a,b) => (b.at||"").localeCompare(a.at||""));
-    const total = visible.reduce((s,r) => s + (Number(r.amount)||0), 0);
+    // Annual-leave overage (computed, not a stored penalty) — shown here too so this page matches payroll.
+    const overages = new Map();
+    if (activeTab === "month") {
+      for (const p of state.users.filter(x => (x.role === "barista" || x.role === "head_barista") && x.active)) {
+        const full = getSalaryForMonth(p.id, selMonth);
+        const hc = hireProratedSalary(p.id, selMonth, full);
+        const ov = annualLeaveOverage(p.id, selMonth, hc.prorated ? hc.amount : full);
+        if (ov.amount > 0) overages.set(p.id, { name: p.name, ov });
+      }
+    }
+    const total = visible.reduce((s,r) => s + (Number(r.amount)||0), 0)
+      + [...overages.values()].reduce((s, o) => s + o.ov.amount, 0);
 
     body.appendChild(el("div", { class: "card", style: { marginBottom: "12px" } }, [
       el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } },
@@ -9667,7 +9678,7 @@ routes.penalties = function (u) {
     ]));
 
     const list = el("div", { class: "card" });
-    if (visible.length === 0) {
+    if (visible.length === 0 && overages.size === 0) {
       list.appendChild(el("div", { class: "muted small" }, T("No penalties recorded.","لا توجد خصومات مسجّلة.")));
     } else {
       // Group by barista; each group ends with a footnote stating the reasons behind the penalties.
@@ -9677,16 +9688,30 @@ routes.penalties = function (u) {
         if (!groups.has(k)) groups.set(k, { name: r.barista || "—", rows: [] });
         groups.get(k).rows.push(r);
       }
+      for (const [uid, o] of overages) if (!groups.has(uid)) groups.set(uid, { name: o.name, rows: [] });
       let gi = 0;
-      for (const g of groups.values()) {
-        const gTotal = g.rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      for (const [gk, g] of groups) {
+        const ovg = overages.get(gk);
+        const gTotal = g.rows.reduce((s, r) => s + (Number(r.amount) || 0), 0) + (ovg ? ovg.ov.amount : 0);
         const box = el("div", { style: gi++ ? { marginTop: "14px", paddingTop: "10px", borderTop: "1px solid var(--border)" } : {} });
         box.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between", fontWeight: "700", marginBottom: "4px" } }, [
           el("div", {}, g.name), el("div", {}, money(gTotal)),
         ]));
         for (const r of g.rows) box.appendChild(renderPenaltyRow(r));
+        if (ovg) {
+          const o = ovg.ov;
+          box.appendChild(el("div", { class: "kv", style: { alignItems: "flex-start" } }, [
+            el("div", { class: "k" }, [
+              el("div", {}, T("Annual leave overage", "تجاوز الإجازة السنوية")),
+              el("div", { class: "muted small" }, T(
+                `${o.excessDays} day${o.excessDays === 1 ? "" : "s"} beyond ${o.freeDays} free${o.noShowDays ? `, ${o.noShowDays} off-roster = no-show ×3` : ""} · ${o.deductDays} day-equivalents (auto-calculated)`,
+                `${o.excessDays} يوم بعد ${o.freeDays} أيام مجانية${o.noShowDays ? `، ${o.noShowDays} خارج الجدول = غياب ×3` : ""} · ${o.deductDays} يوم محسوب (تلقائي)`)),
+            ]),
+            el("div", { class: "v" }, money(o.amount)),
+          ]));
+        }
         const notes = g.rows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText);
-        box.appendChild(el("div", { class: "muted small", style: { marginTop: "6px", fontStyle: "italic", lineHeight: "1.5" } },
+        if (notes.length) box.appendChild(el("div", { class: "muted small", style: { marginTop: "6px", fontStyle: "italic", lineHeight: "1.5" } },
           `* ${T("Reasons","الأسباب")}: ` + notes.join(" · ")));
         list.appendChild(box);
       }
