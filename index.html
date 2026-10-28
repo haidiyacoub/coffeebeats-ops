@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-036 -->
+<!-- CB_BUILD:20261029-063 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-036";
+  var BUILD = "20261029-063";
   (function() {
     function checkFresh() {
       try {
@@ -12486,6 +12486,38 @@ routes.counterpoint = function (u) {
         ].filter(Boolean)));
       });
 
+      // ── Compare Maadi stock: ops inventory vs Counterpoint (read-only) ──
+      (function () {
+        const maadiId = Object.keys(locs).find(id => /maadi/i.test(locs[id]));
+        if (!maadiId) return;
+        const nrm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        const unitKey = (x) => { const k = nrm(x); return (k === "unit" || k === "pc" || k === "pcs") ? "pc" : (k === "gr" ? "g" : k); };
+        const cpByName = new Map();
+        stock.filter(r => r.locationId === maadiId).forEach(r => cpByName.set(nrm(r.name), r));
+        const opsStock = computeStock("maadi");
+        const rows = (state.items || []).filter(i => i.active !== false).map(i => {
+          const r = cpByName.get(nrm(i.name));
+          if (!r) return { name: i.name, miss: true };
+          const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
+          return { name: i.name, ops, cp, unit: r.unit || i.unit, unitDiff: unitKey(i.unit) !== unitKey(r.unit), diff: Math.abs(ops - cp) > 0.001 };
+        });
+        const bad = rows.filter(r => !r.miss && (r.diff || r.unitDiff));
+        const missing = rows.filter(r => r.miss);
+        const c = el("div", { class: "card", style: { marginBottom: "12px" } }, [
+          el("strong", {}, "Maadi: ops inventory vs Counterpoint"),
+          el("div", { class: "muted small", style: { marginBottom: "6px" } },
+            `${rows.length - missing.length} items matched · ${bad.length} differ · ${missing.length} not in Counterpoint. Read-only: nothing is changed.`),
+        ]);
+        bad.sort((a, b) => Math.abs(b.ops - b.cp) - Math.abs(a.ops - a.cp)).slice(0, 40).forEach(r => c.appendChild(
+          el("div", { style: { display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "13px" } }, [
+            el("span", {}, r.name + (r.unitDiff ? " ⚠ unit differs" : "")),
+            el("span", { class: "muted" }, `ops ${Math.round(r.ops * 100) / 100} · CP ${r.cp} ${r.unit || ""}`),
+          ])));
+        if (bad.length > 40) c.appendChild(el("div", { class: "muted small" }, `+${bad.length - 40} more`));
+        if (missing.length) c.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, "Not in Counterpoint: " + missing.map(r => r.name).join(", ")));
+        body.appendChild(c);
+      })();
+
       body.appendChild(el("h3", { style: { marginTop: "16px" } }, "Stock on hand"));
       if (!stock.length) body.appendChild(el("div", { class: "card muted" }, "No stock data yet."));
       const byLoc = {};
@@ -12493,7 +12525,7 @@ routes.counterpoint = function (u) {
       Object.keys(byLoc).forEach(lid => {
         const rows = byLoc[lid].map(r => {
           const p = prodById[r.productId || r.id] || {};
-          return { name: p.name || r.name || r.sku || "?", qty: Number(r.onHand ?? r.quantity ?? r.qty ?? 0) };
+          return { name: r.name || p.name || r.sku || "?", qty: Number(r.onHand ?? r.quantity ?? r.qty ?? 0) };
         }).sort((a, b) => a.qty - b.qty);
         const c = el("div", { class: "card", style: { marginBottom: "8px" } }, [el("strong", {}, locs[lid] || lid)]);
         rows.slice(0, 30).forEach(r => c.appendChild(el("div", { style: { display: "flex", justifyContent: "space-between" } }, [

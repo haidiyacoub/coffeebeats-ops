@@ -20,7 +20,7 @@ async function cp(env, path, init = {}) {
   if (!res.ok) throw new Error(`Counterpoint ${res.status} ${path}: ${JSON.stringify(body).slice(0, 300)}`);
   return body;
 }
-const listOf = (b) => (Array.isArray(b) ? b : b.data || b.items || b.products || b.sales || b.locations || b.inventory || []);
+const listOf = (b) => (Array.isArray(b) ? b : b.data || b.items || b.products || b.sales || b.locations || b.inventory || b.levels || []);
 
 async function verifyWebhook(env, req, raw) {
   const sig = req.headers.get('x-counterpoint-signature') || '';
@@ -100,7 +100,7 @@ async function pullAll(env) {
   locs.forEach((l) => docs.push({ col: 'counterpoint_locations', id: String(l.id), data: l }));
   for (const l of locs) {
     const inv = listOf(await cp(env, `/inventory?locationId=${l.id}`));
-    inv.forEach((r) => docs.push({ col: 'counterpoint_stock', id: `${l.id}_${r.productId || r.id || r.sku}`, data: { ...r, locationId: l.id } }));
+    inv.forEach((r) => docs.push({ col: 'counterpoint_stock', id: `${l.id}_${r.sku || r.productId || r.id}`, data: { ...r, locationId: l.id } }));
   }
   await fsWrite(env, docs);
   await fsWrite(env, [{ col: 'counterpoint_log', id: 'last_sync', data: { at: new Date().toISOString(), counts: docs.length } }]);
@@ -111,7 +111,7 @@ async function handleEvent(env, evt) {
   const { event, data } = evt;
   if (event === 'sale.created' || event === 'refund.created') return fsWrite(env, [saleDoc({ ...data, kind: event })]);
   if (event.startsWith('product.')) return fsWrite(env, [productDoc({ ...data, archived: event === 'product.deleted' || !!data.archived })]);
-  if (event === 'inventory.adjusted') return fsWrite(env, [{ col: 'counterpoint_stock', id: `${data.locationId}_${data.productId}`, data }]);
+  if (event === 'inventory.adjusted') return fsWrite(env, [{ col: 'counterpoint_stock', id: `${data.locationId}_${data.sku || data.productId}`, data }]);
   return fsWrite(env, [{ col: 'counterpoint_log', id: `evt_${Date.now()}`, data: { event, data } }]);
 }
 
