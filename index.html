@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-448 -->
+<!-- CB_BUILD:20261029-451 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-448";
+  var BUILD = "20261029-451";
   (function() {
     function checkFresh() {
       try {
@@ -12861,7 +12861,8 @@ routes.counterpoint_stock = function (u) {
       // "Whipped cream" vs the whipped-cream ingredient). Ops stock items are ingredients, so match those first.
       const cpByName = new Map();
       stockSnap.docs.map(d => d.data()).filter(r => r.locationId === maadiId).forEach(r => {
-        const k = nrm(r.name), cur = cpByName.get(k);
+        // ops and Counterpoint name some ingredients differently (Plastic Cup 16oz = Cups 16oz); CP_ING_ALIAS bridges them
+        const k = nrm(CP_ING_ALIAS[nrm(r.name).replace(/ /g, "")] || r.name), cur = cpByName.get(k);
         if (!cur || (/^ING-/i.test(r.sku || "") && !/^ING-/i.test(cur.sku || ""))) cpByName.set(k, r);
       });
       await Promise.all([loadCpSales(true), loadCpCatalog(true)]);
