@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-483 -->
+<!-- CB_BUILD:20261029-491 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-483";
+  var BUILD = "20261029-491";
   (function() {
     function checkFresh() {
       try {
@@ -3460,7 +3460,7 @@ function isMobileDevice() {
 // Maadi's till is Counterpoint. Every sale line is turned into ingredient usage
 // through the recipe/BOM (state.inv_engine_recipes) and subtracted from the ops
 // stock, so ops stock = last count + purchases − waste − sales since that count.
-const _cp = { sales: null, maadiId: null, at: 0, loading: null, ver: 0, recipes: null, catalog: null, catalogStarted: false, catalogLoading: null };
+const _cp = { sales: null, maadiId: null, locIds: {}, at: 0, loading: null, ver: 0, recipes: null, catalog: null, catalogStarted: false, catalogLoading: null };
 // Counterpoint ingredient name → ops inventory item name, where the two systems call the same thing differently
 const CP_ING_ALIAS = { chocolatesauce: "Dark Chocolate Sauce" };
 const VAT_RATE = 1.14;   // Counterpoint prices are ex-VAT; the ops menu is VAT-inclusive
@@ -3481,7 +3481,13 @@ async function loadCpSales(force) {
       if (since) q = q.where("createdAt", ">=", new Date(Date.parse(since) - 86400000).toISOString());
       const [salesSnap, locSnap] = await Promise.all([q.get(), db.collection("counterpoint_locations").get()]);
       _cp.maadiId = null;
-      locSnap.docs.forEach(d => { if (/maadi/i.test(d.data().name || "")) _cp.maadiId = d.id; });
+      _cp.locIds = {};
+      locSnap.docs.forEach(d => {
+        const nm = d.data().name || "";
+        if (/maadi/i.test(nm)) { _cp.maadiId = d.id; _cp.locIds.maadi = d.id; }
+        if (/zawya/i.test(nm)) _cp.locIds.zawya = d.id;
+        if (/\box\b/i.test(nm)) _cp.locIds.ox = d.id;   // Ox opens 25 Nov 2026, replacing Zawya (closes 24 Nov)
+      });
       _cp.sales = salesSnap.docs.map(d => d.data());
     } catch (e) {
       _cp.sales = _cp.sales || [];   // no access / offline: ops stock simply isn't sales-adjusted
@@ -3535,11 +3541,14 @@ async function loadCpCatalog(force) {
   return _cp.catalogLoading;
 }
 // Returns { byItem: {itemId: qty in item unit}, sales, lines, unmatched: {productName: qty} }
-function cpSalesUsage(tsAfter) {
+function cpSalesUsage(tsAfter, branch) {
+  branch = branch || "maadi";
+  const locId = branch === "maadi" ? _cp.maadiId : (_cp.locIds || {})[branch];
   const rc = state.inv_engine_recipes || [];
-  const key = _cp.ver + "|" + tsAfter + "|" + rc.length + "|" + (state.items || []).length;
+  const key = branch + "|" + _cp.ver + "|" + tsAfter + "|" + rc.length + "|" + (state.items || []).length;
   if (_cpUsageMemo && _cpUsageMemo.key === key) return _cpUsageMemo.val;
   const val = { byItem: {}, sales: 0, lines: 0, noLines: 0, unmatched: {}, unmatchedIng: {}, fromCp: 0 };
+  if (branch !== "maadi" && !locId) { _cpUsageMemo = { key, val }; return val; }   // branch has no Counterpoint location: nothing sold there
   const itemsById = {}, itemsByName = {}, itemsByCompact = {}, idx = {};
   const compact = (x) => _cpNrm(x).replace(/ /g, "");
   const itemsByCpSku = {};
@@ -3549,7 +3558,7 @@ function cpSalesUsage(tsAfter) {
   const cutoff = Date.parse(tsAfter) || 0;
   const add = (id, n) => { val.byItem[id] = (val.byItem[id] || 0) + n; };
   for (const sale of (_cp.sales || [])) {
-    if (_cp.maadiId && sale.locationId != null && String(sale.locationId) !== String(_cp.maadiId)) continue;
+    if (locId && sale.locationId != null && String(sale.locationId) !== String(locId)) continue;
     if (!(Date.parse(sale.createdAt) > cutoff)) continue;
     val.sales++;
     if (!(sale.lines || []).length) val.noLines++;
@@ -3637,8 +3646,8 @@ function computeStock(branch) {
     }
   }
   // Maadi: subtract what Counterpoint sold since that count (via recipes)
-  if (branch === "maadi" && _cp.sales && _cp.sales.length) {
-    const used = cpSalesUsage(tsAfter).byItem;
+  if (_cp.sales && _cp.sales.length && (branch === "maadi" || (_cp.locIds && _cp.locIds[branch]))) {
+    const used = cpSalesUsage(tsAfter, branch).byItem;
     for (const id in used) if (stock[id] != null) stock[id] -= used[id];
   }
   return stock;
@@ -12840,7 +12849,15 @@ routes.counterpoint = function (u) {
 routes.counterpoint_stock = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Ops vs Counterpoint stock",
-    "Maadi stock as ops counts it, next to what the till says it has. Read-only: nothing is changed."));
+    "Each branch's stock as ops counts it, next to what that branch's till says it has. Read-only: nothing is changed."));
+  // Maadi and Ox (the new branch opening 25 Nov 2026, replacing Zawya which closes 24 Nov). Owner/accountant only page, so both are always offered.
+  let branch = "maadi";
+  const BR = [["maadi", "🏠 Maadi"], ["ox", "🆕 Ox"]];
+  const branchBar = el("div", { style: { display: "flex", gap: "8px", marginBottom: "10px" } });
+  const drawBar = () => { branchBar.innerHTML = ""; BR.forEach(([b, lab]) => branchBar.appendChild(el("button", {
+    class: "btn" + (branch === b ? "" : " ghost"), style: { width: "auto", padding: "6px 14px" },
+    onClick: () => { branch = b; data = null; body.innerHTML = ""; body.appendChild(el("div", { class: "card muted" }, "Loading…")); drawBar(); load(); } }, lab))); };
+  if (BR.length > 1) { drawBar(); wrap.appendChild(branchBar); }
 
   const body = el("div", {}, [el("div", { class: "card muted" }, "Loading Counterpoint stock…")]);
   let diffOnly = true, q = "";
@@ -12875,7 +12892,16 @@ routes.counterpoint_stock = function (u) {
     body.innerHTML = "";
     if (!data) return;
     const { rows, missing, noMaadi } = data;
-    if (noMaadi) { body.appendChild(el("div", { class: "card muted" }, "No Maadi location found in Counterpoint yet.")); return; }
+    if (noMaadi) {
+      body.appendChild(el("div", { class: "card muted" }, `No ${branch === "ox" ? "Ox" : "Maadi"} location found in Counterpoint yet, so there is nothing to compare. ` +
+        `Once that branch's till is connected it shows up here automatically.`));
+      const have = (data.opsOnly || []).filter(r => r.ops);
+      if (have.length) body.appendChild(el("div", { class: "card", style: { marginTop: "10px" } }, [
+        el("strong", {}, "Ops stock for this branch"),
+        el("div", { class: "small", style: { marginTop: "6px", lineHeight: "1.7" } }, have.map(r => `${r.name}: ${qty(r.ops, r.opsUnit)}`).join(" · ")),
+      ]));
+      return;
+    }
     const matched = rows.filter(r => !r.miss);
     const bad = matched.filter(r => r.diff || r.unitDiff);
 
@@ -12892,7 +12918,7 @@ routes.counterpoint_stock = function (u) {
       ]),
     ]));
 
-    const cpu = cpSalesUsage(lastSnapshotTs() || "");
+    const cpu = cpSalesUsage(lastSnapshotTs() || "", branch);
     const unm = Object.entries(cpu.unmatched).filter(([, n]) => n).sort((a, b) => b[1] - a[1]);
     body.appendChild(el("div", { class: "card", style: { marginBottom: "12px", fontSize: "13px" } }, [
       el("strong", {}, "Sales deducted from ops stock"),
@@ -12969,8 +12995,12 @@ routes.counterpoint_stock = function (u) {
         db.collection("counterpoint_stock").get(), db.collection("counterpoint_locations").get(),
       ]);
       const locs = {}; locSnap.docs.forEach(d => { locs[d.id] = d.data().name || d.id; });
-      const maadiId = Object.keys(locs).find(id => /maadi/i.test(locs[id]));
-      if (!maadiId) { data = { noMaadi: true }; return draw(); }
+      const maadiId = Object.keys(locs).find(id => new RegExp("\\b" + branch + "\\b", "i").test(locs[id]));   // this branch's Counterpoint location
+      if (!maadiId) {
+        const os = computeStock(branch);
+        data = { noMaadi: true, opsOnly: (state.items || []).filter(i => i.active !== false).map(i => ({ name: i.name, ops: Number(os[i.id]) || 0, opsUnit: i.unit })) };
+        return draw();
+      }
       // A till product can share a name with an ingredient (the "Turkish Coffee" drink vs the Turkish Coffee beans,
       // "Whipped cream" vs the whipped-cream ingredient). Ops stock items are ingredients, so match those first.
       const cpByName = new Map();
@@ -12982,7 +13012,7 @@ routes.counterpoint_stock = function (u) {
         }
       });
       await Promise.all([loadCpSales(true), loadCpCatalog(true)]);
-      const opsStock = computeStock("maadi");
+      const opsStock = computeStock(branch);
       const cpRows = stockSnap.docs.map(d => d.data()).filter(r => r.locationId === maadiId);
       const cpBySku = new Map(cpRows.map(r => [r.sku, r]));
       const rows = (state.items || []).filter(i => i.active !== false).map(i => {
