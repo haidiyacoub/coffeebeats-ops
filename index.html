@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-715 -->
+<!-- CB_BUILD:20261029-911 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-715";
+  var BUILD = "20261029-911";
   (function() {
     function checkFresh() {
       try {
@@ -3439,12 +3439,22 @@ function cpSalesUsage(tsAfter) {
       const cpNeeds = _cp.recipes && ((l.sku && _cp.recipes["sku:" + l.sku]) || _cp.recipes["name:" + key]);
       if (cpNeeds) {
         val.lines++; val.fromCp++;
-        for (const nd of cpNeeds) {
+        const chosen = new Set((l.addons || []).map(a => a.optionId).filter(Boolean));
+        const milkPicked = (l.addons || []).some(a => /milk/i.test(a.group || ""));
+        // options can swap one ingredient for another (e.g. decaf replaces regular coffee)
+        const swap = {};
+        cpNeeds.forEach(n => (n.effects || []).forEach(e => { if (e.kind === "replace" && chosen.has(e.optionId)) swap[e.fromSku] = e; }));
+        for (const nd0 of cpNeeds) {
+          const sw = swap[nd0.sku];
+          const nd = sw ? { ...nd0, name: sw.toName, unit: sw.toUnit || nd0.unit, quantity: Number(nd0.quantity) * (Number(sw.quantityFactor) || 1) } : nd0;
           const it = itemsByCompact[compact(CP_ING_ALIAS[compact(nd.name)] || nd.name)];
-          // A need with an optionId is a choice the cashier makes (milk type, honey, extra shot…). The Counterpoint
-          // API doesn't say which option was picked on a sale line, so only the default milk (full cream) is assumed;
-          // other choices are counted when they are rung up as their own "Extra …" product.
-          if (nd.optionId && !(it && it.category === "milk" && /full ?cream/i.test(it.name))) continue;
+          // A need with an optionId is a choice the cashier makes (milk type, honey, extra shot…). Sale lines carry the
+          // chosen options in `addons`; with no milk option chosen the default (full cream) is assumed.
+          if (nd.optionId) {
+            const picked = chosen.has(nd.optionId);
+            const defMilk = !milkPicked && it && it.category === "milk" && /full ?cream/i.test(it.name);
+            if (!picked && !defMilk) continue;
+          }
           if (!it) { val.unmatchedIng[nd.name] = (val.unmatchedIng[nd.name] || 0) + 1; continue; }
           add(it.id, invCanonicalizeQty(Number(nd.quantity) || 0, unitFix(nd.unit), unitFix(it.unit)) * qty);
         }

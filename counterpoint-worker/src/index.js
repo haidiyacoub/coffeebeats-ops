@@ -93,7 +93,7 @@ async function fsWrite(env, docs) {
 const saleDoc = (s) => ({ col: 'counterpoint_sales', id: String(s.id), data: { ...s, id: String(s.id) }, merge: true });
 const productDoc = (p) => ({ col: 'counterpoint_products', id: String(p.id), data: p });
 
-// ids (newest first) whose Firestore sale doc is missing or has no `lines` yet
+// ids (newest first) whose Firestore sale doc is missing, has no `lines`, or was saved before lines carried `addons` (addons_v)
 async function salesMissingLines(env, ids) {
   if (!ids.length) return [];
   const token = await gToken(env);
@@ -104,14 +104,14 @@ async function salesMissingLines(env, ids) {
     const res = await fetch(`https://firestore.googleapis.com/v1/${base}:batchGet`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documents: chunk.map((id) => `${base}/counterpoint_sales/${encodeURIComponent(id)}`), mask: { fieldPaths: ['lines'] } }),
+      body: JSON.stringify({ documents: chunk.map((id) => `${base}/counterpoint_sales/${encodeURIComponent(id)}`), mask: { fieldPaths: ['lines', 'addons_v'] } }),
     });
     if (!res.ok) throw new Error('Firestore read failed: ' + (await res.text()).slice(0, 300));
     const rows = await res.json();
     rows.forEach((r) => {
       const name = (r.found && r.found.name) || r.missing;
       const id = decodeURIComponent(String(name).split('/').pop());
-      if (r.missing || !(r.found.fields && r.found.fields.lines)) out.push(id);
+      if (r.missing || !(r.found.fields && r.found.fields.lines && r.found.fields.addons_v)) out.push(id);
     });
   }
   const order = new Map(ids.map((id, i) => [id, i]));
@@ -167,7 +167,7 @@ async function pullAll(env, full) {
     try {
       const d = await cp(env, `/sales/${id}`);
       const full = d.data || d;
-      if (full && Array.isArray(full.lines)) docs.push(saleDoc({ ...byId[id], ...full }));
+      if (full && Array.isArray(full.lines)) docs.push(saleDoc({ ...byId[id], ...full, addons_v: 1 }));
     } catch (e) { /* retried on the next run */ }
   }
   listOf(products).forEach((p) => docs.push(productDoc(p)));
