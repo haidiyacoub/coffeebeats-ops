@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-063 -->
+<!-- CB_BUILD:20261029-687 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-063";
+  var BUILD = "20261029-687";
   (function() {
     function checkFresh() {
       try {
@@ -3334,6 +3334,145 @@ function isMobileDevice() {
     || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || ""));
 }
 
+// ----- Counterpoint sales → ingredient usage (Maadi only) -----
+// Maadi's till is Counterpoint. Every sale line is turned into ingredient usage
+// through the recipe/BOM (state.inv_engine_recipes) and subtracted from the ops
+// stock, so ops stock = last count + purchases − waste − sales since that count.
+const _cp = { sales: null, maadiId: null, at: 0, loading: null, ver: 0, recipes: null, catalog: null, catalogStarted: false, catalogLoading: null };
+// Counterpoint ingredient name → ops inventory item name, where the two systems call the same thing differently
+const CP_ING_ALIAS = { papercup12oz: "Cups 12oz", papercup8oz: "Cups 8oz", papercup4oz: "Cups 4oz", plasticcup16oz: "Cups 16oz", chocolatesauce: "Dark Chocolate Sauce" };
+const VAT_RATE = 1.14;   // Counterpoint prices are ex-VAT; the ops menu is VAT-inclusive
+let _cpUsageMemo = null;
+const _cpNrm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function lastSnapshotTs() {
+  const snaps = (state.snapshots || []).slice().sort((a, b) => a.created_at.localeCompare(b.created_at));
+  return snaps.length ? snaps[snaps.length - 1].created_at : null;
+}
+async function loadCpSales(force) {
+  if (_cp.loading) return _cp.loading;
+  if (!force && _cp.sales && Date.now() - _cp.at < 120000) return;
+  _cp.loading = (async () => {
+    try {
+      const since = lastSnapshotTs();
+      let q = db.collection("counterpoint_sales");
+      // one-day margin so timezone/format differences never drop a sale; exact cut-off is applied in memory
+      if (since) q = q.where("createdAt", ">=", new Date(Date.parse(since) - 86400000).toISOString());
+      const [salesSnap, locSnap] = await Promise.all([q.get(), db.collection("counterpoint_locations").get()]);
+      _cp.maadiId = null;
+      locSnap.docs.forEach(d => { if (/maadi/i.test(d.data().name || "")) _cp.maadiId = d.id; });
+      _cp.sales = salesSnap.docs.map(d => d.data());
+    } catch (e) {
+      _cp.sales = _cp.sales || [];   // no access / offline: ops stock simply isn't sales-adjusted
+    }
+    _cp.at = Date.now(); _cp.ver++; _cp.loading = null;
+  })();
+  return _cp.loading;
+}
+// Counterpoint is the source of truth for recipes, item cost and price.
+//  • recipes  → counterpoint_stock docs carry each product's `recipeNeeds` (ingredient sku/name/unit/quantity)
+//  • cost     → counterpoint_products.cost (computed by Counterpoint from those recipes + ingredient costs)
+//  • price    → counterpoint_products.unitPrice (ex-VAT) × 1.14
+// The ops menu (state.menu) is kept in step with it, so the P&L / COGS % / dashboards use the same numbers.
+async function loadCpCatalog(force) {
+  if (_cp.catalogLoading) return _cp.catalogLoading;
+  if (!force && _cp.catalog && Date.now() - (_cp.catalogAt || 0) < 300000) return false;
+  _cp.catalogLoading = (async () => {
+    let changed = false;
+    try {
+      const [prodSnap, stockSnap, locSnap] = await Promise.all([
+        db.collection("counterpoint_products").get(), db.collection("counterpoint_stock").get(), db.collection("counterpoint_locations").get(),
+      ]);
+      let maadiId = null;
+      locSnap.docs.forEach(d => { if (/maadi/i.test(d.data().name || "")) maadiId = d.id; });
+      const catalog = {};
+      prodSnap.docs.map(d => d.data()).filter(x => !x.archived && !x.archivedAt).forEach(x => {
+        catalog[x.sku || x.id] = { sku: x.sku, name: x.name, cost: Number(x.cost) || 0, price: Number(x.unitPrice) || 0, sold: !!x.soldOnTill };
+      });
+      const recipes = {};
+      stockSnap.docs.map(d => d.data()).filter(r => !maadiId || r.locationId === maadiId).forEach(r => {
+        const needs = (r.recipeNeeds || []).filter(n => Number(n.quantity) > 0);
+        if (!needs.length) return;
+        if (r.sku) recipes["sku:" + r.sku] = needs;
+        recipes["name:" + _cpNrm(r.name)] = needs;
+      });
+      _cp.catalog = catalog; _cp.recipes = recipes; _cp.catalogAt = Date.now(); _cp.ver++;
+      // keep the ops menu in step (cost + VAT-inclusive price) for items the till sells
+      const bySku = {}, byName = {};
+      Object.values(catalog).filter(c => c.sold).forEach(c => { if (c.sku) bySku[c.sku] = c; byName[_cpNrm(c.name)] = c; });
+      for (const m of (state.menu || [])) {
+        const c = (m.pos_sku && bySku[m.pos_sku]) || byName[_cpNrm(m.name)];
+        if (!c) continue;
+        const cost = Math.round(c.cost * 100) / 100, price = Math.round(c.price * VAT_RATE);
+        if (cost > 0 && m.cost_egp !== cost) { m.cost_egp = cost; changed = true; }
+        if (price > 0 && m.price_egp !== price) { m.price_egp = price; changed = true; }
+      }
+    } catch (e) { /* no access / offline: keep the ops menu as it is */ }
+    _cp.catalogLoading = null;
+    return changed;
+  })();
+  return _cp.catalogLoading;
+}
+// Returns { byItem: {itemId: qty in item unit}, sales, lines, unmatched: {productName: qty} }
+function cpSalesUsage(tsAfter) {
+  const rc = state.inv_engine_recipes || [];
+  const key = _cp.ver + "|" + tsAfter + "|" + rc.length + "|" + (state.items || []).length;
+  if (_cpUsageMemo && _cpUsageMemo.key === key) return _cpUsageMemo.val;
+  const val = { byItem: {}, sales: 0, lines: 0, noLines: 0, unmatched: {}, unmatchedIng: {}, fromCp: 0 };
+  const itemsById = {}, itemsByName = {}, itemsByCompact = {}, idx = {};
+  const compact = (x) => _cpNrm(x).replace(/ /g, "");
+  (state.items || []).forEach(i => { itemsById[i.id] = i; itemsByName[_cpNrm(i.name)] = i; itemsByCompact[compact(i.name)] = i; });
+  const unitFix = (u) => { const k = String(u || "").toLowerCase().trim(); return k === "gr" ? "g" : k; };
+  rc.forEach(r => { if (r.inv_item_id && itemsById[r.inv_item_id]) (idx[_cpNrm(r.menu_item_name)] = idx[_cpNrm(r.menu_item_name)] || []).push(r); });
+  const cutoff = Date.parse(tsAfter) || 0;
+  const add = (id, n) => { val.byItem[id] = (val.byItem[id] || 0) + n; };
+  for (const sale of (_cp.sales || [])) {
+    if (_cp.maadiId && sale.locationId != null && String(sale.locationId) !== String(_cp.maadiId)) continue;
+    if (!(Date.parse(sale.createdAt) > cutoff)) continue;
+    val.sales++;
+    if (!(sale.lines || []).length) val.noLines++;
+    for (const l of (sale.lines || [])) {
+      const name = l.name || l.sku || "";
+      const key = _cpNrm(name);
+      const rawQty = Number(l.quantity ?? l.qty ?? 1) || 0;
+      const qty = sale.kind === "refund.created" ? -Math.abs(rawQty) : rawQty;
+      // 1) Counterpoint's own recipe for this product (by sku, then name)
+      const cpNeeds = _cp.recipes && ((l.sku && _cp.recipes["sku:" + l.sku]) || _cp.recipes["name:" + key]);
+      if (cpNeeds) {
+        val.lines++; val.fromCp++;
+        for (const nd of cpNeeds) {
+          const it = itemsByCompact[compact(CP_ING_ALIAS[compact(nd.name)] || nd.name)];
+          // A need with an optionId is a choice the cashier makes (milk type, honey, extra shot…). The Counterpoint
+          // API doesn't say which option was picked on a sale line, so only the default milk (full cream) is assumed;
+          // other choices are counted when they are rung up as their own "Extra …" product.
+          if (nd.optionId && !(it && it.category === "milk" && /full ?cream/i.test(it.name))) continue;
+          if (!it) { val.unmatchedIng[nd.name] = (val.unmatchedIng[nd.name] || 0) + 1; continue; }
+          add(it.id, invCanonicalizeQty(Number(nd.quantity) || 0, unitFix(nd.unit), unitFix(it.unit)) * qty);
+        }
+        continue;
+      }
+      // 2) fall back to recipes uploaded into ops (old sheet), then retail items sold as-is
+      let recs = idx[key], iced = false;
+      if (!recs && /^ice[d]?\s+/i.test(name)) { recs = idx[_cpNrm(name.replace(/^ice[d]?\s+/i, ""))]; iced = !!recs; }
+      val.lines++;
+      if (recs) {
+        for (const r of recs) {
+          const it = itemsById[r.inv_item_id];
+          let per = Number(r.qty_per_serving) || 0;
+          // ice drinks use 70 ml less milk than the same hot drink
+          if (iced && it.category === "milk" && String(r.unit).toLowerCase() === "ml") per = Math.max(0, per - 70);
+          add(it.id, invCanonicalizeQty(per, r.unit, it.unit) * qty);
+        }
+      } else if (itemsByName[key]) {
+        add(itemsByName[key].id, qty);   // retail item sold as-is (bottled water etc.)
+      } else {
+        val.unmatched[name] = (val.unmatched[name] || 0) + qty;
+      }
+    }
+  }
+  _cpUsageMemo = { key, val };
+  return val;
+}
+
 // ----- running stock (computed) -----
 function computeStock(branch) {
   // start from latest snapshot
@@ -3361,6 +3500,11 @@ function computeStock(branch) {
     if (w.inv_item_id && stock[w.inv_item_id] != null) {
       stock[w.inv_item_id] -= Number(w.qty_canonical) || 0;
     }
+  }
+  // Maadi: subtract what Counterpoint sold since that count (via recipes)
+  if (branch === "maadi" && _cp.sales && _cp.sales.length) {
+    const used = cpSalesUsage(tsAfter).byItem;
+    for (const id in used) if (stock[id] != null) stock[id] -= used[id];
   }
   return stock;
 }
@@ -4728,6 +4872,11 @@ function render() {
   if (!u || !u.active) { auth.signOut(); return; }
   if (["owner", "head_barista"].includes(u.role)) startNoStampCheck();
   else stopNoStampCheck();
+  // Counterpoint is the source of truth for recipes / cost / price: pull it once per session
+  if (["owner", "accountant", "head_barista"].includes(u.role) && !_cp.catalogStarted) {
+    _cp.catalogStarted = true;
+    loadCpCatalog(true).then(changed => { if (changed) { saveState(); render(); } });
+  }
   // Guard direct-access to restricted routes
   if (!canAccess(route.name, u)) {
     route = { name: "home", params: {} };
@@ -5481,6 +5630,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🧾", "Monthly Overheads", "Bills & fixed costs", () => go("overheads")));
     tiles.appendChild(tile("🛠️", "Equipment Register", "Fixed assets · purchase date & value", () => go("equipment_register")));
     if (canAccess("counterpoint", u)) tiles.appendChild(tile("🔌", "Counterpoint POS", "Live sales & stock from the till", () => go("counterpoint")));
+    if (canAccess("counterpoint_stock", u)) tiles.appendChild(tile("⚖️", "Ops vs Counterpoint stock", "Maadi stock side by side · differences", () => go("counterpoint_stock")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
     tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
     tiles.appendChild(sectionHeader("HR"));
@@ -6398,12 +6548,19 @@ routes.snapshot_new = function (u) {
   }
 
   const inputs = {}; // item_id -> input el
+  const salesNote = el("div", { class: "muted small", style: { margin: "6px 0 10px" } });
+  wrap.appendChild(salesNote);
   const list = el("div", { class: "list" });
   wrap.appendChild(list);
+  Promise.all([loadCpCatalog(), loadCpSales()]).then(() => draw());
 
   function draw() {
     list.innerHTML = "";
     const stock = computeStock(branch);
+    const cpu = branch === "maadi" && _cp.sales && _cp.sales.length ? cpSalesUsage(lastSnapshotTs() || "") : null;
+    salesNote.textContent = cpu
+      ? T(`Expected stock already subtracts ${cpu.sales} Counterpoint sale(s) since the last count.`, `المخزون المتوقع يخصم ${cpu.sales} عملية بيع من Counterpoint منذ آخر جرد.`)
+      : "";
     const q = search.value.trim().toLowerCase();
     const items = state.items.filter(i => i.active && (q==="" || i.name.toLowerCase().includes(q)));
     for (const it of items) {
@@ -12486,38 +12643,6 @@ routes.counterpoint = function (u) {
         ].filter(Boolean)));
       });
 
-      // ── Compare Maadi stock: ops inventory vs Counterpoint (read-only) ──
-      (function () {
-        const maadiId = Object.keys(locs).find(id => /maadi/i.test(locs[id]));
-        if (!maadiId) return;
-        const nrm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-        const unitKey = (x) => { const k = nrm(x); return (k === "unit" || k === "pc" || k === "pcs") ? "pc" : (k === "gr" ? "g" : k); };
-        const cpByName = new Map();
-        stock.filter(r => r.locationId === maadiId).forEach(r => cpByName.set(nrm(r.name), r));
-        const opsStock = computeStock("maadi");
-        const rows = (state.items || []).filter(i => i.active !== false).map(i => {
-          const r = cpByName.get(nrm(i.name));
-          if (!r) return { name: i.name, miss: true };
-          const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
-          return { name: i.name, ops, cp, unit: r.unit || i.unit, unitDiff: unitKey(i.unit) !== unitKey(r.unit), diff: Math.abs(ops - cp) > 0.001 };
-        });
-        const bad = rows.filter(r => !r.miss && (r.diff || r.unitDiff));
-        const missing = rows.filter(r => r.miss);
-        const c = el("div", { class: "card", style: { marginBottom: "12px" } }, [
-          el("strong", {}, "Maadi: ops inventory vs Counterpoint"),
-          el("div", { class: "muted small", style: { marginBottom: "6px" } },
-            `${rows.length - missing.length} items matched · ${bad.length} differ · ${missing.length} not in Counterpoint. Read-only: nothing is changed.`),
-        ]);
-        bad.sort((a, b) => Math.abs(b.ops - b.cp) - Math.abs(a.ops - a.cp)).slice(0, 40).forEach(r => c.appendChild(
-          el("div", { style: { display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "13px" } }, [
-            el("span", {}, r.name + (r.unitDiff ? " ⚠ unit differs" : "")),
-            el("span", { class: "muted" }, `ops ${Math.round(r.ops * 100) / 100} · CP ${r.cp} ${r.unit || ""}`),
-          ])));
-        if (bad.length > 40) c.appendChild(el("div", { class: "muted small" }, `+${bad.length - 40} more`));
-        if (missing.length) c.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, "Not in Counterpoint: " + missing.map(r => r.name).join(", ")));
-        body.appendChild(c);
-      })();
-
       body.appendChild(el("h3", { style: { marginTop: "16px" } }, "Stock on hand"));
       if (!stock.length) body.appendChild(el("div", { class: "card muted" }, "No stock data yet."));
       const byLoc = {};
@@ -12556,6 +12681,160 @@ routes.counterpoint = function (u) {
     wrap.appendChild(btn);
   }
   wrap.appendChild(statusLine);
+  wrap.appendChild(body);
+  wrap.appendChild(btnBack());
+  load();
+  return wrap;
+};
+
+// ==============================================================
+// COUNTERPOINT STOCK CHECK — Maadi ops inventory vs the till's
+// on-hand, side by side with a difference column. Read-only.
+// ==============================================================
+routes.counterpoint_stock = function (u) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Ops vs Counterpoint stock",
+    "Maadi stock as ops counts it, next to what the till says it has. Read-only: nothing is changed."));
+
+  const body = el("div", {}, [el("div", { class: "card muted" }, "Loading Counterpoint stock…")]);
+  let diffOnly = true, q = "";
+  let data = null;
+
+  const nrm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const unitKey = (x) => { const k = nrm(x); return (k === "unit" || k === "pc" || k === "pcs") ? "pc" : (k === "gr" ? "g" : k); };
+  const unitLabel = (x) => (unitKey(x) === "pc" ? "pc" : (x || ""));
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const qty = (n, unit) => {
+    const lab = unitLabel(unit);
+    return Math.abs(n) >= 1000 && (lab === "g" || lab === "ml")
+      ? `${r2(n / 1000)} ${lab === "g" ? "kg" : "L"}` : `${r2(n)} ${lab}`.trim();
+  };
+
+  const COLS = "minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)";
+  const cell = (txt, extra) => el("div", { style: Object.assign({ minWidth: 0 }, extra || {}) }, txt);
+  const headRow = el("div", { style: { display: "grid", gridTemplateColumns: COLS, gap: "8px", padding: "8px 12px",
+    fontSize: "11px", fontWeight: "700", letterSpacing: ".04em", textTransform: "uppercase", color: "var(--ink-dim)",
+    borderBottom: "1px solid var(--border)" } }, [
+    cell("Item"), cell("Ops", { textAlign: "right" }), cell("Counterpoint", { textAlign: "right" }), cell("Difference", { textAlign: "right" }),
+  ]);
+
+  function pill(r) {
+    const base = { display: "inline-block", padding: "2px 8px", borderRadius: "999px", fontSize: "12px", fontWeight: "700", whiteSpace: "nowrap" };
+    if (r.unitDiff) return el("span", { style: Object.assign(base, { background: "rgba(183,121,31,.14)", color: "var(--warn)" }) }, "⚠ units differ");
+    if (!r.diff) return el("span", { style: Object.assign(base, { background: "rgba(47,138,85,.12)", color: "var(--ok)" }) }, "✓ match");
+    const d = r.ops - r.cp;
+    return el("span", { style: Object.assign(base, { background: "rgba(194,59,59,.12)", color: "var(--bad)" }) },
+      (d > 0 ? "+" : "−") + qty(Math.abs(d), r.unit));
+  }
+
+  function draw() {
+    body.innerHTML = "";
+    if (!data) return;
+    const { rows, missing, noMaadi } = data;
+    if (noMaadi) { body.appendChild(el("div", { class: "card muted" }, "No Maadi location found in Counterpoint yet.")); return; }
+    const matched = rows.filter(r => !r.miss);
+    const bad = matched.filter(r => r.diff || r.unitDiff);
+
+    const stat = (n, label, color) => el("div", { style: { flex: "1 1 90px", minWidth: "90px" } }, [
+      el("div", { style: { fontSize: "24px", fontWeight: "700", color: color || "var(--ink)", lineHeight: "1.1" } }, String(n)),
+      el("div", { class: "muted small" }, label),
+    ]);
+    body.appendChild(el("div", { class: "card", style: { marginBottom: "12px" } }, [
+      el("div", { style: { display: "flex", gap: "14px", flexWrap: "wrap" } }, [
+        stat(matched.length, "items matched"),
+        stat(matched.length - bad.length, "agree", "var(--ok)"),
+        stat(bad.length, "differ", bad.length ? "var(--bad)" : "var(--ok)"),
+        stat(missing.length, "not in Counterpoint", "var(--ink-dim)"),
+      ]),
+    ]));
+
+    const cpu = cpSalesUsage(lastSnapshotTs() || "");
+    const unm = Object.entries(cpu.unmatched).filter(([, n]) => n).sort((a, b) => b[1] - a[1]);
+    body.appendChild(el("div", { class: "card", style: { marginBottom: "12px", fontSize: "13px" } }, [
+      el("strong", {}, "Sales deducted from ops stock"),
+      el("div", { class: "muted", style: { marginTop: "2px" } },
+        `${cpu.sales} sale(s) / ${cpu.lines} line(s) since the last count (${lastSnapshotTs() ? new Date(lastSnapshotTs()).toLocaleString() : "no count yet"}). ${cpu.fromCp} line(s) used Counterpoint recipes.`),
+      Object.keys(cpu.unmatchedIng).length ? el("div", { style: { marginTop: "4px", color: "var(--warn)" } },
+        "⚠ Counterpoint ingredients with no matching ops inventory item (not deducted): " + Object.keys(cpu.unmatchedIng).join(", ")) : null,
+      cpu.noLines ? el("div", { style: { marginTop: "4px", color: "var(--bad)" } },
+        `⚠ ${cpu.noLines} sale(s) have no item detail yet, so nothing was deducted for them. Press "Sync now" on the Counterpoint page.`) : null,
+      unm.length ? el("details", { style: { marginTop: "6px" } }, [
+        el("summary", { style: { cursor: "pointer", color: "var(--warn)" } }, `${unm.length} sold product(s) have no recipe, so nothing was deducted for them`),
+        el("div", { class: "small", style: { marginTop: "4px" } }, unm.map(([n, q]) => `${n} ×${q}`).join(" · ")),
+      ]) : el("div", { style: { marginTop: "4px", color: "var(--ok)" } }, "✓ Every sold product has a recipe."),
+    ].filter(Boolean)));
+
+    body.appendChild(el("div", { class: "card", style: { marginBottom: "12px", background: "var(--surface-2)", fontSize: "13px" } }, [
+      el("strong", {}, "How to read this"),
+      el("div", { style: { marginTop: "4px" } }, [
+        el("div", {}, "• Ops = last count + purchases − waste − what Counterpoint sold since that count. Sales are turned into ingredients using the recipes kept in Counterpoint."),
+        el("div", {}, "• Counterpoint = what the till thinks is on hand. It only moves for items received and sold through the till; ingredients like milk stay at 0 there."),
+        el("div", {}, "• Difference = Ops − Counterpoint. Expect differences on ingredients; for items the till sells directly (water, snacks) they should be small."),
+      ]),
+    ]));
+
+    const search = el("input", { type: "search", placeholder: "Filter items…", value: q, style: { flex: "1 1 160px" } });
+    search.addEventListener("input", () => { q = search.value; drawRows(); });
+    const tog = (label, on) => el("button", { class: "btn" + (diffOnly === on ? "" : " ghost"), style: { padding: "6px 12px", fontSize: "13px", width: "auto" },
+      onClick: () => { diffOnly = on; draw(); } }, label);
+    body.appendChild(el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "10px", alignItems: "center" } }, [
+      tog(`Differences (${bad.length})`, true), tog(`All (${matched.length})`, false), search,
+    ]));
+
+    const table = el("div", { class: "card", style: { padding: "0", overflow: "hidden" } });
+    body.appendChild(table);
+    const foot = el("div", {});
+    body.appendChild(foot);
+
+    function drawRows() {
+      table.innerHTML = ""; foot.innerHTML = "";
+      table.appendChild(headRow);
+      const f = q.trim().toLowerCase();
+      const list = (diffOnly ? bad : matched).filter(r => !f || r.name.toLowerCase().includes(f))
+        .sort((a, b) => (b.unitDiff ? 1 : 0) - (a.unitDiff ? 1 : 0) || Math.abs(b.ops - b.cp) - Math.abs(a.ops - a.cp) || a.name.localeCompare(b.name));
+      if (!list.length) table.appendChild(el("div", { class: "muted", style: { padding: "14px 12px" } }, diffOnly && !f ? "🎉 Everything agrees." : "No items."));
+      list.forEach((r, i) => table.appendChild(el("div", { style: { display: "grid", gridTemplateColumns: COLS, gap: "8px", alignItems: "center",
+        padding: "10px 12px", fontSize: "14px", background: i % 2 ? "rgba(51,51,51,.025)" : "transparent" } }, [
+        cell(r.name, { fontWeight: "600", overflowWrap: "anywhere" }),
+        cell(qty(r.ops, r.opsUnit), { textAlign: "right", fontVariantNumeric: "tabular-nums" }),
+        cell(qty(r.cp, r.unit), { textAlign: "right", fontVariantNumeric: "tabular-nums", color: r.cp === 0 ? "var(--ink-faint)" : "inherit" }),
+        cell(pill(r), { textAlign: "right" }),
+      ])));
+      if (missing.length) foot.appendChild(el("details", { style: { marginTop: "10px" } }, [
+        el("summary", { class: "muted small", style: { cursor: "pointer" } }, `${missing.length} ops items not found in Counterpoint`),
+        el("div", { class: "small", style: { marginTop: "6px" } }, missing.map(r => r.name).join(" · ")),
+      ]));
+    }
+    drawRows();
+  }
+
+  async function load() {
+    try {
+      const [stockSnap, locSnap] = await Promise.all([
+        db.collection("counterpoint_stock").get(), db.collection("counterpoint_locations").get(),
+      ]);
+      const locs = {}; locSnap.docs.forEach(d => { locs[d.id] = d.data().name || d.id; });
+      const maadiId = Object.keys(locs).find(id => /maadi/i.test(locs[id]));
+      if (!maadiId) { data = { noMaadi: true }; return draw(); }
+      const cpByName = new Map();
+      stockSnap.docs.map(d => d.data()).filter(r => r.locationId === maadiId).forEach(r => cpByName.set(nrm(r.name), r));
+      await Promise.all([loadCpSales(true), loadCpCatalog(true)]);
+      const opsStock = computeStock("maadi");
+      const rows = (state.items || []).filter(i => i.active !== false).map(i => {
+        const r = cpByName.get(nrm(i.name));
+        if (!r) return { name: i.name, miss: true };
+        const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
+        const unitDiff = unitKey(i.unit) !== unitKey(r.unit);
+        return { name: i.name, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001 };
+      });
+      data = { rows, missing: rows.filter(r => r.miss) };
+      draw();
+    } catch (e) {
+      body.innerHTML = "";
+      body.appendChild(el("div", { class: "card" }, "Couldn't load Counterpoint stock: " + (e.message || e)));
+    }
+  }
+
   wrap.appendChild(body);
   wrap.appendChild(btnBack());
   load();
@@ -15115,7 +15394,7 @@ const MANAGEABLE_ROUTES = [
   "sales_import","users","settings",
   "leave_new","leave_list",
   "my_id","my_hr","my_jd","my_scorecard",
-  "staff_hr","scorecard","leaderboard","counterpoint",
+  "staff_hr","scorecard","leaderboard","counterpoint","counterpoint_stock",
 ];
 
 routes.users = function (u) {

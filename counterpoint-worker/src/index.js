@@ -73,9 +73,13 @@ async function fsWrite(env, docs) {
   const token = await gToken(env);
   const base = `projects/${env.FIREBASE_PROJECT}/databases/(default)/documents`;
   for (let i = 0; i < docs.length; i += 400) {
-    const writes = docs.slice(i, i + 400).map((d) => ({
-      update: { name: `${base}/${d.col}/${encodeURIComponent(d.id)}`, fields: fsVal({ ...d.data, synced_at: new Date().toISOString() }).mapValue.fields },
-    }));
+    const writes = docs.slice(i, i + 400).map((d) => {
+      const data = { ...d.data, synced_at: new Date().toISOString() };
+      const w = { update: { name: `${base}/${d.col}/${encodeURIComponent(d.id)}`, fields: fsVal(data).mapValue.fields } };
+      // merge: only touch the fields we send, so e.g. the list endpoint (no item lines) never wipes lines saved earlier
+      if (d.merge) w.updateMask = { fieldPaths: Object.keys(data).map((k) => '`' + k + '`') };
+      return w;
+    });
     const res = await fetch(`https://firestore.googleapis.com/v1/${base}:commit`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -86,15 +90,52 @@ async function fsWrite(env, docs) {
 }
 
 // ── Mapping Counterpoint -> Firestore docs ─────────────────
-const saleDoc = (s) => ({ col: 'counterpoint_sales', id: String(s.id), data: { ...s, id: String(s.id) } });
+const saleDoc = (s) => ({ col: 'counterpoint_sales', id: String(s.id), data: { ...s, id: String(s.id) }, merge: true });
 const productDoc = (p) => ({ col: 'counterpoint_products', id: String(p.id), data: p });
+
+// ids (newest first) whose Firestore sale doc is missing or has no `lines` yet
+async function salesMissingLines(env, ids) {
+  if (!ids.length) return [];
+  const token = await gToken(env);
+  const base = `projects/${env.FIREBASE_PROJECT}/databases/(default)/documents`;
+  const out = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    const res = await fetch(`https://firestore.googleapis.com/v1/${base}:batchGet`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documents: chunk.map((id) => `${base}/counterpoint_sales/${encodeURIComponent(id)}`), mask: { fieldPaths: ['lines'] } }),
+    });
+    if (!res.ok) throw new Error('Firestore read failed: ' + (await res.text()).slice(0, 300));
+    const rows = await res.json();
+    rows.forEach((r) => {
+      const name = (r.found && r.found.name) || r.missing;
+      const id = decodeURIComponent(String(name).split('/').pop());
+      if (r.missing || !(r.found.fields && r.found.fields.lines)) out.push(id);
+    });
+  }
+  const order = new Map(ids.map((id, i) => [id, i]));
+  return out.sort((a, b) => order.get(a) - order.get(b));
+}
 
 async function pullAll(env) {
   const docs = [];
   const [sales, products, locations] = await Promise.all([
     cp(env, '/sales?limit=200'), cp(env, '/products?view=catalog'), cp(env, '/locations'),
   ]);
-  listOf(sales).forEach((s) => docs.push(saleDoc(s)));
+  const saleList = listOf(sales);
+  saleList.forEach((s) => docs.push(saleDoc(s)));
+  // The sales LIST has no item lines (only GET /sales/:id does), and stock deduction in the ops app needs them.
+  // Fetch the detail for sales whose Firestore doc still has no lines (newest first, capped for the subrequest limit).
+  const missing = await salesMissingLines(env, saleList.map((s) => String(s.id)));
+  const byId = Object.fromEntries(saleList.map((s) => [String(s.id), s]));
+  for (const id of missing.slice(0, 40)) {
+    try {
+      const d = await cp(env, `/sales/${id}`);
+      const full = d.data || d;
+      if (full && Array.isArray(full.lines)) docs.push(saleDoc({ ...byId[id], ...full }));
+    } catch (e) { /* retried on the next run */ }
+  }
   listOf(products).forEach((p) => docs.push(productDoc(p)));
   const locs = listOf(locations);
   locs.forEach((l) => docs.push({ col: 'counterpoint_locations', id: String(l.id), data: l }));
