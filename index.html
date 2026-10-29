@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-458 -->
+<!-- CB_BUILD:20261029-464 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-458";
+  var BUILD = "20261029-464";
   (function() {
     function checkFresh() {
       try {
@@ -1432,6 +1432,19 @@ function migrateState(s) {
     }
     s.items = s.items.filter(it => !it._merged_into);
     s._inv_cup_names_v1 = true;
+  }
+
+  // One-time: link ops items to their Counterpoint product/ingredient by sku, for the names that differ between the two.
+  if (!s._cp_sku_links_v1 && Array.isArray(s.items)) {
+    const _links = { "drip bag": "sk-0076", "ahmad green tea": "sk-0072", "matcha powder": "ING-MATCHA", "ground cinnamon": "ING-CINNAMON-POWDER",
+      "passion fruit puree": "ING-PASSION-PUREE", "salted caramel syrup": "ING-SALTED-CARAMEL-SAUCE", "halo puffs parmesan": "sk-0208",
+      "small water": "sk-0196", "v cola p": "sk-0159", "vanilla sea salt": "ING-SEASALT-VANILLA" };
+    const _gUnit = { "ING-PASSION-PUREE": 1, "ING-SALTED-CARAMEL-SAUCE": 1 };   // Counterpoint counts these in g
+    s.items.forEach(it => {
+      const k = _links[String(it.name || "").trim().toLowerCase()];
+      if (k && !it.cp_sku) { it.cp_sku = k; if (_gUnit[k]) it.unit = "g"; it.last_edited_at = new Date().toISOString(); }
+    });
+    s._cp_sku_links_v1 = true;
   }
 
   // Collapse duplicate menu rows on every load/pull. The id-union menu_data sync never
@@ -3474,7 +3487,8 @@ function cpSalesUsage(tsAfter) {
   const val = { byItem: {}, sales: 0, lines: 0, noLines: 0, unmatched: {}, unmatchedIng: {}, fromCp: 0 };
   const itemsById = {}, itemsByName = {}, itemsByCompact = {}, idx = {};
   const compact = (x) => _cpNrm(x).replace(/ /g, "");
-  (state.items || []).forEach(i => { itemsById[i.id] = i; itemsByName[_cpNrm(i.name)] = i; itemsByCompact[compact(i.name)] = i; });
+  const itemsByCpSku = {};
+  (state.items || []).forEach(i => { itemsById[i.id] = i; itemsByName[_cpNrm(i.name)] = i; itemsByCompact[compact(i.name)] = i; if (i.cp_sku) itemsByCpSku[i.cp_sku] = i; });
   const unitFix = (u) => { const k = String(u || "").toLowerCase().trim(); return k === "gr" ? "g" : k; };
   rc.forEach(r => { if (r.inv_item_id && itemsById[r.inv_item_id]) (idx[_cpNrm(r.menu_item_name)] = idx[_cpNrm(r.menu_item_name)] || []).push(r); });
   const cutoff = Date.parse(tsAfter) || 0;
@@ -3501,8 +3515,8 @@ function cpSalesUsage(tsAfter) {
         cpNeeds.forEach(n => (n.effects || []).forEach(e => { if (e.kind === "replace" && chosen.has(e.optionId)) swap[e.fromSku] = e; }));
         for (const nd0 of cpNeeds) {
           const sw = swap[nd0.sku];
-          const nd = sw ? { ...nd0, name: sw.toName, unit: sw.toUnit || nd0.unit, quantity: Number(nd0.quantity) * (Number(sw.quantityFactor) || 1) } : nd0;
-          const it = itemsByCompact[compact(CP_ING_ALIAS[compact(nd.name)] || nd.name)] || itemsByCompact[compact(nd.name)];
+          const nd = sw ? { ...nd0, sku: sw.toSku, name: sw.toName, unit: sw.toUnit || nd0.unit, quantity: Number(nd0.quantity) * (Number(sw.quantityFactor) || 1) } : nd0;
+          const it = itemsByCpSku[nd.sku] || itemsByCompact[compact(CP_ING_ALIAS[compact(nd.name)] || nd.name)] || itemsByCompact[compact(nd.name)];
           // A need with an optionId is a choice the cashier makes (milk type, honey, extra shot…). Sale lines carry the
           // chosen options in `addons`; with no milk option chosen the default (full cream) is assumed.
           if (nd.optionId) {
@@ -3528,8 +3542,8 @@ function cpSalesUsage(tsAfter) {
           if (iced && it.category === "milk" && String(r.unit).toLowerCase() === "ml") per = Math.max(0, per - 70);
           add(it.id, invCanonicalizeQty(per, r.unit, it.unit) * qty);
         }
-      } else if (itemsByName[key]) {
-        add(itemsByName[key].id, qty);   // retail item sold as-is (bottled water etc.)
+      } else if ((l.sku && itemsByCpSku[l.sku]) || itemsByName[key]) {
+        add(((l.sku && itemsByCpSku[l.sku]) || itemsByName[key]).id, qty);   // retail item sold as-is (bottled water etc.)
       } else {
         val.unmatched[name] = (val.unmatched[name] || 0) + qty;
       }
@@ -12866,7 +12880,18 @@ routes.counterpoint_stock = function (u) {
       ])));
       if (missing.length) foot.appendChild(el("details", { style: { marginTop: "10px" } }, [
         el("summary", { class: "muted small", style: { cursor: "pointer" } }, `${missing.length} ops items not found in Counterpoint`),
-        el("div", { class: "small", style: { marginTop: "6px" } }, missing.map(r => r.name).join(" · ")),
+        el("div", { class: "muted small", style: { marginTop: "6px" } }, "Pick the matching Counterpoint item once; the link is saved, so a name change on either side can't break it again."),
+        ...missing.map(r => {
+          const sel = el("select", { style: { flex: "1 1 180px", minWidth: "0" } }, [el("option", { value: "" }, "Link to Counterpoint item…")]
+            .concat((data.cpFree || []).map(c => el("option", { value: c.sku }, `${c.name} (${c.unit || "pc"})`))));
+          sel.addEventListener("change", () => {
+            const it = state.items.find(x => x.id === r.id); if (!it || !sel.value) return;
+            it.cp_sku = sel.value; it.last_edited_at = new Date().toISOString();
+            saveState(); toast(`Linked ${it.name}`); load();
+          });
+          return el("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", marginTop: "6px" } },
+            [el("div", { style: { flex: "1 1 140px", fontSize: "14px", fontWeight: "600" } }, r.name), sel]);
+        }),
       ]));
     }
     drawRows();
@@ -12892,14 +12917,19 @@ routes.counterpoint_stock = function (u) {
       });
       await Promise.all([loadCpSales(true), loadCpCatalog(true)]);
       const opsStock = computeStock("maadi");
+      const cpRows = stockSnap.docs.map(d => d.data()).filter(r => r.locationId === maadiId);
+      const cpBySku = new Map(cpRows.map(r => [r.sku, r]));
       const rows = (state.items || []).filter(i => i.active !== false).map(i => {
-        const r = cpByName.get(nrm(i.name));
-        if (!r) return { name: i.name, miss: true };
+        // an explicit link (item.cp_sku) wins over matching by name
+        const r = (i.cp_sku && cpBySku.get(i.cp_sku)) || cpByName.get(nrm(i.name));
+        if (!r) return { name: i.name, id: i.id, miss: true };
         const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
         const unitDiff = unitKey(i.unit) !== unitKey(r.unit);
         return { name: i.name, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001 };
       });
-      data = { rows, missing: rows.filter(r => r.miss) };
+      const used = new Set(state.items.filter(i => i.active !== false).map(i => {
+        const r = (i.cp_sku && cpBySku.get(i.cp_sku)) || cpByName.get(nrm(i.name)); return r && r.sku; }).filter(Boolean));
+      data = { rows, missing: rows.filter(r => r.miss), cpFree: cpRows.filter(r => !used.has(r.sku)).sort((a, b) => String(a.name).localeCompare(String(b.name))) };
       draw();
     } catch (e) {
       body.innerHTML = "";
