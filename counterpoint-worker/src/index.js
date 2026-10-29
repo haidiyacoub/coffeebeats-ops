@@ -118,12 +118,46 @@ async function salesMissingLines(env, ids) {
   return out.sort((a, b) => order.get(a) - order.get(b));
 }
 
-async function pullAll(env) {
+// Read one Firestore doc as a plain object of its string fields (or null)
+async function fsGetDoc(env, col, id) {
+  const token = await gToken(env);
+  const res = await fetch(`https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT}/databases/(default)/documents/${col}/${encodeURIComponent(id)}`, {
+    headers: { Authorization: 'Bearer ' + token },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('Firestore read failed: ' + (await res.text()).slice(0, 300));
+  const f = (await res.json()).fields || {};
+  return Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.stringValue ?? v.integerValue ?? null]));
+}
+
+// Every sale since `since` (or all of them), following nextCursor. Capped so a run stays inside Worker limits.
+const MAX_SALE_PAGES = 10;
+async function fetchSales(env, since) {
+  const out = [];
+  let cursor = null, truncated = false;
+  for (let page = 0; page < MAX_SALE_PAGES; page++) {
+    const q = new URLSearchParams({ paginate: 'true', limit: '200' });
+    if (since) q.set('since', since);
+    if (cursor) q.set('cursor', cursor);
+    const b = await cp(env, '/sales?' + q);
+    const d = Array.isArray(b) ? b : b.sales ? b : b.data !== undefined ? b.data : b;
+    out.push(...(Array.isArray(d) ? d : d.sales || []));
+    cursor = Array.isArray(d) ? null : d.nextCursor || null;
+    if (!cursor) return { sales: out, truncated: false };
+  }
+  return { sales: out, truncated: true };
+}
+
+// full = manual "Sync now": walk the whole sales history. Otherwise (5-minute cron) only what is new
+// since the last complete sync, with an hour of overlap so nothing at the boundary is missed.
+async function pullAll(env, full) {
   const docs = [];
-  const [sales, products, locations] = await Promise.all([
-    cp(env, '/sales?limit=200'), cp(env, '/products?view=catalog'), cp(env, '/locations'),
+  const last = full ? null : await fsGetDoc(env, 'counterpoint_log', 'last_sync').catch(() => null);
+  const since = last && last.at ? new Date(Date.parse(last.at) - 3600e3).toISOString() : null;
+  const [salesRes, products, locations] = await Promise.all([
+    fetchSales(env, since), cp(env, '/products?view=catalog'), cp(env, '/locations'),
   ]);
-  const saleList = listOf(sales);
+  const saleList = salesRes.sales;
   saleList.forEach((s) => docs.push(saleDoc(s)));
   // The sales LIST has no item lines (only GET /sales/:id does), and stock deduction in the ops app needs them.
   // Fetch the detail for sales whose Firestore doc still has no lines (newest first, capped for the subrequest limit).
@@ -144,7 +178,10 @@ async function pullAll(env) {
     inv.forEach((r) => docs.push({ col: 'counterpoint_stock', id: `${l.id}_${r.sku || r.productId || r.id}`, data: { ...r, locationId: l.id } }));
   }
   await fsWrite(env, docs);
-  await fsWrite(env, [{ col: 'counterpoint_log', id: 'last_sync', data: { at: new Date().toISOString(), counts: docs.length } }]);
+  // only move the "since" bookmark when every page was read, otherwise the next run re-reads from the old one
+  const log = { counts: docs.length, sales_seen: saleList.length, sales_truncated: salesRes.truncated };
+  if (!salesRes.truncated) log.at = new Date().toISOString();
+  await fsWrite(env, [{ col: 'counterpoint_log', id: 'last_sync', data: log, merge: true }]);
   return docs.length;
 }
 
@@ -202,7 +239,7 @@ export default {
         const user = await verifyFirebaseUser(env, req);
         const allowed = ['owner', 'manager', 'accountant'];
         if (!user || !allowed.includes(user.role)) return json({ error: 'not allowed' }, 403);
-        if (url.pathname === '/sync') return json({ ok: true, docs: await pullAll(env) });
+        if (url.pathname === '/sync') return json({ ok: true, docs: await pullAll(env, true) });
 
         // /push  { type: 'product'|'customer'|'sale', payload: {...} }
         if (user.role !== 'owner') return json({ error: 'only the owner can write to Counterpoint' }, 403);
