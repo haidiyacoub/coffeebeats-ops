@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-471 -->
+<!-- CB_BUILD:20261029-483 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-471";
+  var BUILD = "20261029-483";
   (function() {
     function checkFresh() {
       try {
@@ -777,6 +777,23 @@ function isZawyaExcluded(category, item) {
 function isConcessionExcluded(category, item) {
   return false;
 }
+// OX serves the whole menu except cold drinks (water, sparkling water, soft drinks) — those are never
+// sold there, so any such line in an OX sales file is dropped and they are hidden from OX menu lists.
+function isOxNotSold(category, item) {
+  const c = String(category || "").trim().toLowerCase();
+  const n = String(item || "").trim().toLowerCase();
+  if (/^(water|waters|soft ?drinks?|sodas?|beverage-soft|cold drinks?)$/.test(c)) return true;
+  if (/^water$|sparkling water|water bottle|detox water|mineral water|\b(v7|cola|pepsi|sprite|fanta|7up|schweppes|moussy|red bull|sun top|freska)\b/.test(n)) return true;
+  return false;
+}
+// Item-level exclusion for a branch's sales: Zawya drops third-party concessions, OX drops cold drinks.
+function isBranchItemExcluded(branch, category, item) {
+  const b = String(branch || "").toLowerCase();
+  if (b === "zawya") return isZawyaExcluded(category, item);
+  if (b === "ox") return isOxNotSold(category, item);
+  return isConcessionExcluded(category, item);
+}
+function branchSellsItem(branch, category, item) { return !isBranchItemExcluded(branch, category, item); }
 
 // Normalize a date string into ISO yyyy-mm-dd. Handles dd/mm/yyyy, mm/dd/yyyy,
 // yyyy-mm-dd, yyyy/mm/dd, dd-mm-yyyy and optional trailing time. Falls back to
@@ -853,6 +870,43 @@ const toast = (msg, kind="") => {
   setTimeout(() => t.remove(), 3200);
 };
 
+// ----- branch lifecycle -----
+// setup = first date the branch can be configured / used for pre-opening entries; open = first trading day;
+// close = last trading day (branch stays in history/reports after closing).
+const BRANCH_LIFECYCLE = {
+  maadi: {},
+  zawya: { close: "2026-11-24" },
+  ox:    { setup: "2026-11-11", open: "2026-11-25" }
+};
+const ALL_BRANCHES = ["maadi", "zawya", "ox"];
+const BRANCH_LABELS = { maadi: "Maadi", zawya: "Zawya", ox: "OX" };
+function hasVenueShare(b) { b = String(b || "").toLowerCase(); return b === "zawya" || b === "ox"; }
+function canonBranch(raw) {
+  const s = String(raw || "").trim().toLowerCase();
+  if (s.includes("zawya")) return "zawya";
+  if (s.includes("maadi")) return "maadi";
+  if (/(^|[^a-z0-9])ox([^a-z0-9]|$)/.test(s)) return "ox";
+  return s;
+}
+function branchLabel(b) { b = String(b || "").toLowerCase(); return BRANCH_LABELS[b] || (b ? b[0].toUpperCase() + b.slice(1) : "—"); }
+function _brToday() { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+function allBranches() { return ALL_BRANCHES.slice(); }
+// Branches that can take entries on a date (pre-opening setup window through last trading day).
+function activeBranches(ds) {
+  ds = ds || _brToday();
+  return ALL_BRANCHES.filter(b => { const l = BRANCH_LIFECYCLE[b] || {}; return (!l.setup || ds >= l.setup) && (!l.close || ds <= l.close); });
+}
+// Branches that have started up to a date, including ones that have since closed (dashboards, P&L, history).
+function reportBranches(ds) {
+  ds = ds || _brToday();
+  return ALL_BRANCHES.filter(b => { const l = BRANCH_LIFECYCLE[b] || {}; return !l.setup || ds >= l.setup; });
+}
+// True when the branch is not trading on that date (before opening or after closing).
+function branchOutsideLifecycle(branch, ds) {
+  const l = BRANCH_LIFECYCLE[String(branch || "").toLowerCase()] || {};
+  return !!((l.open && ds < l.open) || (l.close && ds > l.close));
+}
+
 // Branch tab picker that redraws itself on click (fixes .on class not moving).
 // getCurrent() returns the current branch string; onPick(b) updates state + does any
 // downstream re-render. The picker itself is rebuilt each click, so the highlight
@@ -866,7 +920,7 @@ function makeBranchPicker(branches, getCurrent, onPick) {
       wrap.appendChild(el("div", {
         class: "tab" + (b === cur ? " on" : ""),
         onClick: () => { onPick(b); repaint(); }
-      }, b[0].toUpperCase() + b.slice(1)));
+      }, branchLabel(b)));
     });
   }
   repaint();
@@ -1273,6 +1327,7 @@ function migrateState(s) {
     maadi: { morning: "10:00", night: "16:00" },
     zawya: { morning: "12:00", night: "18:00" },
   };
+  s.branch_opening_times.ox = s.branch_opening_times.ox || { morning: "10:00", night: "16:00" };
   s.photo_log           = s.photo_log     || [];
   s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
   s.staff_ids           = s.staff_ids     || {}; // { [userId]: [{ id, url, at, name }] }
@@ -3662,7 +3717,7 @@ function lowStockItems(branch) {
 // Fire browser notifications for any item that is newly low (not already in alert_log
 // for today). Also writes to state.alert_log.
 function scanAndNotifyLowStock() {
-  const branches = ["maadi","zawya"];
+  const branches = activeBranches();
   const today = new Date().toISOString().slice(0,10);
   state.alert_log = state.alert_log || [];
   let dirty = false;
@@ -4272,7 +4327,7 @@ function runEngineAlertScan() {
     }
   }
 
-  const branches = ["maadi", "zawya"];
+  const branches = activeBranches();
   const newAlerts = [];
   for (const b of branches) {
     newAlerts.push(...invDetectLowStockAlerts(b, sd, rc));
@@ -5395,7 +5450,7 @@ routes.data_management = function (u) {
 // barista sees the same misses the moment they sign in. Yesterday's stamp / shift close /
 // waste log are final; today's stamp + roster are due now; today's close + waste log from 20:00.
 function headBaristaMissingAlert(u) {
-  const mine = ["maadi", "zawya"].filter(b => !(u.branches || []).length || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
+  const mine = activeBranches().filter(b => !(u.branches || []).length || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
   const now = new Date();
   const today = localISODate(now);
   const yd = new Date(now); yd.setDate(yd.getDate() - 1);
@@ -5990,7 +6045,7 @@ routes.waste_new = function (u) {
 // rostered shifts have an entry is orange (partial); green needs every required shift, red needs none.
 function missingDaysCard(u, { title, rows, dayOf, shiftOf, requiredShifts, lateOf }) {
   const viewAll = u.role === "owner" || u.role === "accountant";
-  const branches = ["maadi", "zawya"].filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
+  const branches = reportBranches().filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
   const card = el("div", { class: "card", style: { marginBottom: "14px" } });
   if (!branches.length) return card;
   const bOf = r => String(r.branch || "").toLowerCase();
@@ -6078,7 +6133,7 @@ routes.waste_list = function (u) {
   {
     const _day = (w) => localISODate(new Date(w.at));
     const viewAll = u.role === "owner" || u.role === "accountant";
-    const branches = ["maadi", "zawya"].filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
+    const branches = reportBranches().filter(b => viewAll || (u.branches || []).map(x => String(x).toLowerCase()).includes(b));
     const live = state.waste.filter(w => notTest(w) && !w.deleted);
     const days = [];
     for (let i = 0; i < 14; i++) { const d = new Date(); d.setDate(d.getDate() - i); days.push(localISODate(d)); }
@@ -8560,7 +8615,7 @@ routes.petty_cash = function (u) {
   }
 
   // ---------- Per-branch cards ----------
-  const branches = canSeeAll ? ["maadi","zawya"] : u.branches;
+  const branches = canSeeAll ? reportBranches() : u.branches;
   for (const b of branches) {
     const bal = pettyCashBalance(b);
     const weekly = weeklyExpenditure(b);
@@ -8855,7 +8910,7 @@ function addBaristaQuick(onDone) {
       if (!/^\d{4}$/.test(v.pin || "")) return toast("PIN must be 4 digits", "error");
       const role = v.role === "head_barista" ? "head_barista" : "barista";
       const branches = role === "barista"
-        ? ["maadi","zawya"]
+        ? activeBranches()
         : (v.branches || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
       try {
         await functions.httpsCallable("createStaffUser")({ name, role, branches, pin: v.pin });
@@ -10291,7 +10346,7 @@ function pettyCashTile() {
   try {
     const u = currentUser();
     const all = !u || u.role === "owner" || u.role === "accountant";
-    const brs = all ? ["maadi", "zawya"] : ((u.branches || []).filter(b => b === "maadi" || b === "zawya"));
+    const brs = all ? reportBranches() : ((u.branches || []).filter(b => ALL_BRANCHES.includes(b)));
     if (brs.length) {
       const nm = { maadi: T("Maadi","معادي"), zawya: T("Zawya","زاوية") };
       const parts = brs.map(b => `${nm[b]} ${money(pettyCashBalance(b))}`);
@@ -10703,7 +10758,7 @@ function monthlyKey(branch, category, month) { return `${branch}|${category}|${m
 // head-barista maintenance route. `redraw` runs after any log / delete /
 // engineer edit. `branches` limits which branch columns render.
 function renderMaintenanceCard(month, redraw, branches) {
-  const _branches = (branches && branches.length) ? branches.filter(b => b==="maadi"||b==="zawya") : ["maadi","zawya"];
+  const _branches = (branches && branches.length) ? branches.filter(b => ALL_BRANCHES.includes(b)) : reportBranches();
   redraw = (typeof redraw === "function") ? redraw : (()=>{});
   function drawMaintenanceCard() {
     const card = el("div", { class:"card", style:{ marginTop:"12px" } });
@@ -11096,7 +11151,7 @@ function hireProratedSalary(uid, month, flat) {
 // branch → charged there; tagged to both (or none) → rotating.
 function normBranchKey(branch) {
   const b = String(branch || "").trim().toLowerCase();
-  return b.includes("maadi") ? "maadi" : b.includes("zawya") ? "zawya" : "";
+  return b.includes("maadi") ? "maadi" : b.includes("zawya") ? "zawya" : canonBranch(b) === "ox" ? "ox" : "";
 }
 function getStaffSalaryBranch(uid) {
   const cfg = (state.salary_config || {})[uid] || {};
@@ -11273,7 +11328,7 @@ function shiftCoversForMonth(month) {
   for (let dn = 1; dn <= new Date(y, m, 0).getDate(); dn++) {
     const ds = `${month}-${String(dn).padStart(2, "0")}`;
     if (ds < STAMP_RULES_2026_10 || ds >= today) continue;
-    for (const b of ["maadi", "zawya"]) {
+    for (const b of ALL_BRANCHES) {
       if (isBranchClosed(b, ds)) continue;
       for (const sh of ["morning", "night"]) if (shiftStampRuleActive(sh, ds)) out.push(...slotCovers(ds, b, sh));
     }
@@ -11335,8 +11390,8 @@ function annualLeaveOverage(uid, month, salary) {
 // so it needs no sync and follows later schedule edits.
 const SCHEDULE_RULES_START = "2026-10-11";
 function _schedBranches(user) {
-  const b = (user.branches || []).map(x => String(x).toLowerCase()).filter(x => x === "maadi" || x === "zawya");
-  return b.length ? b : ["maadi", "zawya"];
+  const b = (user.branches || []).map(x => String(x).toLowerCase()).filter(x => ALL_BRANCHES.includes(x));
+  return b.length ? b : activeBranches();
 }
 function scheduleDayOffs(uid, month) {
   const user = (state.users || []).find(x => x.id === uid);
@@ -11690,7 +11745,7 @@ routes.overheads = function (u) {
       } else {
         row.appendChild(el("div", { style:{fontWeight:"500", fontSize:"14px"} }, cat.label));
       }
-      for (const br of ["maadi","zawya"]) {
+      for (const br of reportBranches()) {
         const pk = presetKey(br, cat.value);
         const preset = state.overhead_presets[pk] || {};
         const inp = el("input", {
@@ -11826,8 +11881,8 @@ routes.overheads = function (u) {
     drawFixedCard();
     // Monthly tracking — two columns: Maadi | Zawya
     secMonthly.innerHTML = "";
-    const twoCols = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"12px", marginTop:"12px" } });
-    for (const br of ["maadi","zawya"]) twoCols.appendChild(drawBranchPanel(br));
+    const twoCols = el("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:"12px", marginTop:"12px" } });
+    for (const br of reportBranches()) twoCols.appendChild(drawBranchPanel(br));
     secMonthly.appendChild(twoCols);
     secSalary.innerHTML = ""; secSalary.appendChild(drawSalaryCard());
     secMaint.innerHTML  = ""; secMaint.appendChild(renderMaintenanceCard(month, draw));
@@ -12461,8 +12516,8 @@ routes.overhead_log_new = function (u) {
   const month = new Date().toISOString().slice(0, 7);
   // Branches this user may log against.
   const myBranches = (u.role === "head_barista")
-    ? (u.branches || []).filter(b => b === "maadi" || b === "zawya")
-    : ["maadi","zawya"];
+    ? (u.branches || []).filter(b => ALL_BRANCHES.includes(b))
+    : activeBranches();
 
   wrap.appendChild(el("button", { class: "btn secondary", onClick: addOverheadLine },
     T("➕ Log an overhead","➕ تسجيل مصروف")));
@@ -12521,6 +12576,7 @@ routes.overhead_log_new = function (u) {
     const branchOptions = [
       ...(myBranches.includes("maadi") ? [{ label: "🏠 Maadi", value: "maadi" }] : []),
       ...(myBranches.includes("zawya") ? [{ label: "🏢 Zawya", value: "zawya" }] : []),
+      ...(myBranches.includes("ox") ? [{ label: "🛍️ OX", value: "ox" }] : []),
       ...(myBranches.length > 1
         ? [{ label: "🔀 Both branches — enter one amount, auto-split", value: "both" }] : []),
     ];
@@ -13460,7 +13516,7 @@ routes.sales_import = function (u) {
     "When the branch is ZAWYA, Popcorn, Soft Drinks, Snacks and Merchandise are auto-removed."));
 
   let branchDefault = "maadi";
-  const branchPicker = makeBranchPicker(["maadi","zawya"], () => branchDefault, b => { branchDefault = b; });
+  const branchPicker = makeBranchPicker(activeBranches(), () => branchDefault, b => { branchDefault = b; });
   wrap.appendChild(branchPicker);
 
   // ---- Month override (used when dates are missing or unparseable) ----
@@ -13798,9 +13854,7 @@ routes.sales_import = function (u) {
     const importedBranches = new Set();
     const importedMonths = new Set();
     for (const r of parsed.rows) {
-      const br = (String(r.branch || branchDefault).toLowerCase().includes("zawya")) ? "zawya"
-               : (String(r.branch || branchDefault).toLowerCase().includes("maadi")) ? "maadi"
-               : String(r.branch || branchDefault).toLowerCase();
+      const br = canonBranch(r.branch || branchDefault);
       state.sales.push({
         id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, device: s.device,
         branch: br,
@@ -13840,9 +13894,7 @@ routes.sales_import = function (u) {
       const importedBranches = new Set();
       const importedMonths = new Set();
       for (const r of parsed.rows) {
-        const br = (String(r.branch || branchDefault).toLowerCase().includes("zawya")) ? "zawya"
-                 : (String(r.branch || branchDefault).toLowerCase().includes("maadi")) ? "maadi"
-                 : String(r.branch || branchDefault).toLowerCase();
+        const br = canonBranch(r.branch || branchDefault);
         state.sales.push({
           id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, device: s.device,
           branch: br, date: r.date, item: r.item, sku: r.sku, qty: r.qty,
@@ -13914,7 +13966,7 @@ function detectBranchSalesFilename(filename) {
   const m = base.match(/^(.+?)\s+sales\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\s+(\d{4})$/);
   if (!m) return null;
   const rawBranch = m[1].trim();
-  const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
+  const branch = canonBranch(rawBranch);
   const isoMonth = `${m[3]}-${MONTHS[m[2]]}`;
   return { branch, isoMonth };
 }
@@ -13940,6 +13992,7 @@ function parseBranchSalesSheet(raw, branch, isoMonth) {
     const net      = toNum(r[6]);                 // Col G — net sales with tax
     const discount = toNum(r[8]);                 // Col I — discount amount
     if (!item) { droppedNoItem++; continue; }
+    if (branch === "ox" && isOxNotSold(category, item)) continue;
     if (branch === "zawya" && isZawyaExcluded(category, item)) { droppedZawya++; zawyaExcludedNet += net; zawyaExcludedGross += net + discount; continue; }
     rows.push({ date: fbDate, item, sku: "", qty: 1, net, gross: net + discount, discount, discount_name: "", category, branch });
   }
@@ -13955,7 +14008,7 @@ function detectOrderItemsFilename(filename) {
   const m = base.match(/^(.+?)\s+order\s+items\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\s+(\d{4})$/);
   if (!m) return null;
   const rawBranch = m[1].trim();
-  const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
+  const branch = canonBranch(rawBranch);
   return { branch, isoMonth: `${m[3]}-${MONTHS[m[2]]}` };
 }
 
@@ -13968,7 +14021,7 @@ function detectOrdersFilename(filename) {
   const m = base.match(/^(.+?)\s+orders\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\s+(\d{4})$/);
   if (!m) return null;
   const rawBranch = m[1].trim();
-  const branch = rawBranch.includes("zawya") ? "zawya" : rawBranch.includes("maadi") ? "maadi" : rawBranch;
+  const branch = canonBranch(rawBranch);
   return { branch, isoMonth: `${m[3]}-${MONTHS[m[2]]}` };
 }
 
@@ -14018,6 +14071,7 @@ function parseOrderItemsSheet(raw, branch, isoMonth) {
     if (!order_ref || !name) continue;
     if (order_type === "modifier" || order_type === "modifier option") continue;
     if (branch === "zawya" && isZawyaExcluded("", name)) continue;
+    if (branch === "ox" && isOxNotSold("", name)) continue;
     const date = parseColDate(r[20]) || extractDateFromOrderRef(order_ref, isoMonth);
     rows.push({ order_ref, name, unit_price, qty, discount, disc_name, branch, month: isoMonth, date });
   }
@@ -14117,6 +14171,7 @@ function parseSalesCSVFromMapping(lines, headerRaw, defaultBranch, fallbackMonth
     if (!s) return defaultBranch;
     if (s.includes("zawya")) return "zawya";
     if (s.includes("maadi")) return "maadi";
+    if (canonBranch(s) === "ox") return "ox";
     return defaultBranch;
   };
 
@@ -14236,6 +14291,7 @@ const ROSTER_DAY_LABELS_AR = { sun:"الأحد", mon:"الإثنين", tue:"ال
 // no stamp, shift close, waste log, late/no-show penalty or KPI deduction.
 function isBranchClosed(branch, dateStr) {
   const b = String(branch || "").toLowerCase();
+  if (branchOutsideLifecycle(b, dateStr)) return true;
   return (state.branch_closures || []).some(c => c.date === dateStr && String(c.branch || "").toLowerCase() === b);
 }
 function rosterDayLabel(day) { return T(ROSTER_DAY_LABELS[day], ROSTER_DAY_LABELS_AR[day]); }
@@ -14447,12 +14503,13 @@ routes.roster = function (u) {
     zawya: { morning: "12:00", night: "18:00" },
     events: { morning: "10:00", night: "16:00" },
   };
+  state.branch_opening_times.ox = state.branch_opening_times.ox || { morning: "10:00", night: "16:00" };
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
     "Sign-in stamps are checked against these times — morning AND evening shift each need their own stamp, with the same rules (evening rule starts 20 Oct 2026). 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time or no stamp = no show = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
-  for (const otBranch of ["maadi", "zawya"]) {
-    const brLabel = otBranch[0].toUpperCase() + otBranch.slice(1);
+  for (const otBranch of allBranches()) {
+    const brLabel = branchLabel(otBranch);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
     const otMetaEl = el("div", { class: "muted small", style: { marginBottom: "4px" } });
     const drawOtMeta = () => {
@@ -15734,7 +15791,7 @@ routes.users = function (u) {
     }
 
     // Branch checkboxes (owner only)
-    let cbMaadi = null, cbZawya = null;
+    let cbMaadi = null, cbZawya = null, cbOx = null;
     if (isOwner) {
       const bw = el("div", { style: { marginBottom: "14px" } });
       bw.appendChild(el("label", { style: { fontWeight: "600", display: "block", marginBottom: "6px" } }, "Branch"));
@@ -15749,8 +15806,9 @@ routes.users = function (u) {
       };
       const mP = mkCb("Maadi", cur.includes("maadi"));
       const zP = mkCb("Zawya", cur.includes("zawya"));
-      cbMaadi = mP.cb; cbZawya = zP.cb;
-      row.appendChild(mP.wrap); row.appendChild(zP.wrap);
+      const oP = mkCb("OX", cur.includes("ox"));
+      cbMaadi = mP.cb; cbZawya = zP.cb; cbOx = oP.cb;
+      row.appendChild(mP.wrap); row.appendChild(zP.wrap); row.appendChild(oP.wrap);
       bw.appendChild(row); sheet.appendChild(bw);
     }
 
@@ -15784,7 +15842,7 @@ routes.users = function (u) {
         const payload = { targetUid: usr.uid, emergency_number: emerInp.value.trim() || null };
         if (isOwner) {
           payload.role     = roleEl.value;
-          payload.branches = [...(cbMaadi.checked ? ["maadi"] : []), ...(cbZawya.checked ? ["zawya"] : [])];
+          payload.branches = [...(cbMaadi.checked ? ["maadi"] : []), ...(cbZawya.checked ? ["zawya"] : []), ...(cbOx.checked ? ["ox"] : [])];
           payload.active   = activeEl.value === "true";
         }
         await functions.httpsCallable("updateStaffProfile")(payload);
@@ -16141,7 +16199,7 @@ routes.dashboard = function (u, params) {
     const s = String(b || "").trim().toLowerCase();
     if (s.includes("zawya")) return "zawya";
     if (s.includes("maadi")) return "maadi";
-    return s;
+    return canonBranch(s);
   };
 
   // Index every sale by canonical branch + month so we can show the user
@@ -16155,7 +16213,7 @@ routes.dashboard = function (u, params) {
     // Strip third-party concession items at runtime so they never appear in any report —
     // water stays branch-specific (Zawya's is a concession, Maadi's is Coffee Beats' own),
     // everything else (popcorn, candy, soda, merch) is never Coffee Beats' regardless of branch.
-    if (b === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item)) continue;
+    if (isBranchItemExcluded(b, s.category, s.item)) continue;
     const m = normalizeDate(s.date).slice(0,7);
     if (!m) continue;
     monthSet.add(m); branchSet.add(b);
@@ -16177,7 +16235,7 @@ routes.dashboard = function (u, params) {
     const bKey = branchKey(branchArg);
     const monthSales = state.sales.filter(s => branchKey(s.branch) === bKey
       && normalizeDate(s.date).slice(0,7) === month
-      && !(bKey === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item)));
+      && !isBranchItemExcluded(bKey, s.category, s.item));
     const grossRevenue = monthSales.reduce((s,r) => s + (Number(r.net_sales)||0), 0);
     // 14% VAT comes off the top at BOTH branches (Zawya deducts it per-sale; Maadi pays it
     // as a year-end lump sum). After-VAT sales is the revenue base every margin is measured
@@ -16192,7 +16250,7 @@ routes.dashboard = function (u, params) {
     //  • Maadi: the deal is 10% of PROFIT, not revenue, and it has never been invoiced or
     //    paid because monthly profit was never formally recorded. So it does NOT reduce
     //    Maadi's profit here — it's surfaced separately as an accrued-but-unpaid memo.
-    const venueShare = bKey === "zawya" ? afterVat * 0.10 : 0;
+    const venueShare = hasVenueShare(bKey) ? afterVat * 0.10 : 0;
 
     const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
@@ -16796,7 +16854,7 @@ routes.dashboard = function (u, params) {
     // at runtime — water stays Zawya-only (Maadi's water is Coffee Beats' own product).
     const sales = state.sales.filter(s => {
       if (branch === "events") return branchKey(s.branch) === "maadi" && _isEventDay(s.date);
-      const excluded = branch === "zawya" ? isZawyaExcluded(s.category, s.item) : isConcessionExcluded(s.category, s.item);
+      const excluded = isBranchItemExcluded(branch, s.category, s.item);
       return branchKey(s.branch) === branch && inRange(s.date) && !excluded;
     });
     const waste = branch === "events"
@@ -16934,10 +16992,10 @@ routes.dashboard = function (u, params) {
     //  • Zawya: venue takes 10% of after-VAT sales — a real, already-paid cost, in opex + net.
     //  • Maadi: deal is 10% of PROFIT, never invoiced or paid (profit was never formally
     //    recorded), so it is NOT deducted — shown as an accrued memo only.
-    const venueShare = branch === "zawya" ? revenueAfterVat * 0.10 : 0;
+    const venueShare = hasVenueShare(branch) ? revenueAfterVat * 0.10 : 0;
     // What Coffee Beats actually keeps from Zawya after the venue's cut — kept as its own
     // figure so it stays visible in the KPI cards even though it's not the margin base.
-    const revenueAfterShares = branch === "zawya" ? revenueAfterVat - venueShare : null;
+    const revenueAfterShares = hasVenueShare(branch) ? revenueAfterVat - venueShare : null;
     const totalOpex = overheadsTotal + salariesTotal + venueShare;
 
     // ---------- KEY METRICS ----------
@@ -16971,8 +17029,8 @@ routes.dashboard = function (u, params) {
     const topKpis = [
       kpi("Revenue (Net)", money(revenue), sales.length + " rows"),
       kpi("After 14% VAT", money(revenueAfterVat), `÷ 1.14 — ${money(revenue - revenueAfterVat)} VAT · margin base`),
-      ...(branch === "zawya" ? [
-        kpi("What CB gets from Zawya", money(revenueAfterShares), `after venue's 10% — ${money(revenueAfterVat - revenueAfterShares)} to Zawya`),
+      ...(hasVenueShare(branch) ? [
+        kpi("What CB gets from " + branchLabel(branch), money(revenueAfterShares), `after venue's 10% — ${money(revenueAfterVat - revenueAfterShares)} to ${branchLabel(branch)}`),
       ] : []),
       kpi("Discount", money(discount), (revenue + discount) ? ((discount/(revenue+discount))*100).toFixed(1)+"%" : "—"),
       kpi("Purchases", money(purchTotal), purch.length + " invoices"),
@@ -17173,7 +17231,7 @@ routes.settings = function (u) {
   // petty cash opening balances
   const pc = el("div", { class: "card", style: { marginTop: "14px" } });
   pc.appendChild(el("h2", {}, "Petty cash opening balance"));
-  for (const b of ["maadi","zawya"]) {
+  for (const b of reportBranches()) {
     const bal = pettyCashBalance(b);
     pc.appendChild(el("div", { class: "kv" }, [
       el("div", { class: "k" }, `${b}`),
@@ -17467,7 +17525,7 @@ routes.settings = function (u) {
       row.appendChild(info);
 
       if (s.role === "barista" || s.role === "head_barista") {
-        for (const b of ["maadi", "zawya"]) {
+        for (const b of allBranches()) {
           const has = (s.branches || []).includes(b);
           const bBtn = el("button", { class: has ? "btn secondary" : "btn ghost", style: { width: "auto", padding: "4px 9px", fontSize: "11px" } }, has ? `${b} ✓` : b);
           bBtn.addEventListener("click", async () => {
@@ -17610,6 +17668,8 @@ routes.settings = function (u) {
     const cbZawya = el("input", { type: "checkbox", id: "cb_zawya_new" });
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbMaadi, document.createTextNode(" Maadi")]));
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbZawya, document.createTextNode(" Zawya")]));
+    const cbOxNew = el("input", { type: "checkbox", id: "cb_ox_new" });
+    branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbOxNew, document.createTextNode(" OX")]));
     const dateLabel = el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "2px" } }, "Start date");
     const dateIn = el("input", { type: "date", value: new Date().toISOString().slice(0,10), style: { marginBottom: "8px" } });
     const addBtn = el("button", { class: "btn", style: { marginTop: "4px" } }, "+ Add Staff Member");
@@ -17622,6 +17682,7 @@ routes.settings = function (u) {
       const branches = [];
       if (cbMaadi.checked) branches.push("maadi");
       if (cbZawya.checked) branches.push("zawya");
+      if (cbOxNew.checked) branches.push("ox");
       addBtn.disabled = true; addBtn.textContent = "Adding…";
       try {
         await functions.httpsCallable("createStaffUser")({ name, role: roleIn.value, branches, pin });
@@ -17982,7 +18043,7 @@ routes.signin_stamp_new = function (u) {
 
   // Owner may have no branches assigned — they still need both to clock in for staff.
   const stampBranches = (u.branches && u.branches.length) ? u.branches
-    : (u.role === "owner" ? ["maadi", "zawya"] : []);
+    : (u.role === "owner" ? activeBranches() : []);
   let branch   = stampBranches[0];
   let note     = "";
 
@@ -18757,7 +18818,7 @@ function editSigninStamp(s) {
 
   const whoSel = el("select", {}, staff.map(x => el("option", { value: x.id }, x.name)));
   whoSel.value = s.by;
-  const branchSel = el("select", {}, ["maadi", "zawya"].map(b => el("option", { value: b }, b[0].toUpperCase() + b.slice(1))));
+  const branchSel = el("select", {}, allBranches().map(b => el("option", { value: b }, branchLabel(b))));
   branchSel.value = String(s.branch || "maadi").toLowerCase();
   const dateInp = el("input", { type: "date", value: localISODate(new Date(s.at)) });
   const timeInp = el("input", { type: "time", value: pad(clock.getHours()) + ":" + pad(clock.getMinutes()) });
@@ -22909,7 +22970,7 @@ function autoApplyMissingLogPenalties() {
     const d = new Date(); d.setDate(d.getDate() - i);
     const ds = localISODate(d);
     if (ds < MISSING_LOG_RULES_START || ds >= today) continue;
-    for (const branch of ["maadi", "zawya"]) {
+    for (const branch of ALL_BRANCHES) {
       if (isBranchClosed(branch, ds)) continue;
       const owners = missingLogOwners(ds, branch);
       for (const kind of ["waste", "cleaning"]) {
@@ -23401,7 +23462,7 @@ function calcTicketSizeByBarista(branch, isoMonth) {
 function kpiUpsellScore(userId, month) {
   const user = (state.users || []).find(u => u.id === userId);
   if (!user) return null;
-  const branches = user.branches || ["maadi", "zawya"];
+  const branches = user.branches || allBranches();
   let totalOrders = 0, totalItems = 0;
   for (const branch of branches) {
     const map = calcTicketSizeByBarista(branch, month);
@@ -25681,7 +25742,7 @@ routes.inventory_engine = function(u) {
 
     const posRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "12px" } });
     const branchSel = el("select", { style: { fontSize: "13px", padding: "6px 10px" } });
-    for (const b of ["maadi","zawya"]) { const o = el("option", { value: b }, b.charAt(0).toUpperCase()+b.slice(1)); branchSel.appendChild(o); }
+    for (const b of allBranches()) { const o = el("option", { value: b }, branchLabel(b)); branchSel.appendChild(o); }
     branchSel.value = activeBranch;
 
     const monthInp = el("input", { type: "month", style: { fontSize: "13px", padding: "6px 10px" } });
@@ -25753,7 +25814,7 @@ routes.inventory_engine = function(u) {
     panel.appendChild(el("hr", { style: { border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" } }));
     panel.appendChild(el("div", { style: { fontWeight: "600", fontSize: "12px", marginBottom: "6px" } }, "3. Data Status"));
     const statusGrid = el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", fontSize: "12px" } });
-    for (const b of ["maadi","zawya"]) {
+    for (const b of allBranches()) {
       const batchesForBranch = sd().filter(x => x.branch === b);
       const months = batchesForBranch.map(x => x.month).sort().join(", ") || "none";
       const rows_ = batchesForBranch.reduce((s, x) => s + (x.rows||[]).length, 0);
@@ -25869,7 +25930,7 @@ routes.inventory_engine = function(u) {
 
     // Branch tab picker
     const bpWrap = el("div", { style: { display: "flex", gap: "8px", marginBottom: "14px" } });
-    for (const b of ["maadi","zawya"]) {
+    for (const b of allBranches()) {
       const btn = el("button", {
         class: activeBranch === b ? "btn" : "btn ghost",
         style: { flex: "1", textTransform: "capitalize" },

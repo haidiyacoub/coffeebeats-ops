@@ -314,7 +314,7 @@ exports.sendDailyShiftSummary = onSchedule(
     lines.push("──────────────────────");
 
     if (todayCloses.length === 0) {
-      lines.push(`⚠️ No shift closes recorded today — missing: ${COMPLIANCE_BRANCHES.map(_cap).join(", ")}.`);
+      lines.push(`⚠️ No shift closes recorded today — missing: ${complianceBranches(today).map(_cap).join(", ")}.`);
     } else {
       const branches = [...new Set(todayCloses.map(c => c.branch))].sort();
       for (const branch of branches) {
@@ -327,7 +327,7 @@ exports.sendDailyShiftSummary = onSchedule(
         if (bSums.talabat_credit + bSums.talabat_cash > 0)
           lines.push(`   🛵 Talabat: ${_fmt(bSums.talabat_credit + bSums.talabat_cash)}`);
       }
-      const noClose = COMPLIANCE_BRANCHES.filter(br => !branches.some(x => String(x || "").toLowerCase() === br));
+      const noClose = complianceBranches(today).filter(br => !branches.some(x => String(x || "").toLowerCase() === br));
       if (noClose.length) lines.push(`⚠️ No shift close yet: ${noClose.map(_cap).join(", ")}`);
       lines.push("──────────────────────");
       lines.push(`✅ *TOTAL TODAY: ${_fmt(_rowTotal(_sumPayments(todayCloses)))}*`);
@@ -620,7 +620,7 @@ exports.inventoryMonthEndCheck = onSchedule(
     ]);
     const rows       = (shard.exists ? shard.data().snapshots : null) || [];
     const activeIds  = ((itemsDoc.exists ? itemsDoc.data().items : null) || []).filter(i => i.active).map(i => i.id);
-    const BRANCHES   = ["maadi", "zawya"];
+    const BRANCHES   = complianceBranches(lastDay);
     const countsFor  = b => rows.filter(s => s.as_of === lastDay && s.branch === b);
     const missing    = BRANCHES.filter(b => countsFor(b).length === 0);
 
@@ -692,7 +692,14 @@ exports.leaveAlert = onDocumentUpdated(
 //  • Close  = every branch needs at least one shift close dated today.
 //  • Waste  = every branch needs a waste-log entry today — "No waste" counts, silence doesn't.
 //  • Roster = the current week (Sunday-based week_of) needs rows for every branch.
-const COMPLIANCE_BRANCHES = ["maadi", "zawya"];
+// Branches expected to trade on a date (ISO yyyy-mm-dd): Zawya closes after 2026-11-24, OX opens 2026-11-25.
+const BRANCH_TRADING = { maadi: {}, zawya: { close: "2026-11-24" }, ox: { open: "2026-11-25" } };
+function complianceBranches(ds) {
+  return Object.keys(BRANCH_TRADING).filter(b => {
+    const l = BRANCH_TRADING[b];
+    return (!l.open || ds >= l.open) && (!l.close || ds <= l.close);
+  });
+}
 
 async function _runComplianceCheck({ checkCloses }) {
   const db    = getDb();
@@ -725,7 +732,7 @@ async function _runComplianceCheck({ checkCloses }) {
   const wastes = arr(wasteDoc, "waste").filter(live).filter(w => localISODate(new Date(w.at)) === today);
 
   const problems = [];   // { key, text }
-  for (const b of COMPLIANCE_BRANCHES) {
+  for (const b of complianceBranches(today)) {
     if (!roster.some(r => branchOf(r) === b))
       problems.push({ key: `roster:${sunday}:${b}`, text: `SCHEDULE NOT UPDATED — ${_cap(b)} has no roster for the week starting ${sunday}` });
     if (closedToday.has(b)) continue;
@@ -807,7 +814,7 @@ exports.dailyComplianceRecap = onSchedule(
     const checks = [["Shift close", closes], ["Waste log", wastes], ["Cleaning log", cleans]];
     const lines = [`Coffee Beats — daily recap for ${day} (checked ${today} 01:00)`, ""];
     const missedNames = []; let missedItems = 0; const stampSubjects = [];
-    for (const b of COMPLIANCE_BRANCHES) {
+    for (const b of complianceBranches(day)) {
       if (closedD.has(b)) { lines.push(`${_cap(b)}: closed that day — nothing expected`); continue; }
       const bStamps = stamps.filter(s => branchOf(s) === b);
       const need = rosteredShifts(b);
@@ -829,7 +836,7 @@ exports.dailyComplianceRecap = onSchedule(
     // Other tasks: the week's schedule and (Fridays) the Maadi weekly cash deposit.
     const weekSun = sundayOf(day);
     const weekRows = arr(rosterDoc, "rosters").filter(r => r.week_of === weekSun);
-    for (const b of COMPLIANCE_BRANCHES) {
+    for (const b of complianceBranches(day)) {
       if (!weekRows.some(r => branchOf(r) === b)) {
         missedItems++; if (!missedNames.includes(_cap(b))) missedNames.push(_cap(b));
         lines.push(`❌ ${_cap(b)} MISSED: Weekly schedule NOT submitted for the week of ${weekSun}`);
