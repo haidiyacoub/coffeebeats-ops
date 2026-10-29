@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-442 -->
+<!-- CB_BUILD:20261029-448 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-442";
+  var BUILD = "20261029-448";
   (function() {
     function checkFresh() {
       try {
@@ -1401,6 +1401,12 @@ function migrateState(s) {
     if (Array.isArray(s.inv_engine_alerts)) s.inv_engine_alerts = s.inv_engine_alerts.filter(a => !_hit(a));
     if (Array.isArray(s.alert_log)) s.alert_log = s.alert_log.filter(a => !_hit(a));
     if (Array.isArray(s.leadership_notifications)) s.leadership_notifications = s.leadership_notifications.filter(n => !/cups 14\s*oz|coffee machine maintenance/i.test(String((n && n.title) || "")));
+  }
+
+  // One-time: ops "Ice Cream" is counted in scoops like Counterpoint's ingredient (was pieces).
+  if (!s._inv_ice_cream_scoop_v1) {
+    (s.items || []).forEach(it => { if (/^ice cream$/i.test(String(it.name || "").trim())) it.unit = "scoop"; });
+    s._inv_ice_cream_scoop_v1 = true;
   }
 
   // Collapse duplicate menu rows on every load/pull. The id-union menu_data sync never
@@ -12851,8 +12857,13 @@ routes.counterpoint_stock = function (u) {
       const locs = {}; locSnap.docs.forEach(d => { locs[d.id] = d.data().name || d.id; });
       const maadiId = Object.keys(locs).find(id => /maadi/i.test(locs[id]));
       if (!maadiId) { data = { noMaadi: true }; return draw(); }
+      // A till product can share a name with an ingredient (the "Turkish Coffee" drink vs the Turkish Coffee beans,
+      // "Whipped cream" vs the whipped-cream ingredient). Ops stock items are ingredients, so match those first.
       const cpByName = new Map();
-      stockSnap.docs.map(d => d.data()).filter(r => r.locationId === maadiId).forEach(r => cpByName.set(nrm(r.name), r));
+      stockSnap.docs.map(d => d.data()).filter(r => r.locationId === maadiId).forEach(r => {
+        const k = nrm(r.name), cur = cpByName.get(k);
+        if (!cur || (/^ING-/i.test(r.sku || "") && !/^ING-/i.test(cur.sku || ""))) cpByName.set(k, r);
+      });
       await Promise.all([loadCpSales(true), loadCpCatalog(true)]);
       const opsStock = computeStock("maadi");
       const rows = (state.items || []).filter(i => i.active !== false).map(i => {
