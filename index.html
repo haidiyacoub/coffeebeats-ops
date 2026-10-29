@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-687 -->
+<!-- CB_BUILD:20261029-715 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-687";
+  var BUILD = "20261029-715";
   (function() {
     function checkFresh() {
       try {
@@ -18952,15 +18952,15 @@ function handbookExcelFillRecipes() {
     R("x_whipped_cream", "Extras & Add-ons", "Whipped Cream", "—", "1 min", "",
       ["Whipped cream: 10 g"], ["Top the finished drink with 10 g whipped cream.", "Serve immediately."]),
     R("x_oat_milk", "Extras & Add-ons", "Oat Milk", "—", "2 min", "",
-      ["Oat milk: 250 ml"], ["Use oat milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
+      ["Oat milk: 120 ml"], ["Use oat milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
     R("x_coconut_milk", "Extras & Add-ons", "Coconut Milk", "—", "2 min", "",
-      ["Coconut milk: 250 ml"], ["Use coconut milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
+      ["Coconut milk: 120 ml"], ["Use coconut milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
     R("x_almond_milk", "Extras & Add-ons", "Almond Milk", "—", "2 min", "",
-      ["Almond milk: 250 ml"], ["Use almond milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
+      ["Almond milk: 120 ml"], ["Use almond milk in place of whole milk.", "Steam gently to light microfoam (do not overheat).", "Continue with the drink's recipe."]),
     R("x_full_cream_milk", "Extras & Add-ons", "Full Cream Milk", "—", "2 min", "",
-      ["Full cream milk: 150 ml"], ["Use full cream milk in place of the standard milk.", "Steam to light microfoam.", "Continue with the drink's recipe."]),
+      ["Full cream milk: 120 ml"], ["Use full cream milk in place of the standard milk.", "Steam to light microfoam.", "Continue with the drink's recipe."]),
     R("x_skimmed_milk", "Extras & Add-ons", "Skimmed Milk", "—", "2 min", "",
-      ["Skimmed milk: 150 ml"], ["Use skimmed milk in place of the standard milk.", "Steam to light microfoam.", "Continue with the drink's recipe."]),
+      ["Skimmed milk: 120 ml"], ["Use skimmed milk in place of the standard milk.", "Steam to light microfoam.", "Continue with the drink's recipe."]),
   ];
 }
 
@@ -19682,6 +19682,14 @@ routes.handbook = function (u) {
     }
   });
   if (_migrated) saveState();
+
+  // One-time fix: every extra-milk add-on is 120 ml (same as the "Extra … Milk" recipe lines in Counterpoint).
+  if (!state._hb_extra_milk_120_v1) {
+    const _milk = { hb_xl_x_oat_milk: "Oat milk", hb_xl_x_coconut_milk: "Coconut milk", hb_xl_x_almond_milk: "Almond milk", hb_xl_x_full_cream_milk: "Full cream milk", hb_xl_x_skimmed_milk: "Skimmed milk" };
+    state.handbook_recipes.forEach(r => { if (_milk[r.id]) r.ingredients = [`${_milk[r.id]}: 120 ml`]; });
+    state._hb_extra_milk_120_v1 = true;
+    saveState();
+  }
 
   // One-time fix: Mint to Be (100 ml mint water + 100 ml milk) and The Artist (250 ml water) per owner.
   if (!state._hb_mint_artist_fix_v1) {
