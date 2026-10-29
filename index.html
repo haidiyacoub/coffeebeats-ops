@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-464 -->
+<!-- CB_BUILD:20261029-471 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-464";
+  var BUILD = "20261029-471";
   (function() {
     function checkFresh() {
       try {
@@ -7802,6 +7802,16 @@ routes.purchase_new = function (u) {
           card.appendChild(el("label", {}, T("Purchase unit (e.g. bottle, pack, carton)","وحدة الشراء (مثال: زجاجة، عبوة، كرتونة)")));
           const puInput = el("input", { type: "text", value: ln.purchase_unit || "", placeholder: T("bottle","زجاجة") });
           puInput.addEventListener("input", () => { ln.purchase_unit = puInput.value; updateTotal(); });
+          // Purchases are recorded in g / ml only: a "kg" or "L" purchase unit becomes a 1000 g / 1000 ml pack.
+          puInput.addEventListener("change", () => {
+            const v = puInput.value.trim().toLowerCase();
+            const kgLike = /^(kg|kgs|kilo|kilos|kilogram|kilograms|كيلو|كجم)$/.test(v), lLike = /^(l|lt|ltr|liter|liters|litre|litres|لتر)$/.test(v);
+            if ((kgLike && invUnit === "g") || (lLike && invUnit === "ml")) {
+              ln.purchase_unit = `1000 ${invUnit}`; ln.pack_size = 1000;
+              toast(T(`Recorded in ${invUnit}: 1 ${kgLike ? "kg" : "L"} = 1000 ${invUnit}`, `يُسجَّل بـ ${invUnit}: 1 = 1000 ${invUnit}`));
+              draw();
+            }
+          });
           card.appendChild(puInput);
 
           card.appendChild(el("label", {}, T(`Pack size — ${invUnit} per ${ln.purchase_unit || "purchase unit"} (e.g. 850)`, `حجم العبوة — ${invUnit} لكل ${ln.purchase_unit || "وحدة شراء"} (مثال: 850)`)));
