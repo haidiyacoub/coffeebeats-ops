@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-456 -->
+<!-- CB_BUILD:20261029-458 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-456";
+  var BUILD = "20261029-458";
   (function() {
     function checkFresh() {
       try {
@@ -842,12 +842,10 @@ const fmtDay = (iso) => {
 const MONTH_NAMES_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const fmtYm = (ym) => { const [y,m] = String(ym||"").split("-").map(Number); return m ? `${MONTH_NAMES_SHORT[m-1]} ${y}` : String(ym||""); };
 const money = (n) => (n == null ? "—" : (Math.round(n*100)/100).toLocaleString("en-EG", { style: "currency", currency: "EGP", minimumFractionDigits: 0 }));
+// Quantities are always shown in the base unit (g / ml), never kg / L, with thousands separators.
 const fmtQty = (n, unit) => {
   if (n == null) return "—";
-  const pretty = Math.abs(n) >= 1000 && (unit==="g"||unit==="ml")
-    ? `${(n/1000).toFixed(2)} ${unit==="g"?"kg":"L"}`
-    : `${Math.round(n*100)/100} ${unit}`;
-  return pretty;
+  return `${(Math.round(n * 100) / 100).toLocaleString("en-US")} ${unit}`.trim();
 };
 const toast = (msg, kind="") => {
   const t = el("div", { class: "toast " + kind }, msg);
@@ -12773,9 +12771,7 @@ routes.counterpoint_stock = function (u) {
   const unitLabel = (x) => (unitKey(x) === "pc" ? "pc" : (x || ""));
   const r2 = (n) => Math.round(n * 100) / 100;
   const qty = (n, unit) => {
-    const lab = unitLabel(unit);
-    return Math.abs(n) >= 1000 && (lab === "g" || lab === "ml")
-      ? `${r2(n / 1000)} ${lab === "g" ? "kg" : "L"}` : `${r2(n)} ${lab}`.trim();
+    return `${r2(n).toLocaleString("en-US")} ${unitLabel(unit)}`.trim();   // always g / ml, never kg / L
   };
 
   const COLS = "minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)";
