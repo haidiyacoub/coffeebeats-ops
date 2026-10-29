@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-451 -->
+<!-- CB_BUILD:20261029-453 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-451";
+  var BUILD = "20261029-453";
   (function() {
     function checkFresh() {
       try {
@@ -3477,7 +3477,7 @@ function cpSalesUsage(tsAfter) {
         for (const nd0 of cpNeeds) {
           const sw = swap[nd0.sku];
           const nd = sw ? { ...nd0, name: sw.toName, unit: sw.toUnit || nd0.unit, quantity: Number(nd0.quantity) * (Number(sw.quantityFactor) || 1) } : nd0;
-          const it = itemsByCompact[compact(CP_ING_ALIAS[compact(nd.name)] || nd.name)];
+          const it = itemsByCompact[compact(CP_ING_ALIAS[compact(nd.name)] || nd.name)] || itemsByCompact[compact(nd.name)];
           // A need with an optionId is a choice the cashier makes (milk type, honey, extra shot…). Sale lines carry the
           // chosen options in `addons`; with no milk option chosen the default (full cream) is assumed.
           if (nd.optionId) {
@@ -12862,8 +12862,10 @@ routes.counterpoint_stock = function (u) {
       const cpByName = new Map();
       stockSnap.docs.map(d => d.data()).filter(r => r.locationId === maadiId).forEach(r => {
         // ops and Counterpoint name some ingredients differently (Plastic Cup 16oz = Cups 16oz); CP_ING_ALIAS bridges them
-        const k = nrm(CP_ING_ALIAS[nrm(r.name).replace(/ /g, "")] || r.name), cur = cpByName.get(k);
-        if (!cur || (/^ING-/i.test(r.sku || "") && !/^ING-/i.test(cur.sku || ""))) cpByName.set(k, r);
+        for (const k of new Set([nrm(CP_ING_ALIAS[nrm(r.name).replace(/ /g, "")] || r.name), nrm(r.name)])) {
+          const cur = cpByName.get(k);
+          if (!cur || (/^ING-/i.test(r.sku || "") && !/^ING-/i.test(cur.sku || ""))) cpByName.set(k, r);
+        }
       });
       await Promise.all([loadCpSales(true), loadCpCatalog(true)]);
       const opsStock = computeStock("maadi");
