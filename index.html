@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261029-491 -->
+<!-- CB_BUILD:20261031-766 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261029-491";
+  var BUILD = "20261031-766";
   (function() {
     function checkFresh() {
       try {
@@ -18213,6 +18213,8 @@ routes.signin_stamp_new = function (u) {
         // Score against the time the clock photo was taken (EXIF), falling back to upload time.
         const _photoTime       = _backPhoto || await photoClockTime(photoBlobs, s.at);
         const _clockAt         = _photoTime ? _photoTime.toISOString() : s.at;
+        if (!_photoTime && !_backPhoto) toast(T(`⚠ The photo has no readable capture time (sent through WhatsApp or edited?). Take the clock photo directly in the app, or leadership must enter the clock time.`,
+                                                `⚠ الصورة لا تحتوي على وقت التقاط مقروء (أُرسلت عبر واتساب أو تم تعديلها؟). صوّر الساعة مباشرة من التطبيق أو يجب على الإدارة إدخال وقت الساعة.`), "error");
         const _stampMinsLate   = minsLateAt(branch, _clockAt, shift);
         const _earlyBonus      = _stampMinsLate <= -15;
 
@@ -18470,8 +18472,9 @@ async function photoClockTime(blobs, uploadIso, anyPastDay) {
   let best = null;
   for (const b of blobs) {
     if (!b) continue;
-    let d = await exifTakenAt(b);
-    if (!d && b.lastModified) d = new Date(b.lastModified);
+    // EXIF only: a file's lastModified is just when it was saved/forwarded (WhatsApp strips EXIF),
+    // not when the clock was photographed, so it must not pass as a photo time.
+    const d = await exifTakenAt(b);
     if (!d || isNaN(d)) continue;
     if (!anyPastDay && localISODate(d) !== localISODate(up)) continue;
     if (d.getTime() > up.getTime() + 5 * 60000) continue;
