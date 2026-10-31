@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261031-766 -->
+<!-- CB_BUILD:20261031-000 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261031-766";
+  var BUILD = "20261031-000";
   (function() {
     function checkFresh() {
       try {
@@ -1441,9 +1441,11 @@ function migrateState(s) {
   // Purged on every load/pull (incl. their count entries, thresholds and alert history) so a stale device can't restore them.
   {
     const _deadInv = (n) => /^cups\s*14\s*oz$/i.test(String(n || "").trim()) || /coffee machine maintenance/i.test(String(n || ""));
-    const _deadIds = new Set((s.items || []).filter(it => _deadInv(it.name)).map(it => it.id));
+    // Ids of the five removed items (Spiced Turkish Coffee, Cups 14oz, 2× V7, maintenance). A stale device that had
+    // a scrambled copy of the item list (2026-10-31) re-added them under other names, so purge by id too.
+    const _deadIds = new Set((s.items || []).filter(it => _deadInv(it.name) || ["inv_0005", "inv_0073", "inv_0090", "inv_0091", "inv_0092"].includes(it.id)).map(it => it.id));
     (s.alert_log || []).forEach(a => { if (a && _deadInv(a.item_name) && a.item_id) _deadIds.add(a.item_id); });
-    if (Array.isArray(s.items)) s.items = s.items.filter(it => !_deadInv(it.name));
+    if (Array.isArray(s.items)) s.items = s.items.filter(it => !_deadInv(it.name) && !_deadIds.has(it.id));
     if (_deadIds.size) {
       (s.snapshots || []).forEach(sn => { if (Array.isArray(sn.entries)) sn.entries = sn.entries.filter(e => !_deadIds.has(e.item_id)); });
       const th = s.inv_engine && s.inv_engine.thresholds;
