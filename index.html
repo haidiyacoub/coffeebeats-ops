@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261103-227 -->
+<!-- CB_BUILD:20261103-264 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261103-227";
+  var BUILD = "20261103-264";
   (function() {
     function checkFresh() {
       try {
@@ -2055,7 +2055,8 @@ async function _menuMergeDoc() {
   for (const lm of (state.menu || [])) {
     const rm = byId.get(lm.id);
     if (!rm) { byId.set(lm.id, lm); continue; }
-    const merged = { ...rm, ...lm };
+    // Newer edit wins (was: local always won, so a stale device's old costs/prices overwrote newer remote edits on every push).
+    const merged = _recTime(rm) > _recTime(lm) ? { ...lm, ...rm } : { ...rm, ...lm };
     if (!lm.cost_egp  && rm.cost_egp)  merged.cost_egp  = rm.cost_egp;   // don't null out a known cost
     if (!lm.price_egp && rm.price_egp) merged.price_egp = rm.price_egp;  // don't null out a known price
     byId.set(lm.id, merged);
@@ -15612,7 +15613,7 @@ routes.menu = function (u) {
           render();
           return;
         }
-        m.name = v.name; m.price_egp = Number(v.price_egp)||0; m.cost_egp = Number(v.cost_egp)||0; m.category = v.category;
+        m.name = v.name; m.price_egp = Number(v.price_egp)||0; m.cost_egp = Number(v.cost_egp)||0; m.category = v.category; m.last_edited_at = new Date().toISOString();
         saveState(); render();
       }
     });

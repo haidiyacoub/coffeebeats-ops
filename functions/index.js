@@ -870,7 +870,9 @@ async function _removedLists() {
   const snap = await getDb().collection("state").doc("removed_items").get();
   const d = snap.exists ? snap.data() : {};
   const lk = await getDb().collection("state").doc("item_lock").get();
+  const ml = await getDb().collection("state").doc("menu_lock").get();
   return {
+    menuLock: ml.exists ? ml.data() : null,
     menu: new Set((d.menu || []).map(_remNorm)),
     inv:  new Set((d.inv  || []).map(_remNorm)),
     lock: lk.exists ? lk.data() : null,
@@ -887,8 +889,23 @@ async function _enforce(event, strip) {
 }
 exports.enforceMenuRemovals = onDocumentWritten("state/menu_data", (event) => _enforce(event, (data, bl) => {
   if (!Array.isArray(data.menu)) return null;
-  const keep = data.menu.filter(m => !(m && bl.menu.has(_remNorm(m.name))));
-  return keep.length === data.menu.length ? null : { menu: keep };
+  let keep = data.menu.filter(m => !(m && bl.menu.has(_remNorm(m.name))));
+  let changed = keep.length !== data.menu.length;
+  // Menu lock: state/menu_lock = { rows: { <menuId>: { cost_egp, price_egp } }, suspended } for ops-only rows (extras etc.) whose
+  // numbers the owner set. A stale device pushing its old cost/price gets the locked value put back. Rows driven by
+  // Counterpoint are never listed (the till is their source). Suspend or edit the lock doc to change a number on purpose.
+  const ml = bl.menuLock;
+  if (ml && !ml.suspended && ml.rows && typeof ml.rows === "object") {
+    const now = new Date().toISOString();
+    keep = keep.map(m => {
+      const L = m && ml.rows[m.id]; if (!L) return m;
+      const next = { ...m }; let ch = false;
+      ["cost_egp", "price_egp"].forEach(k => { if (L[k] !== undefined && next[k] !== L[k]) { next[k] = L[k]; ch = true; } });
+      if (ch) { next.last_edited_at = now; changed = true; return next; }
+      return m;
+    });
+  }
+  return changed ? { menu: keep } : null;
 }));
 exports.enforceItemRemovals = onDocumentWritten("state/users_items", (event) => _enforce(event, (data, bl) => {
   if (!Array.isArray(data.items)) return null;
