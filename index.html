@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261103-914 -->
+<!-- CB_BUILD:20261103-105 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261103-914";
+  var BUILD = "20261103-105";
   (function() {
     function checkFresh() {
       try {
@@ -13707,13 +13707,14 @@ routes.sales_import = function (u) {
     const normName = (s) => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
     const tbl2 = el("table", {}, [
-      el("thead", {}, el("tr", {}, ["Item","Qty Sold","Unit Price","COGS%","Margin%"].map(h=>el("th",{},h)))),
+      el("thead", {}, el("tr", {}, ["Item","Qty Sold","Unit Price (incl. VAT)","COGS% (net)","Margin% (net)"].map(h=>el("th",{},h)))),
       el("tbody", {}, topItems.map(([name, qty]) => {
         const m = menuByName.get(normName(name));
         const price = m?.price_egp || (parsedOrderItems.rows.find(r=>r.name===name)?.unit_price) || 0;
         const cost  = m?.cost_egp || 0;
-        const cogsPct   = (price && cost) ? (cost/price*100) : null;
-        const marginPct = (price && cost) ? ((price-cost)/price*100) : null;
+        const netP = m?.price_egp ? price / 1.14 : price;   // menu price is VAT-inclusive; cost % is on the net price
+        const cogsPct   = (netP && cost) ? (cost/netP*100) : null;
+        const marginPct = (netP && cost) ? ((netP-cost)/netP*100) : null;
         return el("tr", {}, [
           el("td", {}, name),
           el("td", { class:"num" }, String(qty)),
@@ -15547,7 +15548,8 @@ routes.menu = function (u) {
     const q = search.value.trim().toLowerCase();
     const items = state.menu.filter(m => q === "" || m.name.toLowerCase().includes(q)).slice(0, 300);
     for (const m of items) {
-      const margin = (m.price_egp && m.cost_egp) ? ((m.price_egp - m.cost_egp) / m.price_egp * 100) : null;
+      const netPrice = m.price_egp ? m.price_egp / 1.14 : 0;   // cost % / margin are measured on the price before 14% VAT
+      const margin = (netPrice && m.cost_egp) ? ((netPrice - m.cost_egp) / netPrice * 100) : null;
       list.appendChild(el("div", { class: "row", onClick: () => editMenu(m) }, [
         el("div", { class: "grow" }, [
           el("div", { class: "title" }, m.name),
@@ -16316,7 +16318,7 @@ routes.dashboard = function (u, params) {
     }
     const hasOrderItems = qtyByItem.size > 0;
     // cogs = qty × recipe cost — feeds the EBITDA / operating / net waterfall.
-    // cogsAtItemPrice / salesAtItemPrice = item cost vs item MENU price, summed only over
+    // cogsAtItemPrice / salesAtItemPrice = item cost vs item MENU price net of 14% VAT (price ÷ 1.14), summed only over
     // pairs that have BOTH a known cost and a known price. Their ratio is a VAT/share-neutral
     // COGS% so Maadi and Zawya are directly comparable (same method as the branch card).
     let cogs = 0, cogsAtItemPrice = 0, salesAtItemPrice = 0;
@@ -16328,7 +16330,7 @@ routes.dashboard = function (u, params) {
         cogs += qty * (Number(m.cost_egp)||0);
         if (m.price_egp) {
           cogsAtItemPrice += qty * (Number(m.cost_egp)||0);
-          salesAtItemPrice += qty * (Number(m.price_egp)||0);
+          salesAtItemPrice += qty * (Number(m.price_egp)||0) / 1.14;   // net of 14% VAT
         }
       }
     }
@@ -16447,7 +16449,7 @@ routes.dashboard = function (u, params) {
       const detailRows = [
         el("tr", {}, [ el("td", {}, "Total revenue"), moneyCell(mGross), moneyCell(zGross), moneyCell(cGross || null) ]),
         el("tr", {}, [ el("td", { class: "muted" }, "Revenue after 14% VAT"), moneyCell(mAfterVat), moneyCell(zAfterVat), moneyCell(cAfterVat || null) ]),
-        el("tr", {}, [ el("td", {}, "COGS %"), cogsPctCell(maadiPnl ? maadiPnl.cogsPct : null), cogsPctCell(zawyaPnl ? zawyaPnl.cogsPct : null), cogsPctCell(cCogsPct) ]),
+        el("tr", {}, [ el("td", {}, "COGS % (on net price)"), cogsPctCell(maadiPnl ? maadiPnl.cogsPct : null), cogsPctCell(zawyaPnl ? zawyaPnl.cogsPct : null), cogsPctCell(cCogsPct) ]),
         el("tr", {}, [ el("td", { class: "muted" }, "Venue revenue share — Zawya 10%"), dash(), negCell(zVenue), negCell(cVenue || null) ]),
         el("tr", {}, [ el("td", {}, "EBITDA margin %"), pctCell(mMargin), pctCell(zMargin), pctCell(cOpMargin) ]),
         el("tr", {}, [ el("td", {}, "Operating margin %"), pctCell(mMargin), pctCell(zMargin), pctCell(cOpMargin) ]),
@@ -16950,7 +16952,7 @@ routes.dashboard = function (u, params) {
     const hasOrderItems = qtyByItem.size > 0;
 
     // cogsPct/gmPct below are pure item-level cost-vs-price ratios (menu cost_egp vs menu
-    // price_egp, per item, summed) — deliberately independent of any revenue figure (net
+    // price_egp ÷ 1.14 = net of VAT, per item, summed) — deliberately independent of any revenue figure (net
     // sales, VAT, Zawya's share) so they're comparable apples-to-apples across branches.
     // Only pairs with BOTH a known cost and a known price count toward that ratio.
     let cogsSales = 0, matched = 0, unmatched = 0;
@@ -16964,7 +16966,7 @@ routes.dashboard = function (u, params) {
         matched += qty;
         if (m.price_egp) {
           cogsAtItemPrice += qty * (Number(m.cost_egp)||0);
-          salesAtItemPrice += qty * (Number(m.price_egp)||0);
+          salesAtItemPrice += qty * (Number(m.price_egp)||0) / 1.14;   // net of 14% VAT
         }
       }
       else unmatched += qty;
@@ -17091,7 +17093,7 @@ routes.dashboard = function (u, params) {
       el("h2", {}, "Profitability"),
       el("div", { class: "grid c3" }, [
         el("div", {}, [
-          el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "COGS %"),
+          el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, "COGS % (net price)"),
           el("div", { style: { fontSize: "28px", fontWeight: "700", color: cogsPct > 35 ? "var(--bad)" : cogsPct > 28 ? "var(--warn)" : "var(--ok)" } }, (salesAtItemPrice ? cogsPct.toFixed(1) : "—") + "%"),
           el("div", { class: "muted small" }, money(cogs)),
         ]),
@@ -17185,7 +17187,7 @@ routes.dashboard = function (u, params) {
       const m = menuLookup(k);
       if (m && m.cost_egp) {
         cur.cogs += itemQty * (Number(m.cost_egp)||0);
-        if (m.price_egp) cur.priceSales += itemQty * (Number(m.price_egp)||0);
+        if (m.price_egp) cur.priceSales += itemQty * (Number(m.price_egp)||0) / 1.14;   // net of 14% VAT
       }
       byItem.set(k, cur);
     }
