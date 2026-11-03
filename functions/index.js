@@ -1,6 +1,6 @@
 const { onCall, HttpsError }     = require("firebase-functions/v2/https");
 const { onSchedule }             = require("firebase-functions/v2/scheduler");
-const { onDocumentUpdated }      = require("firebase-functions/v2/firestore");
+const { onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { defineSecret }           = require("firebase-functions/params");
 const admin      = require("firebase-admin");
 const bcrypt     = require("bcryptjs");
@@ -857,3 +857,51 @@ exports.dailyComplianceRecap = onSchedule(
     console.log(`Compliance recap ${day}: ${missedItems} missing item(s)`);
   }
 );
+
+
+// ─── Removed-items enforcement ──────────────────────────────────────────────────
+// Menu rows / inventory items the owner removed for good are listed in state/removed_items
+// ({ menu: [names], inv: [names] }). menu_data and users_items sync by id-union and never delete a remote row,
+// so a phone still running an old build (or holding an old local copy) can push a removed row straight back.
+// These triggers strip the listed names again the moment any device writes the document, so the owner's removal
+// always wins over any refresh from any other device. Idempotent: a write with nothing to strip does nothing.
+const _remNorm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+async function _removedLists() {
+  const snap = await getDb().collection("state").doc("removed_items").get();
+  const d = snap.exists ? snap.data() : {};
+  return {
+    menu: new Set((d.menu || []).map(_remNorm)),
+    inv:  new Set((d.inv  || []).map(_remNorm)),
+  };
+}
+async function _enforce(event, strip) {
+  if (!event.data || !event.data.after.exists) return;
+  const bl = await _removedLists();
+  const data = event.data.after.data();
+  const patch = strip(data, bl);
+  if (!patch) return;
+  console.log("enforceRemovals", event.data.after.ref.path, Object.keys(patch).map(k => `${k}:${(patch[k] || []).length}`).join(","));
+  await event.data.after.ref.update(patch);
+}
+exports.enforceMenuRemovals = onDocumentWritten("state/menu_data", (event) => _enforce(event, (data, bl) => {
+  if (!Array.isArray(data.menu)) return null;
+  const keep = data.menu.filter(m => !(m && bl.menu.has(_remNorm(m.name))));
+  return keep.length === data.menu.length ? null : { menu: keep };
+}));
+exports.enforceItemRemovals = onDocumentWritten("state/users_items", (event) => _enforce(event, (data, bl) => {
+  if (!Array.isArray(data.items)) return null;
+  const dead = new Set(data.items.filter(i => i && bl.inv.has(_remNorm(i.name))).map(i => i.id));
+  const keep = data.items.filter(i => !(i && dead.has(i.id)));
+  const patch = {};
+  if (keep.length !== data.items.length) patch.items = keep;
+  if (Array.isArray(data.inventory_alerts)) {
+    const ka = data.inventory_alerts.filter(a => !(a && (dead.has(a.item_id) || bl.inv.has(_remNorm(a.item_name)))));
+    if (ka.length !== data.inventory_alerts.length) patch.inventory_alerts = ka;
+  }
+  return Object.keys(patch).length ? patch : null;
+}));
+exports.enforceAlertRemovals = onDocumentWritten("state/inv_engine_alerts", (event) => _enforce(event, (data, bl) => {
+  if (!Array.isArray(data.inv_engine_alerts)) return null;
+  const keep = data.inv_engine_alerts.filter(a => !(a && bl.inv.has(_remNorm(a.item_name))));
+  return keep.length === data.inv_engine_alerts.length ? null : { inv_engine_alerts: keep };
+}));
