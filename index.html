@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261103-128 -->
+<!-- CB_BUILD:20261103-131 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261103-128";
+  var BUILD = "20261103-131";
   (function() {
     function checkFresh() {
       try {
@@ -1443,7 +1443,7 @@ function migrateState(s) {
     // Nov 2026: Mint Leaves, Sobia, Tamarind, Pineapple / Strawberry Puree, Blue Curacao Syrup, and the syrups/sauce no longer used
     // (Pistachio Sauce, Sugar Syrup, Mint Syrup) are removed too. Whole-name match: "Mint Bags" and "Sobia Latte" are different things.
     const _deadInv = (n) => /^cups\s*14\s*oz$/i.test(String(n || "").trim()) || /coffee machine maintenance/i.test(String(n || ""))
-      || /^(mint leaves|sobia|tamarind|pineapple puree|strawberry puree|blue curacao syrup|pistachio sauce|sugar syrup|mint syrup)$/i.test(String(n || "").trim());
+      || /^(mint leaves|sobia|tamarind|pineapple puree|strawberry puree|blue curacao syrup|pistachio sauce|sugar syrup|mint syrup|salted caramel syrup)$/i.test(String(n || "").trim());   // Syrup = duplicate of Salted Caramel Sauce (same Counterpoint ingredient)
     // Ids of the five removed items (Spiced Turkish Coffee, Cups 14oz, 2× V7, maintenance). A stale device that had
     // a scrambled copy of the item list (2026-10-31) re-added them under other names, so purge by id too.
     const _deadIds = new Set((s.items || []).filter(it => _deadInv(it.name) || ["inv_0005", "inv_0073", "inv_0090", "inv_0091", "inv_0092"].includes(it.id)).map(it => it.id));
