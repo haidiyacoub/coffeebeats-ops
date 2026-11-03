@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261103-111 -->
+<!-- CB_BUILD:20261103-128 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261103-111";
+  var BUILD = "20261103-128";
   (function() {
     function checkFresh() {
       try {
@@ -8194,9 +8194,32 @@ routes.purchase_list = function (u) {
       T("📋 No-receipt purchases report","📋 تقرير المشتريات بدون فاتورة")));
   }
   const list = el("div", { class: "list" });
-  const rows = state.purchases.filter(p => u.role === "owner" || u.role === "accountant" || p.by === u.id || (u.branches||[]).includes(p.branch))
-    .sort((a,b) => b.at.localeCompare(a.at)).slice(0, 200);
+  const visible = state.purchases.filter(p => u.role === "owner" || u.role === "accountant" || p.by === u.id || (u.branches||[]).includes(p.branch))
+    .sort((a,b) => b.at.localeCompare(a.at));
   state.deleted_purchases = state.deleted_purchases || [];
+
+  // Filters: keyword (supplier, products bought, branch, note) + month
+  const searchIn = el("input", { type: "search", placeholder: T("Search supplier or product (milk, beans…)","ابحث عن مورد أو منتج (حليب، بن…)"), style: { flex: "1 1 200px", minWidth: "0" } });
+  const monthIn = el("input", { type: "month", title: T("Filter by month","تصفية حسب الشهر"), style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" } });
+  const clearBtn = el("button", { class: "btn ghost", onClick: () => { searchIn.value = ""; monthIn.value = ""; draw(); } }, T("Clear","مسح"));
+  const countEl = el("div", { class: "muted small", style: { marginBottom: "8px" } });
+  wrap.appendChild(el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "6px" } }, [searchIn, monthIn, clearBtn]));
+  wrap.appendChild(countEl);
+  const purchaseText = (p) => [p.supplier, p.branch, p.note, p.paid_by, p.by_name,
+    ...(p.lines || []).map(l => [l.item_name, l.description, l.note].filter(Boolean).join(" "))
+  ].filter(Boolean).join(" ").toLowerCase();
+  function draw() {
+    list.innerHTML = "";
+    const terms = searchIn.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const mo = monthIn.value;
+    const filtering = terms.length || mo;
+    let rows = visible.filter(p => (!mo || (p.date || (p.at||"").slice(0,10)).slice(0,7) === mo)
+      && (!terms.length || terms.every(t => purchaseText(p).includes(t))));
+    const total = rows.length;
+    if (!filtering) rows = rows.slice(0, 200);
+    countEl.textContent = filtering
+      ? T(`${total} purchase(s) · ${money(rows.reduce((s,p) => s + (p.total||0), 0))}`, `${total} مشترى · ${money(rows.reduce((s,p) => s + (p.total||0), 0))}`)
+      : "";
   for (const p of rows) {
     const rowChildren = [
       el("div", { class: "grow", onClick: () => showPurchase(p) }, [
@@ -8259,7 +8282,11 @@ routes.purchase_list = function (u) {
     }
     list.appendChild(el("div", { class: "row" }, rowChildren));
   }
-  if (rows.length === 0) list.appendChild(el("div", { class: "muted" }, T("No purchases yet.","لا توجد مشتريات بعد.")));
+  if (rows.length === 0) list.appendChild(el("div", { class: "muted" }, filtering ? T("No purchases match.","لا توجد مشتريات مطابقة.") : T("No purchases yet.","لا توجد مشتريات بعد.")));
+  }
+  searchIn.addEventListener("input", draw);
+  monthIn.addEventListener("change", draw);
+  draw();
   wrap.appendChild(list);
   renderTrashSection(wrap, {
     arrKey: "purchases", trashKey: "deleted_purchases", entityLabel: T("Purchase","مشترى"), canManage: u.role === "owner",
