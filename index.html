@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261103-144 -->
+<!-- CB_BUILD:20261103-227 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261103-144";
+  var BUILD = "20261103-227";
   (function() {
     function checkFresh() {
       try {
@@ -1474,7 +1474,10 @@ function migrateState(s) {
 
   // One-time: cups use Counterpoint's names everywhere — Plastic Cup 16oz, Paper Cup 12oz/8oz/4oz (Haïdi, Oct 2026).
   // Any duplicate of the same cup is merged into one item (counts, purchases, waste, recipes re-pointed).
-  if (!s._inv_cup_names_v1 && Array.isArray(s.items)) {
+  // DISABLED (Nov 2026): these two name-matching one-time migrations run on whatever item list a device holds. A device with a
+  // scrambled list (ids shifted vs names) re-ran them on 2026-11-02, stamped the records as just-edited, and so overwrote 12 correct
+  // records in Firestore (Full Cream Milk vanished). The data is now correct everywhere, so they must not run again.
+  if (false && !s._inv_cup_names_v1 && Array.isArray(s.items)) {
     const _cupNew = { "16": "Plastic Cup 16oz", "12": "Paper Cup 12oz", "8": "Paper Cup 8oz", "4": "Paper Cup 4oz" };
     const _cupKey = (n) => { const m = String(n || "").trim().match(/^(?:cups?|paper cup|plastic cup)\s*(4|8|12|16)\s*oz$/i); return m ? m[1] : null; };
     const keeper = {};
@@ -1500,7 +1503,7 @@ function migrateState(s) {
   }
 
   // One-time: link ops items to their Counterpoint product/ingredient by sku, for the names that differ between the two.
-  if (!s._cp_sku_links_v1 && Array.isArray(s.items)) {
+  if (false && !s._cp_sku_links_v1 && Array.isArray(s.items)) {
     const _links = { "drip bag": "sk-0076", "ahmad green tea": "sk-0072", "matcha powder": "ING-MATCHA", "ground cinnamon": "ING-CINNAMON-POWDER",
       "passion fruit puree": "ING-PASSION-PUREE", "halo puffs parmesan": "sk-0208",
       "small water": "sk-0196", "v cola p": "sk-0159", "vanilla sea salt": "ING-SEASALT-VANILLA" };
