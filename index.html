@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261103-264 -->
+<!-- CB_BUILD:20261103-295 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261103-264";
+  var BUILD = "20261103-295";
   (function() {
     function checkFresh() {
       try {
@@ -5795,7 +5795,8 @@ routes.home = function (u) {
     if (canAccess("counterpoint", u)) tiles.appendChild(tile("🔌", "Counterpoint POS", "Live sales & stock from the till", () => go("counterpoint")));
     if (canAccess("counterpoint_stock", u)) tiles.appendChild(tile("⚖️", "Ops vs Counterpoint stock", "Maadi stock side by side · differences", () => go("counterpoint_stock")));
     tiles.appendChild(tile("📊", "Dashboards", "KPIs + P&L close", () => go("dashboard")));
-    tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV", () => go("sales_import")));
+    tiles.appendChild(tile("📥", "Upload Sales (POS)", "Monthly CSV or straight from Counterpoint", () => go("sales_import")));
+    tiles.appendChild(tile("🏷️", "Discounts & barista sales", "Who sold what · every discount", () => go("discount_report")));
     tiles.appendChild(sectionHeader("HR"));
     tiles.appendChild(tile("🏆", "KPI Scorecards", "Team performance & rewards", () => go("scorecard")));
     tiles.appendChild(tile("👥", "Staff HR", "Monthly payroll · deductions · leaves", () => go("staff_hr")));
@@ -13583,9 +13584,197 @@ routes.bank = function (u) {
 // ==============================================================
 // SALES IMPORT
 // ==============================================================
+// ---- Counterpoint → the same rows the three CSV uploads create (sales / order_items / orders) ----
+// Counterpoint sale lines carry unitPrice ex-VAT and addons (priceDelta); the sale carries total, delivery,
+// discount name, refunds and cashierName. Everything is re-derived to the VAT-inclusive figures the uploads use.
+const _cairoDate = (iso) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+async function cpBuildMonth(branch, month) {
+  const re = { maadi: /maadi/i, zawya: /zawya/i, ox: /\box\b/i }[branch];
+  const locSnap = await db.collection("counterpoint_locations").get();
+  let locId = null;
+  locSnap.docs.forEach(d => { if (re && re.test(d.data().name || "")) locId = d.id; });
+  if (!locId) throw new Error(`Counterpoint has no location named like "${branch}" yet — create it in the Counterpoint back office first.`);
+  const [y, m] = month.split("-").map(Number);
+  const from = new Date(Date.UTC(y, m - 1, 1) - 86400000).toISOString(), to = new Date(Date.UTC(y, m, 1) + 86400000).toISOString();
+  const [salesSnap, prodSnap] = await Promise.all([
+    db.collection("counterpoint_sales").where("createdAt", ">=", from).where("createdAt", "<", to).get(),
+    db.collection("counterpoint_products").get(),
+  ]);
+  const catBySku = {};
+  prodSnap.docs.forEach(d => { const p = d.data(); const c = p.category && p.category.name ? p.category.name : (p.categoryName || p.category || ""); if (p.sku) catBySku[p.sku] = String(c || ""); });
+  const menuCat = {};
+  (state.menu || []).forEach(mi => { if (mi.pos_sku) menuCat[mi.pos_sku] = mi.category || ""; menuCat["n:" + _cpNrm(mi.name)] = mi.category || ""; });
+  const num = (x) => Number(x) || 0, r2 = (x) => Math.round(x * 100) / 100;
+  const agg = new Map(), orderItems = [], orders = [];
+  const st = { salesInMonth: 0, used: 0, noLines: 0, fullRefunds: 0, partialRefunds: 0, excludedLines: 0, excludedNet: 0, excludedGross: 0, first: "", last: "" };
+  for (const doc of salesSnap.docs) {
+    const s = doc.data();
+    if (s.kind === "refund.created") continue;   // the original sale already carries its refunded amount
+    if (s.locationId != null && String(s.locationId) !== String(locId)) continue;
+    const date = _cairoDate(s.createdAt);
+    if (date.slice(0, 7) !== month) continue;
+    st.salesInMonth++;
+    if (!Array.isArray(s.lines) || !s.lines.length) { st.noLines++; continue; }
+    const total = num(s.total), refunded = num(s.refundedTotal);
+    if (s.refunded === true || (total > 0 && refunded >= total)) { st.fullRefunds++; continue; }
+    const keep = total > 0 && refunded > 0 ? 1 - refunded / total : 1;
+    if (keep < 1) st.partialRefunds++;
+    const ls = s.lines.map(l => {
+      const qty = num(l.quantity ?? l.qty ?? 1);
+      const unitEx = num(l.unitPrice) + (l.addons || []).reduce((a, x) => a + num(x.priceDelta), 0);
+      const sku = l.sku || "", name = l.name || sku;
+      const category = catBySku[sku] || menuCat[sku] || menuCat["n:" + _cpNrm(name)] || "";
+      return { qty, unitEx, sku, name, category, gross: unitEx * qty * VAT_RATE };
+    });
+    const saleGross = ls.reduce((a, l) => a + l.gross, 0);
+    const saleNet = Math.max(0, total - num(s.delivery));
+    const ref = s.receiptNumber || s.id;
+    st.used++;
+    if (!st.first || date < st.first) st.first = date;
+    if (!st.last || date > st.last) st.last = date;
+    orders.push({ order_ref: ref, barista_name: s.cashierName || "", date, approved_by: s.approvedBy || "", disc_note: s.discountNote || s.approvalReason || "", customer: s.customerName || "" });
+    for (const l of ls) {
+      const share = saleGross > 0 ? l.gross / saleGross : 0;
+      const gross = l.gross * keep, net = saleNet * share * keep;
+      if (isBranchItemExcluded(branch, l.category, l.name)) { st.excludedLines++; st.excludedNet += net; st.excludedGross += gross; continue; }
+      const disc = Math.max(0, gross - net);
+      orderItems.push({ order_ref: ref, name: l.name, unit_price: r2(l.unitEx * VAT_RATE), qty: l.qty, discount: r2(disc), disc_name: s.discountName || "", date });
+      const k = l.sku || l.name;
+      const a = agg.get(k) || { item: l.name, sku: l.sku, category: l.category, qty: 0, gross: 0, net: 0, discount: 0 };
+      a.qty += l.qty * keep; a.gross += gross; a.net += net; a.discount += disc;
+      agg.set(k, a);
+    }
+  }
+  const sales = [...agg.values()].map(a => ({ ...a, qty: r2(a.qty), gross: r2(a.gross), net: r2(a.net), discount: r2(a.discount) }));
+  st.excludedNet = r2(st.excludedNet); st.excludedGross = r2(st.excludedGross);
+  return { branch, month, sales, orderItems, orders, stats: st, netTotal: r2(sales.reduce((a, x) => a + x.net, 0)) };
+}
+function cpCommitMonth(b) {
+  const s = stamp(), batch = uuid(), { branch, month } = b;
+  // sales (aggregated per item for the month, dated mid-month like the Product-report upload)
+  const inMonth = (r) => (r.date || "").startsWith(month) && (r.branch || "").toLowerCase() === branch;
+  state.sales = (state.sales || []).filter(r => !inMonth(r));
+  state._sales_shard_wipes = state._sales_shard_wipes || [];
+  let w = state._sales_shard_wipes.find(x => x.month === month);
+  if (!w) { w = { month, branches: [] }; state._sales_shard_wipes.push(w); }
+  if (!w.branches.includes(branch)) w.branches.push(branch);
+  for (const r of b.sales) {
+    state.sales.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, device: s.device, src: "cp", branch, date: month + "-15",
+      item: r.item, sku: r.sku, qty: r.qty, gross_sales: r.gross, net_sales: r.net, discount: r.discount, discount_name: "", category: r.category });
+  }
+  state.order_items = (state.order_items || []).filter(i => !(i.branch === branch && i.month === month));
+  for (const r of b.orderItems) state.order_items.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, src: "cp", branch, month, ...r });
+  state.orders = (state.orders || []).filter(o => !(o.branch === branch && o.month === month));
+  for (const r of b.orders) if (r.barista_name) state.orders.push({ id: uuid(), batch, at: s.at, by: s.by, by_name: s.by_name, src: "cp", branch, month, ...r });
+  if (branch === "zawya" && (b.stats.excludedNet > 0 || b.stats.excludedGross > 0)) {
+    state.sales_meta = (state.sales_meta || []).filter(m => !(m.branch === "zawya" && m.month === month));
+    state.sales_meta.push({ id: uuid(), batch, branch: "zawya", month, excluded_net: b.stats.excludedNet, excluded_gross: b.stats.excludedGross });
+  }
+  saveState();
+}
+
+// Sales per barista + every discount (how many, how much, given by whom, approved by whom).
+// Built from state.order_items + state.orders, so it works for Counterpoint imports and CSV uploads alike.
+routes.discount_report = function (u, params) {
+  const wrap = el("div", {});
+  wrap.appendChild(header("Discounts & barista sales", "Who rang up what, and every discount given."));
+  let branch = (params && params.branch) || "maadi", month = (params && params.month) || new Date().toISOString().slice(0, 7);
+  const body = el("div", {});
+  const bSel = el("select", { style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" }, onChange: () => { branch = bSel.value; draw(); } },
+    ["maadi", "ox", "zawya"].map(b => { const o = el("option", { value: b }, branchLabel(b)); if (b === branch) o.selected = true; return o; }));
+  const mInp = el("input", { type: "month", value: month, style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" }, onChange: () => { month = mInp.value; draw(); } });
+  wrap.appendChild(el("div", { class: "card", style: { display: "flex", gap: "8px", flexWrap: "wrap" } }, [bSel, mInp]));
+  wrap.appendChild(body);
+  const tbl = (heads, rows) => el("div", { style: { overflowX: "auto" } }, el("table", {}, [
+    el("thead", {}, el("tr", {}, heads.map(h => el("th", {}, h)))),
+    el("tbody", {}, rows.map(r => el("tr", {}, r.map((c, i) => el("td", i ? { class: typeof c === "number" || /^[\d,.\sEGP]+$/.test(String(c)) ? "num" : "" } : {}, String(c))))))]));
+  function draw() {
+    body.innerHTML = "";
+    const items = (state.order_items || []).filter(i => i.branch === branch && i.month === month);
+    if (!items.length) { body.appendChild(el("div", { class: "card muted" }, `No order lines for ${branchLabel(branch)} ${month} yet — import it from Counterpoint (or upload the files) first.`)); return; }
+    const info = new Map((state.orders || []).filter(o => o.branch === branch && o.month === month).map(o => [o.order_ref, o]));
+    const ords = new Map();
+    for (const i of items) {
+      const o = ords.get(i.order_ref) || { ref: i.order_ref, date: i.date, gross: 0, disc: 0, qty: 0, name: "" };
+      o.gross += (Number(i.unit_price) || 0) * (Number(i.qty) || 1); o.disc += Number(i.discount) || 0; o.qty += Number(i.qty) || 1;
+      if (!o.name && i.disc_name && i.disc_name !== "-") o.name = i.disc_name;
+      ords.set(i.order_ref, o);
+    }
+    const byB = new Map();
+    for (const o of ords.values()) {
+      const inf = info.get(o.ref) || {};
+      o.barista = inf.barista_name || "(unknown)"; o.net = o.gross - o.disc;
+      const b = byB.get(o.barista) || { orders: 0, items: 0, net: 0, dOrders: 0, disc: 0 };
+      b.orders++; b.items += o.qty; b.net += o.net; if (o.disc > 0.005) { b.dOrders++; b.disc += o.disc; }
+      byB.set(o.barista, b);
+    }
+    const f = (n) => money(n), tot = [...byB.values()].reduce((a, b) => ({ orders: a.orders + b.orders, net: a.net + b.net, dOrders: a.dOrders + b.dOrders, disc: a.disc + b.disc }), { orders: 0, net: 0, dOrders: 0, disc: 0 });
+    body.appendChild(el("div", { class: "card" }, [
+      el("div", { style: { fontWeight: "600" } }, `${tot.orders} orders · net sales ${f(tot.net)} · ${tot.dOrders} discounted orders · discounts ${f(tot.disc)}`),
+    ]));
+    body.appendChild(el("div", { class: "card" }, [el("div", { style: { fontWeight: "600", marginBottom: "6px" } }, "Sales by barista"),
+      tbl(["Barista", "Orders", "Items", "Net sales", "Avg ticket", "Discounted orders", "Discount given"],
+        [...byB.entries()].sort((a, b) => b[1].net - a[1].net).map(([n, b]) => [n, b.orders, b.items, f(b.net), f(b.net / b.orders), b.dOrders, f(b.disc)]))]));
+    const dl = [...ords.values()].filter(o => o.disc > 0.005).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const byN = new Map();
+    dl.forEach(o => { const k = o.name || "(no name)"; const x = byN.get(k) || { n: 0, a: 0 }; x.n++; x.a += o.disc; byN.set(k, x); });
+    body.appendChild(el("div", { class: "card" }, [el("div", { style: { fontWeight: "600", marginBottom: "6px" } }, "Discounts by type"),
+      dl.length ? tbl(["Discount", "Times used", "Total amount"], [...byN.entries()].sort((a, b) => b[1].a - a[1].a).map(([k, x]) => [k, x.n, f(x.a)])) : el("div", { class: "muted small" }, "No discounts this month.")]));
+    body.appendChild(el("div", { class: "card" }, [el("div", { style: { fontWeight: "600", marginBottom: "6px" } }, "Every discount"),
+      dl.length ? tbl(["Date", "Order", "Given by (cashier)", "Discount", "Amount", "Approved by", "Note", "Customer"],
+        dl.map(o => { const inf = info.get(o.ref) || {}; return [o.date || "", o.ref, o.barista, o.name || "—", f(o.disc), inf.approved_by || "—", inf.disc_note || "—", inf.customer || "—"]; })) : el("div", { class: "muted small" }, "—")]));
+  }
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
 routes.sales_import = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Upload monthly POS sales", "CSV from Foodics / your POS. We match items by name or SKU."));
+
+  // ---- Import straight from Counterpoint (replaces all three CSV uploads for a branch + month) ----
+  {
+    const cpBranch = el("select", { style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" } },
+      ["maadi", "ox", "zawya"].map(b => el("option", { value: b }, branchLabel(b))));
+    const cpMonth = el("input", { type: "month", value: new Date().toISOString().slice(0, 7), style: { padding: "8px", borderRadius: "8px", border: "1px solid var(--border)" } });
+    const out = el("div", { class: "muted small", style: { marginTop: "8px" } });
+    let built = null;
+    const goBtn = el("button", { class: "btn", style: { display: "none", marginTop: "8px" }, onClick: () => {
+      if (!built) return;
+      const br = built.branch, mo = built.month;
+      const uploaded = (state.sales || []).filter(r => (r.date || "").startsWith(mo) && (r.branch || "").toLowerCase() === br && r.src !== "cp").length
+        + (state.order_items || []).filter(i => i.branch === br && i.month === mo && i.src !== "cp").length
+        + (state.orders || []).filter(o => o.branch === br && o.month === mo && o.src !== "cp").length;
+      if (uploaded && !confirm(`${branchLabel(br)} ${mo} already has ${uploaded} rows from CSV uploads. Counterpoint only covers ${built.stats.first} → ${built.stats.last}. Replace them all with the Counterpoint data?`)) return;
+      cpCommitMonth(built);
+      toast(`✓ Imported from Counterpoint — ${built.sales.length} items, ${built.orderItems.length} order lines, ${built.orders.length} orders`);
+      go("dashboard", { month: mo, branch: br });
+    } }, "Import this");
+    const previewBtn = el("button", { class: "btn secondary", onClick: async () => {
+      built = null; goBtn.style.display = "none"; out.textContent = "Reading Counterpoint…";
+      try {
+        await loadCpCatalog();
+        built = await cpBuildMonth(cpBranch.value, cpMonth.value);
+        const t = built.stats;
+        out.innerHTML = "";
+        out.appendChild(el("div", {}, `${t.salesInMonth} sales in Counterpoint for ${branchLabel(built.branch)} ${built.month} (${t.first || "—"} → ${t.last || "—"}) · ${t.used} usable · net sales ${money(built.netTotal)}`));
+        if (t.noLines) out.appendChild(el("div", { style: { color: "var(--warn)" } }, `⚠ ${t.noLines} sales have no item detail yet (the sync fetches 40 per 5 min) — import again later for a complete month.`));
+        if (t.fullRefunds || t.partialRefunds) out.appendChild(el("div", {}, `${t.fullRefunds} fully refunded sales left out · ${t.partialRefunds} partly refunded (scaled down)`));
+        if (t.excludedLines) out.appendChild(el("div", {}, `${t.excludedLines} lines of items this branch doesn't sell left out`));
+        if (!built.orders.every(o => o.barista_name) || new Set(built.orders.map(o => o.barista_name)).size < 2)
+          out.appendChild(el("div", { style: { color: "var(--warn)" } }, "⚠ Only one cashier name found — give each barista their own Counterpoint login or the upselling KPI can't tell them apart."));
+        if (t.used) goBtn.style.display = "";
+      } catch (e) { out.textContent = "✗ " + (e.message || e); }
+    } }, "Preview from Counterpoint");
+    wrap.appendChild(el("div", { class: "card" }, [
+      el("div", { style: { fontWeight: "600" } }, "Import from Counterpoint (no files needed)"),
+      el("div", { class: "muted small", style: { margin: "4px 0 8px" } }, "Builds the same sales, order items and barista rows as the three CSV uploads, straight from the till. Re-importing a month replaces it."),
+      el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" } }, [cpBranch, cpMonth, previewBtn]),
+      out, goBtn,
+      el("button", { class: "btn ghost", style: { marginTop: "8px" }, onClick: () => go("discount_report", { branch: cpBranch.value, month: cpMonth.value }) }, "View discounts & barista sales"),
+    ]));
+  }
 
   wrap.appendChild(el("div", { class: "banner-arch" },
     "Pick a branch, pick a month (used if the CSV has no date column or dates can't be parsed), then upload the CSV. " +
@@ -15638,7 +15827,7 @@ const MANAGEABLE_ROUTES = [
   "salaries","penalties","maadi_deposits",
   "overheads","bank","dashboard","menu","items_list",
   "reorder_action_list","supplier_list","inventory_engine",
-  "sales_import","users","settings",
+  "sales_import","discount_report","users","settings",
   "leave_new","leave_list",
   "my_id","my_hr","my_jd","my_scorecard",
   "staff_hr","scorecard","leaderboard","counterpoint","counterpoint_stock",
