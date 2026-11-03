@@ -869,9 +869,11 @@ const _remNorm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " "
 async function _removedLists() {
   const snap = await getDb().collection("state").doc("removed_items").get();
   const d = snap.exists ? snap.data() : {};
+  const lk = await getDb().collection("state").doc("item_lock").get();
   return {
     menu: new Set((d.menu || []).map(_remNorm)),
     inv:  new Set((d.inv  || []).map(_remNorm)),
+    lock: lk.exists ? lk.data() : null,
   };
 }
 async function _enforce(event, strip) {
@@ -891,9 +893,34 @@ exports.enforceMenuRemovals = onDocumentWritten("state/menu_data", (event) => _e
 exports.enforceItemRemovals = onDocumentWritten("state/users_items", (event) => _enforce(event, (data, bl) => {
   if (!Array.isArray(data.items)) return null;
   const dead = new Set(data.items.filter(i => i && bl.inv.has(_remNorm(i.name))).map(i => i.id));
-  const keep = data.items.filter(i => !(i && dead.has(i.id)));
+  let keep = data.items.filter(i => !(i && dead.has(i.id)));
   const patch = {};
   if (keep.length !== data.items.length) patch.items = keep;
+  // Item lock: state/item_lock = { items: { <id>: { name, unit, category, cp_sku } }, suspended }. A locked item's name, unit and
+  // (when it has one) Counterpoint code can't be changed by a device write, and a locked item can't be dropped — the stored value
+  // is put back. Items with ids not in the lock (new items) are untouched. To rename on purpose: set `suspended: true` on the lock
+  // doc (or edit the entry), make the change, then re-lock.
+  const lock = bl.lock;
+  if (lock && !lock.suspended && lock.items && typeof lock.items === "object") {
+    const now = new Date().toISOString(); let fixed = 0;
+    const byId = new Map(keep.map(i => [i && i.id, i]));
+    const out = keep.map(i => {
+      const L = i && lock.items[i.id]; if (!L) return i;
+      const next = { ...i }; let ch = false;
+      ["name", "unit"].forEach(k => { if (L[k] !== undefined && next[k] !== L[k]) { next[k] = L[k]; ch = true; } });
+      if (L.cp_sku && next.cp_sku !== L.cp_sku) { next.cp_sku = L.cp_sku; ch = true; }
+      if (ch) { next.last_edited_at = now; fixed++; return next; }
+      return i;
+    });
+    for (const [id, L] of Object.entries(lock.items)) {
+      if (byId.has(id) || bl.inv.has(_remNorm(L.name))) continue;
+      const it = { id, name: L.name, unit: L.unit, active: true, last_edited_at: now };
+      if (L.category) it.category = L.category;
+      if (L.cp_sku) it.cp_sku = L.cp_sku;
+      out.push(it); fixed++;
+    }
+    if (fixed) { keep = out; patch.items = out; console.log("item lock restored", fixed); }
+  }
   if (Array.isArray(data.inventory_alerts)) {
     const ka = data.inventory_alerts.filter(a => !(a && (dead.has(a.item_id) || bl.inv.has(_remNorm(a.item_name)))));
     if (ka.length !== data.inventory_alerts.length) patch.inventory_alerts = ka;
