@@ -874,6 +874,7 @@ async function _removedLists() {
   return {
     menuLock: ml.exists ? ml.data() : null,
     menu: new Set((d.menu || []).map(_remNorm)),
+    menuIds: new Set(d.menu_ids || []),   // rows removed by id (their name is still used by the row that was kept)
     inv:  new Set((d.inv  || []).map(_remNorm)),
     lock: lk.exists ? lk.data() : null,
   };
@@ -889,9 +890,9 @@ async function _enforce(event, strip) {
 }
 exports.enforceMenuRemovals = onDocumentWritten("state/menu_data", (event) => _enforce(event, (data, bl) => {
   if (!Array.isArray(data.menu)) return null;
-  let keep = data.menu.filter(m => !(m && bl.menu.has(_remNorm(m.name))));
+  let keep = data.menu.filter(m => !(m && (bl.menu.has(_remNorm(m.name)) || bl.menuIds.has(m.id))));
   let changed = keep.length !== data.menu.length;
-  // Menu lock: state/menu_lock = { rows: { <menuId>: { cost_egp, price_egp } }, suspended } for ops-only rows (extras etc.) whose
+  // Menu lock: state/menu_lock = { rows: { <menuId>: { name, cost_egp, price_egp } }, suspended } for ops-only rows (extras etc.) whose
   // numbers the owner set. A stale device pushing its old cost/price gets the locked value put back. Rows driven by
   // Counterpoint are never listed (the till is their source). Suspend or edit the lock doc to change a number on purpose.
   const ml = bl.menuLock;
@@ -900,7 +901,7 @@ exports.enforceMenuRemovals = onDocumentWritten("state/menu_data", (event) => _e
     keep = keep.map(m => {
       const L = m && ml.rows[m.id]; if (!L) return m;
       const next = { ...m }; let ch = false;
-      ["cost_egp", "price_egp"].forEach(k => { if (L[k] !== undefined && next[k] !== L[k]) { next[k] = L[k]; ch = true; } });
+      ["name", "cost_egp", "price_egp"].forEach(k => { if (L[k] !== undefined && next[k] !== L[k]) { next[k] = L[k]; ch = true; } });
       if (ch) { next.last_edited_at = now; changed = true; return next; }
       return m;
     });
