@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-797 -->
+<!-- CB_BUILD:20261104-810 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-797";
+  var BUILD = "20261104-810";
   (function() {
     function checkFresh() {
       try {
@@ -1205,7 +1205,7 @@ function migrateState(s) {
   // Updates the saved handbook recipes AND the ops BOM rows (state.inv_engine_recipes, Full Cream Milk lines only).
   // Rows get a fresh edit time so stale devices can't revert them (merge is newer-wins).
   if (!s._milk_ver3_migrated) {
-    const MILK = {"cappuccino":150,"latte":245,"macchiato":25,"cortado":55,"cortado team":55,"salted caramel latte":235,"mocha latte":235,"white mocha latte":235,"spanish latte":235,"hot choco beats":180,"hot choco beats m":180,"choco mallow beats":180,"choco mallow beats m":180,"spicy choco beats":180,"spicy choco beats m":180,"the director":230,"the producer":230,"the dancer":250,"berry hot":250,"matcha latte":250,"salted caramel matcha latte":235,"white matcha latte":235,"spanish matcha latte":235,"double o by omar omar":65,"elalamy by hamza diab":65};
+    const MILK = {"cappuccino":150,"latte":250,"macchiato":25,"cortado":55,"cortado team":55,"salted caramel latte":235,"mocha latte":235,"white mocha latte":235,"spanish latte":235,"hot choco beats":180,"hot choco beats m":180,"choco mallow beats":180,"choco mallow beats m":180,"spicy choco beats":180,"spicy choco beats m":180,"the director":230,"the producer":230,"the dancer":250,"berry hot":250,"matcha latte":250,"salted caramel matcha latte":235,"white matcha latte":235,"spanish matcha latte":235,"double o by omar omar":65,"elalamy by hamza diab":65};
     const nrm = (n) => String(n || "").split(" — ")[0].toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     const stamp = new Date().toISOString();
     (s.handbook_recipes || []).forEach(r => {
@@ -1222,6 +1222,20 @@ function migrateState(s) {
       if (Number(r.qty_per_serving) !== q) { r.qty_per_serving = q; r.last_edited_at = stamp; }
     });
     s._milk_ver3_migrated = true;
+  }
+
+  // One-time: Latte milk = 250 ml (rounded from 245 for ease, Haïdi 2026-11-04) — handbook + ops BOM Full Cream line.
+  if (!s._milk_latte250_migrated) {
+    const stamp = new Date().toISOString();
+    (s.handbook_recipes || []).forEach(r => {
+      if (String(r && r.name).trim().toLowerCase() !== "latte" || !Array.isArray(r.ingredients)) return;
+      const i = r.ingredients.findIndex(x => /^steamed whole milk/i.test(x));
+      if (i >= 0 && !/: 250 ml/.test(r.ingredients[i])) { r.ingredients[i] = r.ingredients[i].replace(/(:\s*)\d+(\s*ml)/i, "$1250$2"); r.last_edited_at = stamp; }
+    });
+    (s.inv_engine_recipes || []).forEach(r => {
+      if (String(r && r.menu_item_name).trim().toLowerCase() === "latte" && /full.?cream/i.test(String(r.ingredient_name || "")) && String(r.unit || "").toLowerCase() === "ml" && Number(r.qty_per_serving) !== 250) { r.qty_per_serving = 250; r.last_edited_at = stamp; }
+    });
+    s._milk_latte250_migrated = true;
   }
 
   // Ensure new collections exist
@@ -19437,7 +19451,7 @@ function handbookSeedRecipes() {
     { id: uuid(), category: "Hot Espresso", name: "Cortado", size: "4 oz", time: "5 min", coffee_notes: T1R, ingredients: ["Espresso: 18 g dose", "Steamed whole milk: 55 ml"], steps: ["Extract into cup (Type 1, yield 22–24 ml).", "Steam milk 60°C, silky, low foam.", "Pour milk gently, preserve crema.", "Serve immediately."] },
     { id: uuid(), category: "Hot Espresso", name: "Flat White", size: "8 oz", time: "5 min", coffee_notes: T1, ingredients: ["Espresso: 18 g dose", "Steamed whole milk: 150 ml"], steps: ["Extract espresso into cup.", "Steam milk 60°C, thin velvety microfoam.", "Pour milk, preserve crema. Minimal foam.", "Serve with lid."] },
     { id: uuid(), category: "Hot Espresso", name: "Cappuccino", size: "8 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 150 g"], steps: ["Extract (Type 2, yield 45 g, 32 sec).", "Steam milk to thick, creamy foam.", "Pour, preserve crema. More foam than latte.", "Serve with lid."] },
-    { id: uuid(), category: "Hot Espresso", name: "Latte", size: "12 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 245 ml"], steps: ["Extract espresso (Type 2).", "Steam milk 65°C, light microfoam.", "Pour milk, preserve crema.", "Serve with lid."] },
+    { id: uuid(), category: "Hot Espresso", name: "Latte", size: "12 oz", time: "5 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Steamed whole milk: 250 ml"], steps: ["Extract espresso (Type 2).", "Steam milk 65°C, light microfoam.", "Pour milk, preserve crema.", "Serve with lid."] },
     { id: uuid(), category: "Hot Espresso", name: "Turkish Coffee", size: "4 oz", time: "6 min", coffee_notes: TK, ingredients: ["Turkish coffee grounds: 12 g"], steps: ["Add 12 g grounds to cezve.", "Add cold water to the 4 oz line.", "Heat over low flame, stir gently, until foam rises.", "Remove from heat before boiling.", "Pour carefully including foam. Serve."] },
     // ── HOT FLAVOURED ──
     { id: uuid(), category: "Hot Flavoured Coffee", name: "Spanish Latte", size: "12 oz", time: "6 min", coffee_notes: T2, ingredients: ["Espresso: 18 g (Coffee Type 2)", "Condensed milk: 35 g", "Steamed whole milk: 235 ml"], steps: ["Extract espresso (Type 2).", "Add condensed milk, stir.", "Steam milk to light microfoam.", "Pour over base, preserve crema.", "Serve with lid."] },
@@ -20248,6 +20262,346 @@ routes.leave_list = function (u) {
   return wrap;
 };
 
+// ── Arabic version of the handbook recipes (names, ingredients, steps). Quantities are read from the English
+// recipe at render time, so a changed amount (e.g. milk ml) shows up in Arabic automatically. Anything not
+// translated here (e.g. a recipe added by hand) falls back to its English text.
+const HB_AR = {
+names: {
+  "original beats - espresso": "أوريجينال بيتس - إسبريسو",
+  "macchiato": "ماكياتو",
+  "consistent beats - americano": "كونسيستنت بيتس - أمريكانو",
+  "cortado": "كورتادو",
+  "flat white": "فلات وايت",
+  "cappuccino": "كابتشينو",
+  "latte": "لاتيه",
+  "turkish coffee": "قهوة تركية",
+  "spanish latte": "سبانش لاتيه",
+  "mocha latte": "موكا لاتيه",
+  "white mocha latte": "وايت موكا لاتيه",
+  "salted caramel latte": "سولتد كراميل لاتيه",
+  "the artist — v60 filter coffee": "ذا آرتيست — قهوة فلتر V60",
+  "the diva — haskap berry blended": "ذا ديفا — بليندد توت الهاسكاب",
+  "the actor — espressivo": "ذا أكتور — إسبريسيفو",
+  "the producer — ginger latte": "ذا برودوسر — لاتيه الزنجبيل",
+  "the director — sea salt vanilla latte": "ذا دايركتور — لاتيه الفانيليا بملح البحر",
+  "the writer — herbal tea": "ذا رايتر — شاي الأعشاب",
+  "double o by omar omar": "دابل أو من عمر عمر",
+  "elalamy by hamza diab": "العلمي من حمزة دياب",
+  "ice latte": "آيس لاتيه",
+  "ice consistent beats": "آيس كونسيستنت بيتس",
+  "ice spanish latte": "آيس سبانش لاتيه",
+  "ice salted caramel latte": "آيس سولتد كراميل لاتيه",
+  "ice mocha latte": "آيس موكا لاتيه",
+  "ice white mocha latte": "آيس وايت موكا لاتيه",
+  "matcha latte": "ماتشا لاتيه",
+  "salted caramel matcha latte": "سولتد كراميل ماتشا لاتيه",
+  "spanish matcha latte": "سبانش ماتشا لاتيه",
+  "white matcha latte": "وايت ماتشا لاتيه",
+  "ice matcha latte": "آيس ماتشا لاتيه",
+  "ice white matcha latte": "آيس وايت ماتشا لاتيه",
+  "ice salted caramel matcha latte": "آيس سولتد كراميل ماتشا لاتيه",
+  "ice spanish matcha latte": "آيس سبانش ماتشا لاتيه",
+  "blended matcha latte": "بليندد ماتشا لاتيه",
+  "blended salted caramel matcha latte": "بليندد سولتد كراميل ماتشا لاتيه",
+  "blended spanish matcha latte": "بليندد سبانش ماتشا لاتيه",
+  "blended white matcha latte": "بليندد وايت ماتشا لاتيه",
+  "classic blended beats": "كلاسيك بليندد بيتس",
+  "mocha blended beats": "موكا بليندد بيتس",
+  "white mocha blended beats": "وايت موكا بليندد بيتس",
+  "spanish blended beats": "سبانش بليندد بيتس",
+  "salted caramel blended beats": "سولتد كراميل بليندد بيتس",
+  "choco mallow beats": "تشوكو مالو بيتس",
+  "hot choco beats": "هوت تشوكو بيتس",
+  "spicy choco beats": "سبايسي تشوكو بيتس",
+  "mint to be hot chocolate": "مينت تو بي هوت شوكولاتة",
+  "berry hot": "بيري هوت",
+  "passion fruit ice tea": "آيس تي الباشن فروت",
+  "mango peach ice tea": "آيس تي المانجو والخوخ",
+  "peach ice tea": "آيس تي الخوخ",
+  "classic mojito": "موهيتو كلاسيك",
+  "passion fruit mojito": "موهيتو الباشن فروت",
+  "blue mojito": "موهيتو بلو",
+  "peach mojito": "موهيتو الخوخ",
+  "cortado team": "كورتادو تيم",
+  "french coffee": "قهوة فرنساوي",
+  "queen moka": "كوين موكا",
+  "lady moka": "ليدي موكا",
+  "the director blended": "ذا دايركتور بليندد",
+  "the dancer": "ذا دانسر",
+  "the dancer blended": "ذا دانسر بليندد",
+  "green apple mojito": "موهيتو التفاح الأخضر",
+  "green iced tea": "آيس تي أخضر",
+  "decaf shot": "شوت ديكاف",
+  "decaf extra shot": "شوت ديكاف إضافي",
+  "coffee shot": "شوت قهوة",
+  "white mocha sauce": "صوص وايت موكا",
+  "dark mocha sauce": "صوص دارك موكا",
+  "salted caramel sauce": "صوص سولتد كراميل",
+  "condensed milk": "حليب مكثف",
+  "honey": "عسل",
+  "whipped cream": "كريمة مخفوقة",
+  "oat milk": "حليب الشوفان",
+  "coconut milk": "حليب جوز الهند",
+  "almond milk": "حليب اللوز",
+  "full cream milk": "حليب كامل الدسم",
+  "skimmed milk": "حليب خالي الدسم"
+},
+ings: {
+  "coffee powder": "بن مطحون",
+  "hot water": "ماء ساخن",
+  "steamed milk foam": "رغوة الحليب المبخّر",
+  "espresso": "إسبريسو",
+  "optional: milk, 100 ml": "اختياري: حليب، 100 مل",
+  "steamed whole milk": "حليب كامل مبخّر",
+  "turkish coffee grounds": "بن تركي مطحون",
+  "condensed milk": "حليب مكثف",
+  "dark chocolate sauce": "صوص شوكولاتة داكنة",
+  "white chocolate syrup": "سيروب شوكولاتة بيضاء",
+  "salted caramel sauce": "صوص كراميل مملح",
+  "cold milk": "حليب بارد",
+  "ice": "ثلج",
+  "vanilla powder": "بودرة فانيليا",
+  "haskap berries": "توت الهاسكاب",
+  "vanilla syrup": "سيروب فانيليا",
+  "fresh cream": "كريمة طازجة",
+  "ground ginger": "زنجبيل مطحون",
+  "sea salt vanilla sauce": "صوص فانيليا بملح البحر",
+  "tea bag": "كيس شاي",
+  "special herbs blend": "خلطة الأعشاب الخاصة",
+  "peppermint": "نعناع فلفلي",
+  "cardamom": "حبهان",
+  "honey": "عسل",
+  "whole milk": "حليب كامل الدسم",
+  "ice: full cup": "ثلج: كوب كامل",
+  "cold water": "ماء بارد",
+  "matcha powder": "بودرة ماتشا",
+  "salted sauce": "صوص مملح",
+  "white chocolate sauce": "صوص شوكولاتة بيضاء",
+  "coffee frappe powder": "بودرة فرابيه القهوة",
+  "chocolate powder": "بودرة شوكولاتة",
+  "marshmallows": "مارشميلو",
+  "milk": "حليب",
+  "cinnamon powder": "بودرة قرفة",
+  "mint-infused water": "ماء منقوع بالنعناع",
+  "tea bags": "أكياس شاي",
+  "passion fruit puree": "هريس الباشن فروت",
+  "sugar syrup": "سيروب سكر",
+  "peach puree": "هريس الخوخ",
+  "mango puree": "هريس المانجو",
+  "peach syrup": "سيروب الخوخ",
+  "virgin mojito base (v7 can)": "قاعدة موهيتو (علبة V7)",
+  "lemon slices": "شرائح ليمون",
+  "fresh mint leaves": "أوراق نعناع طازجة",
+  "blue curacao syrup": "سيروب بلو كوراساو",
+  "pineapple juice": "عصير أناناس",
+  "ice cream": "آيس كريم",
+  "green apple puree": "هريس التفاح الأخضر",
+  "decaf coffee": "قهوة ديكاف",
+  "whipped cream": "كريمة مخفوقة",
+  "oat milk": "حليب الشوفان",
+  "coconut milk": "حليب جوز الهند",
+  "almond milk": "حليب اللوز",
+  "full cream milk": "حليب كامل الدسم",
+  "skimmed milk": "حليب خالي الدسم"
+},
+notes: {
+  "Coffee Type 1 · Extraction: 26–30 sec · Brew Ratio 1:2": "قهوة نوع 1 · الاستخلاص: 26–30 ثانية · نسبة التحضير 1:2",
+  "Coffee Type 1 · Ristretto pull · Yield 22–24 ml": "قهوة نوع 1 · شوت ريستريتو · الناتج 22–24 مل",
+  "Coffee Type 2 · Extraction: ~32 sec · Brew Ratio 1:2.5": "قهوة نوع 2 · الاستخلاص: ~32 ثانية · نسبة التحضير 1:2.5",
+  "Traditional Cezve Brew · Fine Turkish Grind · Low & Slow": "تحضير تقليدي في الكنكة · طحن تركي ناعم · نار هادئة وببطء",
+  "Coffee Type 3 · V60 Pour-over · 92°C · Brew Ratio 1:15": "قهوة نوع 3 · V60 صب بطيء · 92°م · نسبة التحضير 1:15",
+  "Decaf coffee": "قهوة ديكاف"
+},
+steps: {
+  "Dose 18 g into portafilter.": "اضبط 18 جم من البن في البورتافلتر.",
+  "Extract to yield 36 ml in 26–30 sec (Coffee Type 1).": "استخلص 36 مل خلال 26–30 ثانية (قهوة نوع 1).",
+  "Serve immediately in 4 oz cup.": "قدّمه فورًا في كوب 4 أونصة.",
+  "Extract espresso 36 ml / 26–30 sec (Type 1).": "استخلص إسبريسو 36 مل / 26–30 ثانية (نوع 1).",
+  "Steam milk to dense, dry foam.": "بخّر الحليب للحصول على رغوة كثيفة وجافة.",
+  "Spoon 30 g foam on top.": "ضع 30 جم من الرغوة بالملعقة فوق الإسبريسو.",
+  "Serve immediately.": "قدّمه فورًا.",
+  "Add hot water (92°C) to cup first.": "أضف الماء الساخن (92°م) إلى الكوب أولًا.",
+  "Extract espresso (Type 1, 36 g, 26–30 sec), pour in.": "استخلص الإسبريسو (نوع 1، 36 جم، 26–30 ثانية) واسكبه فوق الماء.",
+  "Preserve espresso cream on top.": "حافظ على كريما الإسبريسو في الأعلى.",
+  "Add milk if requested. Serve with lid.": "أضف الحليب عند الطلب. قدّمه بغطاء.",
+  "Extract into cup (Type 1, yield 22–24 ml).": "استخلص في الكوب (نوع 1، الناتج 22–24 مل).",
+  "Steam milk 60°C, silky, low foam.": "بخّر الحليب على 60°م، حريري وبرغوة خفيفة.",
+  "Pour milk gently, preserve crema.": "اسكب الحليب برفق مع الحفاظ على الكريما.",
+  "Extract espresso into cup.": "استخلص الإسبريسو في الكوب.",
+  "Steam milk 60°C, thin velvety microfoam.": "بخّر الحليب على 60°م، ميكروفوم رفيع ومخملي.",
+  "Pour milk, preserve crema. Minimal foam.": "اسكب الحليب مع الحفاظ على الكريما. رغوة قليلة جدًا.",
+  "Serve with lid.": "قدّمه بغطاء.",
+  "Extract (Type 2, yield 45 g, 32 sec).": "استخلص (نوع 2، الناتج 45 جم، 32 ثانية).",
+  "Steam milk to thick, creamy foam.": "بخّر الحليب للحصول على رغوة كثيفة وكريمية.",
+  "Pour, preserve crema. More foam than latte.": "اسكب مع الحفاظ على الكريما. رغوة أكثر من اللاتيه.",
+  "Extract espresso (Type 2).": "استخلص الإسبريسو (نوع 2).",
+  "Steam milk 65°C, light microfoam.": "بخّر الحليب على 65°م، ميكروفوم خفيف.",
+  "Pour milk, preserve crema.": "اسكب الحليب مع الحفاظ على الكريما.",
+  "Add 12 g grounds to cezve.": "أضف 12 جم من البن المطحون إلى الكنكة.",
+  "Add cold water to the 4 oz line.": "أضف ماء باردًا حتى خط 4 أونصة.",
+  "Heat over low flame, stir gently, until foam rises.": "سخّنه على نار هادئة مع التقليب برفق حتى ترتفع الرغوة.",
+  "Remove from heat before boiling.": "ارفعه عن النار قبل الغليان.",
+  "Pour carefully including foam. Serve.": "اسكبه بحرص مع الرغوة. قدّمه.",
+  "Add condensed milk, stir.": "أضف الحليب المكثف وقلّب.",
+  "Steam milk to light microfoam.": "بخّر الحليب للحصول على ميكروفوم خفيف.",
+  "Pour over base, preserve crema.": "اسكبه فوق القاعدة مع الحفاظ على الكريما.",
+  "Extract espresso.": "استخلص الإسبريسو.",
+  "Add dark chocolate sauce, mix well.": "أضف صوص الشوكولاتة الداكنة وامزج جيدًا.",
+  "Finish with chocolate chips. Serve with lid.": "زيّنه برقائق الشوكولاتة. قدّمه بغطاء.",
+  "Add white chocolate syrup, mix.": "أضف سيروب الشوكولاتة البيضاء وامزج.",
+  "Add salted caramel sauce, mix.": "أضف صوص الكراميل المملح وامزج.",
+  "Heat water to 92°C exactly.": "سخّن الماء إلى 92°م بالضبط.",
+  "Rinse paper filter in V60, discard rinse water.": "اشطف فلتر الورق في الـ V60 وتخلّص من ماء الشطف.",
+  "Grind 18 g medium-fine, place in filter.": "اطحن 18 جم طحنًا متوسطًا إلى ناعم وضعها في الفلتر.",
+  "Bloom: pour 50 g water evenly, wait 30 sec.": "مرحلة التفتّح: اسكب 50 جم ماء بالتساوي وانتظر 30 ثانية.",
+  "Second pour: 140 ml over ~1 min 15 sec.": "الصبّة الثانية: 140 مل خلال حوالي دقيقة و15 ثانية.",
+  "Final pour: 60 ml over ~40 sec.": "الصبّة الأخيرة: 60 مل خلال حوالي 40 ثانية.",
+  "Allow to drip fully, serve with lid. (Iced: 125 ml hot + 125 g ice.)": "اتركها تقطر بالكامل وقدّمها بغطاء. (للمثلج: 125 مل ساخن + 125 جم ثلج.)",
+  "Add cold milk and espresso to blender.": "أضف الحليب البارد والإسبريسو إلى الخلاط.",
+  "Add cubed ice and vanilla powder.": "أضف مكعبات الثلج وبودرة الفانيليا.",
+  "Add haskap berries and vanilla syrup.": "أضف توت الهاسكاب وسيروب الفانيليا.",
+  "Blend ~35 sec until smooth.": "اخلط حوالي 35 ثانية حتى يصبح ناعمًا.",
+  "Decorate cup with flower sticker, pour in, serve with lid.": "زيّن الكوب بملصق الوردة، اسكب المشروب وقدّمه بغطاء.",
+  "Top with fresh cream. Serve immediately.": "زيّنه بالكريمة الطازجة. قدّمه فورًا.",
+  "Add condensed milk and ginger, stir.": "أضف الحليب المكثف والزنجبيل وقلّب.",
+  "Add sea salt vanilla sauce, mix.": "أضف صوص الفانيليا بملح البحر وامزج.",
+  "Bring water to boil.": "اغلِ الماء.",
+  "Place tea bag, peppermint, cardamom in cup.": "ضع كيس الشاي والنعناع الفلفلي والحبهان في الكوب.",
+  "Pour hot water, steep 3–4 min.": "اسكب الماء الساخن واتركه ينقع 3–4 دقائق.",
+  "Remove bag. Add herbs blend and honey.": "أخرج الكيس. أضف خلطة الأعشاب والعسل.",
+  "Stir well and serve.": "قلّب جيدًا وقدّمه.",
+  "Extract espresso (Type 1).": "استخلص الإسبريسو (نوع 1).",
+  "Steam milk to silky texture.": "بخّر الحليب للحصول على قوام حريري.",
+  "Add condensed milk, mix.": "أضف الحليب المكثف وامزج.",
+  "Steam milk to silky microfoam.": "بخّر الحليب للحصول على ميكروفوم حريري.",
+  "Fill cup with ice.": "املأ الكوب بالثلج.",
+  "Add cold milk to cup.": "أضف الحليب البارد إلى الكوب.",
+  "Pour espresso over milk and ice. Serve with lid.": "اسكب الإسبريسو فوق الحليب والثلج. قدّمه بغطاء.",
+  "Add cold water.": "أضف ماءً باردًا.",
+  "Pour espresso over ice and water. Serve with lid.": "اسكب الإسبريسو فوق الثلج والماء. قدّمه بغطاء.",
+  "Extract espresso, mix with condensed milk.": "استخلص الإسبريسو وامزجه مع الحليب المكثف.",
+  "Add cold milk.": "أضف الحليب البارد.",
+  "Pour espresso mixture over. Serve with lid.": "اسكب خليط الإسبريسو فوقه. قدّمه بغطاء.",
+  "Extract espresso, mix with caramel sauce.": "استخلص الإسبريسو وامزجه مع صوص الكراميل.",
+  "Extract espresso, mix with chocolate sauce.": "استخلص الإسبريسو وامزجه مع صوص الشوكولاتة.",
+  "Pour over. Serve with lid.": "اسكبه فوقه. قدّمه بغطاء.",
+  "Extract espresso, mix with white chocolate.": "استخلص الإسبريسو وامزجه مع الشوكولاتة البيضاء.",
+  "Combine matcha, hot water, honey. Whisk until smooth paste.": "اخلط الماتشا مع الماء الساخن والعسل. اخفق حتى تصبح معجونًا ناعمًا.",
+  "Steam milk 60°C, light less-foam texture.": "بخّر الحليب على 60°م بقوام خفيف قليل الرغوة.",
+  "Pour milk over matcha paste, stir gently.": "اسكب الحليب فوق معجون الماتشا وقلّب برفق.",
+  "Combine matcha, hot water, salted sauce. Whisk smooth.": "اخلط الماتشا مع الماء الساخن والصوص المملح. اخفق حتى يصبح ناعمًا.",
+  "Steam milk with light foam.": "بخّر الحليب برغوة خفيفة.",
+  "Pour milk over matcha base. Serve with lid.": "اسكب الحليب فوق قاعدة الماتشا. قدّمه بغطاء.",
+  "Combine matcha, hot water, condensed milk. Whisk smooth.": "اخلط الماتشا مع الماء الساخن والحليب المكثف. اخفق حتى يصبح ناعمًا.",
+  "Combine matcha, hot water, white chocolate. Whisk smooth.": "اخلط الماتشا مع الماء الساخن والشوكولاتة البيضاء. اخفق حتى يصبح ناعمًا.",
+  "Combine matcha, hot water, honey. Whisk smooth.": "اخلط الماتشا مع الماء الساخن والعسل. اخفق حتى يصبح ناعمًا.",
+  "Fill cup with cold milk and ice.": "املأ الكوب بالحليب البارد والثلج.",
+  "Pour matcha liquid over top. Serve with lid.": "اسكب سائل الماتشا فوقه. قدّمه بغطاء.",
+  "Pour matcha over top. Serve with lid.": "اسكب الماتشا فوقه. قدّمه بغطاء.",
+  "Add milk to blender.": "أضف الحليب إلى الخلاط.",
+  "Add ice, matcha powder, vanilla powder.": "أضف الثلج وبودرة الماتشا وبودرة الفانيليا.",
+  "Blend until smooth and creamy.": "اخلط حتى يصبح ناعمًا وكريميًا.",
+  "Pour into cup, serve with lid.": "اسكبه في الكوب وقدّمه بغطاء.",
+  "Add ice, matcha, vanilla, salted sauce.": "أضف الثلج والماتشا والفانيليا والصوص المملح.",
+  "Blend until smooth.": "اخلط حتى يصبح ناعمًا.",
+  "Add ice, matcha, vanilla, condensed milk.": "أضف الثلج والماتشا والفانيليا والحليب المكثف.",
+  "Dissolve matcha in 15 ml hot water.": "ذوّب الماتشا في 15 مل ماء ساخن.",
+  "Add ice, vanilla, white chocolate.": "أضف الثلج والفانيليا والشوكولاتة البيضاء.",
+  "Add matcha liquid, blend smooth.": "أضف سائل الماتشا واخلط حتى يصبح ناعمًا.",
+  "Add milk and espresso to blender.": "أضف الحليب والإسبريسو إلى الخلاط.",
+  "Add cubed ice.": "أضف مكعبات الثلج.",
+  "Add frappe powder.": "أضف بودرة الفرابيه.",
+  "Blend ~35 sec. Pour into cup, serve with lid.": "اخلط حوالي 35 ثانية. اسكبه في الكوب وقدّمه بغطاء.",
+  "Add ice, vanilla powder, chocolate powder.": "أضف الثلج وبودرة الفانيليا وبودرة الشوكولاتة.",
+  "Add dark chocolate sauce.": "أضف صوص الشوكولاتة الداكنة.",
+  "Blend ~35 sec. Pour, drizzle garnish on top. Serve with lid.": "اخلط حوالي 35 ثانية. اسكبه وزيّن بالصوص من الأعلى. قدّمه بغطاء.",
+  "Add ice and vanilla powder.": "أضف الثلج وبودرة الفانيليا.",
+  "Add white chocolate syrup.": "أضف سيروب الشوكولاتة البيضاء.",
+  "Add condensed milk.": "أضف الحليب المكثف.",
+  "Add salted caramel sauce.": "أضف صوص الكراميل المملح.",
+  "Steam whole milk until hot.": "بخّر الحليب الكامل حتى يسخن.",
+  "Add chocolate powder, whisk until dissolved.": "أضف بودرة الشوكولاتة واخفق حتى تذوب.",
+  "Pour into cup, top with marshmallows.": "اسكبه في الكوب وزيّنه بالمارشميلو.",
+  "Steam milk until hot.": "بخّر الحليب حتى يسخن.",
+  "Add chocolate and cinnamon, whisk dissolved.": "أضف الشوكولاتة والقرفة واخفق حتى تذوب.",
+  "Infuse 100 ml hot water with peppermint for 2–3 min.": "انقع النعناع الفلفلي في 100 مل ماء ساخن لمدة 2–3 دقائق.",
+  "Steam 100 ml milk until hot.": "بخّر 100 مل حليب حتى يسخن.",
+  "Add chocolate powder to the mint water, whisk until dissolved.": "أضف بودرة الشوكولاتة إلى ماء النعناع واخفق حتى تذوب.",
+  "Add steamed milk, stir. Pour into cup, serve with lid.": "أضف الحليب المبخّر وقلّب. اسكبه في الكوب وقدّمه بغطاء.",
+  "Add haskap berries.": "أضف توت الهاسكاب.",
+  "Brew tea bags in hot water. Allow to cool.": "انقع أكياس الشاي في الماء الساخن واتركه ليبرد.",
+  "Add passion fruit puree and sugar syrup, stir.": "أضف هريس الباشن فروت وسيروب السكر وقلّب.",
+  "Pour over ice, serve with lid.": "اسكبه فوق الثلج وقدّمه بغطاء.",
+  "Brew tea, allow to cool.": "حضّر الشاي واتركه ليبرد.",
+  "Add peach puree, mango puree, sugar syrup. Stir.": "أضف هريس الخوخ وهريس المانجو وسيروب السكر. قلّب.",
+  "Add peach puree, peach syrup, sugar syrup. Stir.": "أضف هريس الخوخ وسيروب الخوخ وسيروب السكر. قلّب.",
+  "Add lemon slices, muddle gently.": "أضف شرائح الليمون واهرسها برفق.",
+  "Add fresh mint leaves.": "أضف أوراق النعناع الطازجة.",
+  "Pour V7 can over ice. Serve with lid.": "اسكب علبة V7 فوق الثلج. قدّمه بغطاء.",
+  "Add lemon, muddle gently.": "أضف الليمون واهرسه برفق.",
+  "Add mint and passion fruit puree.": "أضف النعناع وهريس الباشن فروت.",
+  "Add mint, blue curacao, pineapple juice.": "أضف النعناع وبلو كوراساو وعصير الأناناس.",
+  "Add mint, peach puree, peach syrup.": "أضف النعناع وهريس الخوخ وسيروب الخوخ.",
+  "Extract espresso into cup (Type 2).": "استخلص الإسبريسو في الكوب (نوع 2).",
+  "Add 12 g grounds and 100 ml milk to cezve.": "أضف 12 جم من البن المطحون و100 مل حليب إلى الكنكة.",
+  "Place 1 scoop of ice cream in the cup.": "ضع مغرفة آيس كريم واحدة في الكوب.",
+  "Pour hot espresso over the ice cream.": "اسكب الإسبريسو الساخن فوق الآيس كريم.",
+  "Add sea salt vanilla sauce.": "أضف صوص الفانيليا بملح البحر.",
+  "Combine matcha and sea salt vanilla sauce. Whisk until smooth paste.": "اخلط الماتشا مع صوص الفانيليا بملح البحر. اخفق حتى تصبح معجونًا ناعمًا.",
+  "Pour milk over matcha base, stir gently.": "اسكب الحليب فوق قاعدة الماتشا وقلّب برفق.",
+  "Add ice, matcha, vanilla powder and sea salt vanilla sauce.": "أضف الثلج والماتشا وبودرة الفانيليا وصوص الفانيليا بملح البحر.",
+  "Add mint and green apple puree.": "أضف النعناع وهريس التفاح الأخضر.",
+  "Add green apple puree and sugar syrup, stir.": "أضف هريس التفاح الأخضر وسيروب السكر وقلّب.",
+  "Dose 18 g decaf into portafilter.": "اضبط 18 جم ديكاف في البورتافلتر.",
+  "Extract into the drink, replacing the regular shot.": "استخلصه داخل المشروب بدلًا من الشوت العادي.",
+  "Serve as the drink's recipe.": "قدّمه وفق وصفة المشروب.",
+  "Extract the extra shot into the drink.": "استخلص الشوت الإضافي داخل المشروب.",
+  "Add 20 g white chocolate sauce to the drink base.": "أضف 20 جم من صوص الشوكولاتة البيضاء إلى قاعدة المشروب.",
+  "Mix well before adding milk.": "امزج جيدًا قبل إضافة الحليب.",
+  "Add 20 g dark chocolate sauce to the drink base.": "أضف 20 جم من صوص الشوكولاتة الداكنة إلى قاعدة المشروب.",
+  "Add 20 g salted caramel sauce to the drink base.": "أضف 20 جم من صوص الكراميل المملح إلى قاعدة المشروب.",
+  "Add 20 g condensed milk to the drink base.": "أضف 20 جم من الحليب المكثف إلى قاعدة المشروب.",
+  "Stir until dissolved.": "قلّب حتى يذوب.",
+  "Add 20 g honey to the drink base.": "أضف 20 جم من العسل إلى قاعدة المشروب.",
+  "Top the finished drink with 10 g whipped cream.": "زيّن المشروب الجاهز بـ 10 جم من الكريمة المخفوقة.",
+  "Use oat milk in place of whole milk.": "استخدم حليب الشوفان بدلًا من الحليب كامل الدسم.",
+  "Steam gently to light microfoam (do not overheat).": "بخّره برفق حتى ميكروفوم خفيف (لا تفرط في التسخين).",
+  "Continue with the drink's recipe.": "أكمل وفق وصفة المشروب.",
+  "Use coconut milk in place of whole milk.": "استخدم حليب جوز الهند بدلًا من الحليب كامل الدسم.",
+  "Use almond milk in place of whole milk.": "استخدم حليب اللوز بدلًا من الحليب كامل الدسم.",
+  "Use full cream milk in place of the standard milk.": "استخدم حليب كامل الدسم بدلًا من الحليب المعتاد.",
+  "Steam to light microfoam.": "بخّر حتى ميكروفوم خفيف.",
+  "Use skimmed milk in place of the standard milk.": "استخدم حليب خالي الدسم بدلًا من الحليب المعتاد."
+}
+};
+function hbArValue(v) {
+  return String(v)
+    .replace(/(\d)\s*ml\b/g, "$1 مل").replace(/(\d)\s*g\b/g, "$1 جم")
+    .replace(/°C/g, "°م").replace(/\bCoffee Type (\d)/g, "قهوة نوع $1").replace(/\bType (\d) grind/g, "طحن نوع $1")
+    .replace(/\bat (\d+)/g, "عند $1").replace(/\(cold\)/g, "(بارد)").replace(/\bLipton\b/g, "ليبتون")
+    .replace(/\bgarnish\b/g, "للتزيين").replace(/\bdose\b/g, "جرعة").replace(/\bpieces\b/g, "قطع")
+    .replace(/\bcan\b/g, "علبة").replace(/\bscoops?\b/g, "مغرفة").replace(/\bfull cup\b/g, "كوب كامل");
+}
+function hbArIngredient(line) {
+  const k = String(line || "").trim().toLowerCase();
+  if (HB_AR.ings[k]) return HB_AR.ings[k];
+  const m = String(line).match(/^([^:]*):\s*(.*)$/);
+  if (!m) return line;
+  const nm = HB_AR.ings[m[1].trim().toLowerCase()];
+  return (nm || m[1]) + ": " + hbArValue(m[2]);
+}
+function hbArRecipe(r) {
+  const nk = String(r.name || "").trim().toLowerCase();
+  return {
+    name: HB_AR.names[nk] || r.name,
+    size: String(r.size || "").replace(/\boz\b/, "أونصة") || r.size,
+    time: String(r.time || "").replace(/(\d+)\s*min\b/, (a, n) => n + " " + (+n >= 3 && +n <= 10 ? "دقائق" : "دقيقة")) || r.time,
+    coffee_notes: r.coffee_notes ? (HB_AR.notes[r.coffee_notes] || r.coffee_notes) : r.coffee_notes,
+    ingredients: (r.ingredients || []).map(hbArIngredient),
+    steps: (r.steps || []).map(s => HB_AR.steps[s] || s),
+  };
+}
+
 routes.handbook = function (u) {
   // Seed on first load
   if (!state.handbook_recipes || state.handbook_recipes.length === 0) {
@@ -20538,7 +20892,8 @@ routes.handbook = function (u) {
     recipeBody.innerHTML = "";
     const filtered = state.handbook_recipes.filter(r => {
       const matchCat = activeCategory === "all" || r.category === activeCategory;
-      const matchQ   = !searchQ || r.name.toLowerCase().includes(searchQ) || (r.ingredients||[]).join(" ").toLowerCase().includes(searchQ);
+      const _arR = lang === "ar" ? hbArRecipe(r) : null;
+      const matchQ   = !searchQ || r.name.toLowerCase().includes(searchQ) || (r.ingredients||[]).join(" ").toLowerCase().includes(searchQ) || (_arR && (_arR.name + " " + _arR.ingredients.join(" ")).toLowerCase().includes(searchQ));
       return matchCat && matchQ;
     });
 
@@ -20553,17 +20908,18 @@ routes.handbook = function (u) {
 
     Object.entries(groups).forEach(([cat, recipes]) => {
       // Category heading — always shown as bold section label above cards
-      recipeBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", textTransform: "uppercase", letterSpacing: "1.4px", color: "var(--ink)", margin: "20px 0 10px", paddingBottom: "4px", borderBottom: "2px solid var(--ink)" } }, cat));
+      recipeBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", textTransform: "uppercase", letterSpacing: "1.4px", color: "var(--ink)", margin: "20px 0 10px", paddingBottom: "4px", borderBottom: "2px solid var(--ink)", direction: lang === "ar" ? "rtl" : "ltr" } }, lang === "ar" ? (CAT_AR[cat] || cat) : cat));
 
-      recipes.forEach(recipe => {
-        const card = el("div", { class: "card", style: { marginBottom: "14px", padding: "0", overflow: "hidden", border: "1px solid var(--border)", borderRadius: "8px" } });
+      recipes.forEach(recipe0 => {
+        const recipe = lang === "ar" ? { ...recipe0, ...hbArRecipe(recipe0) } : recipe0;   // Arabic text (falls back to English)
+        const card = el("div", { class: "card", style: { marginBottom: "14px", padding: "0", overflow: "hidden", border: "1px solid var(--border)", borderRadius: "8px", direction: lang === "ar" ? "rtl" : "ltr" } });
 
         // ── Dark header: recipe name + edit button ──
         const cardHead = el("div", { style: { background: "#3b2314", color: "#f5e6d3", padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" } });
         cardHead.appendChild(el("div", { style: { fontWeight: "700", fontSize: "14px", letterSpacing: "0.3px" } }, recipe.name));
         if (canEdit) {
           const editBtn = el("button", { style: { background: "transparent", border: "1px solid rgba(245,230,211,0.35)", borderRadius: "6px", color: "#f5e6d3", padding: "4px 10px", cursor: "pointer", fontSize: "12px", flexShrink: "0" } }, "Edit");
-          editBtn.addEventListener("click", () => openRecipeEditor(recipe));
+          editBtn.addEventListener("click", () => openRecipeEditor(recipe0));
           cardHead.appendChild(editBtn);
         }
         card.appendChild(cardHead);
