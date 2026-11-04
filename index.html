@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-866 -->
+<!-- CB_BUILD:20261104-029 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-866";
+  var BUILD = "20261104-029";
   (function() {
     function checkFresh() {
       try {
@@ -952,6 +952,61 @@ const IDB = (() => {
   };
 })();
 
+// ─── Local state cache: IndexedDB (no 5 MB localStorage quota) ───
+// The whole-state browser copy used to live in localStorage and hit its quota.
+// It now lives in IndexedDB ("cb_state" / "kv"). A legacy localStorage copy is
+// migrated on first boot and then removed to free the quota. Writes are
+// serialised and coalesced (only the latest snapshot is written).
+const LocalCache = (() => {
+  let dbP, chain = Promise.resolve(), latest = null, scheduled = false;
+  const open = () => dbP ||= new Promise((res, rej) => {
+    if (typeof indexedDB === "undefined") return rej(new Error("no indexedDB"));
+    const r = indexedDB.open("cb_state", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+    r.onblocked = () => rej(new Error("idb blocked"));
+  });
+  const idbGet = async () => { const db = await open(); return new Promise((res, rej) => { const q = db.transaction("kv", "readonly").objectStore("kv").get(STORAGE_KEY); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); };
+  const idbPut = async (str) => { const db = await open(); return new Promise((res, rej) => { const tx = db.transaction("kv", "readwrite"); tx.objectStore("kv").put(str, STORAGE_KEY); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); };
+  const idbDel = async () => { const db = await open(); return new Promise((res, rej) => { const tx = db.transaction("kv", "readwrite"); tx.objectStore("kv").delete(STORAGE_KEY); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); };
+  return {
+    // Resolves to the raw JSON string (or null). Never rejects.
+    async get() {
+      let raw = null;
+      try { raw = await idbGet(); } catch (e) { console.warn("IndexedDB cache unavailable, falling back to localStorage", e); }
+      if (raw) { try { localStorage.removeItem(STORAGE_KEY); } catch (_) {} return raw; }
+      let legacy = null;
+      try { legacy = localStorage.getItem(STORAGE_KEY); } catch (_) {}
+      if (legacy) {
+        try { await idbPut(legacy); localStorage.removeItem(STORAGE_KEY); }  // migrated; frees the quota
+        catch (e) { console.warn("Could not migrate local cache to IndexedDB yet", e); }
+      }
+      return legacy;
+    },
+    // Fire-and-forget; stringify happens now, the write happens in order.
+    set(obj) {
+      try { latest = JSON.stringify(obj); } catch (e) { console.warn("Local cache serialise failed", e); return; }
+      if (scheduled) return;
+      scheduled = true;
+      chain = chain.then(async () => {
+        scheduled = false;
+        const str = latest; latest = null;
+        if (str == null) return;
+        try { await idbPut(str); }
+        catch (e) {
+          console.warn("IndexedDB write failed — state not cached locally, Firestore remains the source of truth.", e);
+          try { localStorage.setItem(STORAGE_KEY, str); } catch (_) {}
+        }
+      });
+    },
+    async remove() {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+      try { await idbDel(); } catch (_) {}
+    },
+  };
+})();
+
 // ─── Firebase Storage photo upload ───────────────────────────
 const CloudPhoto = (() => {
   const isConfigured = () => true; // always available via Firebase
@@ -1142,14 +1197,13 @@ function defaultState() {
   };
 }
 
-function loadState() {
+function loadState(raw) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultState();
     const s = JSON.parse(raw);
     migrateState(s);
-    // Persist any data-model migrations back to localStorage immediately.
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch(e) { console.warn("Migration persist failed", e); }
+    // Persist any data-model migrations back to the local cache immediately.
+    LocalCache.set(s);
     return s;
   } catch (e) {
     console.error("Bad state, resetting", e);
@@ -1700,13 +1754,8 @@ function migrateState(s) {
 // The actual JSON.stringify(state) + localStorage write, split out of saveState() so
 // it can be debounced (see below) instead of running on every single saveState() call.
 function _flushLocalCache() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (e) {
-    // localStorage quota exceeded (common after large sales uploads) — log but don't block.
-    // Firestore sync is the source of truth; localStorage is just a cache.
-    console.warn("localStorage quota exceeded — state not cached locally, but Firestore sync will still run.", e);
-  }
+  // Local cache is IndexedDB (async, no 5 MB quota). Firestore is the source of truth.
+  LocalCache.set(state);
 }
 let _saveStateFlushTimer = null;
 // `opts.immediate` pushes to Firestore right now instead of waiting for the
@@ -2833,8 +2882,7 @@ async function doSync() {
     // shows the "could not be saved" banner, even though every real write had just
     // succeeded. This is very likely why that banner kept reappearing even once the
     // actual Firestore-side chunk-size issues were fixed. Mirrors saveState().
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-    catch (e) { console.warn("localStorage quota exceeded — state not cached locally, but every change just synced to Firestore successfully.", e); }
+    LocalCache.set(state);
     if (pendingWrites === 0) {
       updateSyncBadge("synced");
       // The very first pull-on-start was skipped because this flush initially failed.
@@ -3154,8 +3202,7 @@ async function pullFromFirestore() {
     // history accumulate client-side) threw straight to the catch and skipped every
     // live cross-device listener registration and chunk-baseline snapshot below, even
     // though the actual Firestore read/merge had already succeeded. Mirrors saveState().
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-    catch (e) { console.warn("localStorage quota exceeded — state not cached locally, but the pull itself succeeded.", e); }
+    LocalCache.set(state);
     // Snapshot every chunk and shard array so the first doSync after a pull only
     // writes things that were actually changed locally — not all 14+ docs.
     for (const [chunk, keys] of Object.entries(STATE_CHUNKS)) _snapshotChunk(chunk, keys);
@@ -3343,7 +3390,7 @@ function _mergeRemoteOpeningTimes(rem) {
   state.branch_opening_times = _mergeValue(state.branch_opening_times || {}, rem);
   const changed = JSON.stringify(state.branch_opening_times) !== before;
   if (changed) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
+    LocalCache.set(state);
   }
   return changed;
 }
@@ -18373,7 +18420,7 @@ routes.settings = function (u) {
   dz.appendChild(el("h2", {}, "Danger zone"));
   dz.appendChild(el("button", { class: "btn danger", onClick: () => {
     if (!confirm("Wipe ALL data on this device? Make sure you exported a backup first.")) return;
-    localStorage.removeItem(STORAGE_KEY); location.reload();
+    LocalCache.remove().then(() => location.reload());
   }}, "Wipe local data"));
   wrap.appendChild(dz);
 
@@ -20655,6 +20702,50 @@ steps: {
   "Use skimmed milk in place of the standard milk.": "استخدم حليب خالي الدسم بدلًا من الحليب المعتاد."
 }
 };
+// Arabic additions (4 Nov 2026): recipes renamed to exact Counterpoint names + missing step lines.
+const HB_AR_NAMES_ADD = {
+  "Choco Mallow Beats M": "تشوكو مالو بيتس",
+  "Hot Choco Beats M": "هوت تشوكو بيتس",
+  "Spicy Choco Beats M": "سبايسي تشوكو بيتس",
+  "The Artist": "ذا آرتيست — قهوة فلتر V60",
+  "The Diva": "ذا ديفا — بليندد توت الهاسكاب",
+  "The Actor": "ذا أكتور — إسبريسيفو",
+  "The Producer": "ذا برودوسر — لاتيه الزنجبيل",
+  "The Director": "ذا دايركتور — لاتيه الفانيليا بملح البحر",
+  "The Writer": "ذا رايتر — شاي الأعشاب",
+  "Green Ice Tea": "آيس تي أخضر",
+  "Decaf": "ديكاف",
+  "Coffee Extra Shot": "شوت قهوة إضافي",
+  "Extra Salted Caramel Sauce": "صوص سولتد كراميل إضافي",
+  "Extra Condensed Milk": "حليب مكثف إضافي",
+  "Extra Honey": "عسل إضافي",
+  "Extra Oat Milk": "حليب شوفان إضافي",
+  "Extra Coconut Milk": "حليب جوز هند إضافي",
+  "Extra Almond Milk": "حليب لوز إضافي",
+  "Extra Full Cream Milk": "حليب كامل الدسم إضافي",
+  "Extra Skimmed Milk": "حليب خالي الدسم إضافي",
+  // new recipes
+  "Berry Matching (ice)": "بيري ماتشينج (آيس)",
+  "Berry Matching (Blended)": "بيري ماتشينج (بليندد)",
+};
+
+// 2) Step lines that have no Arabic yet
+const HB_AR_STEPS_ADD = {
+  // Berry Matching (ice)
+  "Combine matcha, hot water and vanilla syrup. Whisk smooth.": "اخلط الماتشا مع الماء الساخن وسيروب الفانيليا. اخفق حتى يصبح ناعمًا.",
+  "Fill cup with ice, add haskap berries.": "املأ الكوب بالثلج وأضف توت الهاسكاب.",
+  // Berry Matching (Blended)
+  "Add ice, vanilla powder, vanilla syrup and haskap berries.": "أضف الثلج وبودرة الفانيليا وسيروب الفانيليا وتوت الهاسكاب.",
+  "Add matcha liquid, blend ~35 sec until smooth.": "أضف سائل الماتشا واخلط حوالي 35 ثانية حتى يصبح ناعمًا.",
+  // already missing before today
+  "Add chocolate and peppermint, whisk dissolved.": "أضف الشوكولاتة والنعناع واخفق حتى يذوبا.",
+  "Second pour: 150 ml over ~1 min 15 sec.": "الصبّة الثانية: 150 مل على مدى دقيقة و15 ثانية تقريبًا.",
+  "Final pour: 70 ml over ~40 sec.": "الصبّة الأخيرة: 70 مل على مدى 40 ثانية تقريبًا.",
+  "Allow to drip fully, serve with lid. (Iced: 135 ml hot + 135 g ice.)": "اتركها تقطر بالكامل وقدّمها بغطاء. (آيس: 135 مل ساخن + 135 جم ثلج.)",
+};
+Object.entries(HB_AR_NAMES_ADD).forEach(([k, v]) => { HB_AR.names[k.trim().toLowerCase()] = v; });
+Object.assign(HB_AR.steps, HB_AR_STEPS_ADD);
+
 function hbArValue(v) {
   return String(v)
     .replace(/(\d)\s*ml\b/g, "$1 مل").replace(/(\d)\s*g\b/g, "$1 جم")
@@ -27897,7 +27988,8 @@ function exportAllCSVZip() {
 // ==============================================================
 // boot
 // ==============================================================
-state = loadState();
+LocalCache.get().then(raw => {
+state = loadState(raw);
 
 // Firebase Auth drives the entire session lifecycle.
 // onAuthStateChanged fires on every page load and after signIn/signOut.
@@ -27930,6 +28022,7 @@ auth.onAuthStateChanged(async fbUser => {
   } else {
     stopIdleTimer();
   }
+});
 });
 </script>
 </body>
