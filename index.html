@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-810 -->
+<!-- CB_BUILD:20261104-857 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-810";
+  var BUILD = "20261104-857";
   (function() {
     function checkFresh() {
       try {
@@ -1393,7 +1393,7 @@ function migrateState(s) {
     maadi: { morning: "10:00", night: "16:00" },
     zawya: { morning: "12:00", night: "18:00" },
   };
-  s.branch_opening_times.ox = s.branch_opening_times.ox || { morning: "10:00", night: "16:00" };
+  s.branch_opening_times.ox = s.branch_opening_times.ox || { morning: "09:00" };
   s.photo_log           = s.photo_log     || [];
   s.assets              = s.assets        || []; // { id, at, by, by_name, title, note, url, folder }
   s.staff_ids           = s.staff_ids     || {}; // { [userId]: [{ id, url, at, name }] }
@@ -10486,6 +10486,44 @@ function maadiCashPrompt(type, onDone) {
   });
 }
 
+// Daily sweep: move cash from the Maadi drawer into the Maadi petty-cash float.
+// Writes a paired "out" on the Maadi cash log and a "topup" on petty cash (linked
+// by ref both ways) — no bank row, since no money touches the bank.
+function maadiToPettyPrompt(onDone) {
+  const today = new Date().toISOString().slice(0, 10);
+  const tillToday = (state.shift_closes || [])
+    .filter(c => notTest(c) && c.branch === "maadi" && c.date === today)
+    .reduce((a, c) => a + (Number(c.cash) || 0) + (Number(c.talabat_cash) || 0), 0);
+  const drawer = maadiCashLedger().balance;
+  openPrompt({
+    title: T(`Send Maadi till cash to petty cash — drawer has ${money(drawer)}`, `تحويل نقدية درج المعادي إلى العهدة — الدرج ${money(drawer)}`),
+    fields: [
+      { key: "amount", label: T(`Amount (EGP) — today's shift-close cash is ${money(tillToday)}`, `المبلغ (جنيه) — نقدية إغلاق اليوم ${money(tillToday)}`), type: "number", value: tillToday },
+      { key: "date", label: T("Date","التاريخ"), type: "date", value: today },
+      { key: "note", label: T("Note","ملاحظة"), type: "text", value: "" },
+    ],
+    onSubmit: (vals) => {
+      const amt = Number(vals.amount) || 0;
+      if (amt <= 0) return toast(T("Enter a positive amount","أدخل مبلغاً موجباً"), "error");
+      if (!vals.date) return toast(T("Pick a date","اختر تاريخاً"), "error");
+      const s = stamp();
+      const note = [T("Maadi till → petty cash","درج المعادي ← العهدة"), (vals.note || "").trim()].filter(Boolean).join(" · ");
+      const logId = uuid(), pcId = uuid();
+      const test = isTestMode() ? { is_test: true } : {};
+      state.maadi_cash_log = state.maadi_cash_log || [];
+      state.maadi_cash_log.push({ id: logId, type: "out", amount: amt, date: vals.date, note, reason: "petty_topup",
+        petty_ref: pcId, by: s.by, by_name: s.by_name, at: s.at, ...test });
+      state.petty_cash.push({ id: pcId, branch: "maadi", date: vals.date, type: "topup", amount: amt,
+        balance_after: pettyCashBalance("maadi") + amt, ref: "maadi_cash", maadi_cash_ref: logId,
+        by: s.by, by_name: s.by_name, at: s.at, note, ...test });
+      delete state.settings.alerted_combined;
+      saveState();
+      toast(T(`Sent ${money(amt)} to petty cash`, `تم تحويل ${money(amt)} إلى العهدة`));
+      onDone && onDone();
+    },
+  });
+}
+
 function _maadiCashRow(r, u, onChange) {
   const isCount = r.kind === "count";
   const right = el("div", { class: "v", style: { textAlign: "end" } }, [
@@ -10499,7 +10537,9 @@ function _maadiCashRow(r, u, onChange) {
   const del = (r.manual && u && u.role === "owner")
     ? el("button", { class: "btn ghost", style: { width: "auto", padding: "2px 8px", marginTop: "4px", fontSize: "12px" }, onClick: () => {
         if (!confirm(T("Delete this cash entry?","حذف هذا القيد؟"))) return;
+        const gone = (state.maadi_cash_log || []).find(x => x.id === r.id);
         state.maadi_cash_log = (state.maadi_cash_log || []).filter(x => x.id !== r.id);
+        if (gone && gone.petty_ref) state.petty_cash = state.petty_cash.filter(x => x.id !== gone.petty_ref);
         saveState(); toast(T("Deleted","تم الحذف")); onChange && onChange();
       } }, T("Delete","حذف"))
     : null;
@@ -10573,6 +10613,7 @@ function maadiCashCard(u, onChange) {
   const btns = el("div", { class: "btn-row", style: { flexWrap: "wrap", gap: "8px", marginTop: "10px" } }, []);
   if (maadiCashCanEdit(u)) {
     btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("count", redraw) }, T("✎ Count cash","✎ جرد")));
+    btns.appendChild(el("button", { class: "btn", onClick: () => maadiToPettyPrompt(redraw) }, T("→ Send to petty cash","→ تحويل إلى العهدة")));
     btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("out", redraw) }, T("− Cash out","− صرف")));
     btns.appendChild(el("button", { class: "btn ghost", onClick: () => maadiCashPrompt("in", redraw) }, T("+ Cash in","+ إضافة")));
   }
@@ -14893,7 +14934,7 @@ function fmtHourLabel(h) {
 
 routes.roster = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header(T("Weekly schedule","الجدول الأسبوعي"), T("Morning & night shifts for Maadi, Zawya and Coffee Beats Events.","شيفتات الصباح والمساء لمعادي وزاوية وفعاليات Coffee Beats.")));
+  wrap.appendChild(header(T("Weekly schedule","الجدول الأسبوعي"), T("Morning & night shifts for Maadi, Zawya (until 24 Nov), OX (from 24 Nov: morning 9–6, 2 baristas) and Coffee Beats Events.","شيفتات الصباح والمساء لمعادي وزاوية (حتى 24 نوفمبر) وOX (من 24 نوفمبر: صباح 9–6، بريستا اثنان) وفعاليات Coffee Beats.")));
 
   state.rosters = state.rosters || [];
   const _rosterMonth = new Date().toISOString().slice(0, 7);
@@ -14935,12 +14976,17 @@ routes.roster = function (u) {
     zawya: { morning: "12:00", night: "18:00" },
     events: { morning: "10:00", night: "16:00" },
   };
-  state.branch_opening_times.ox = state.branch_opening_times.ox || { morning: "10:00", night: "16:00" };
+  state.branch_opening_times.ox = state.branch_opening_times.ox || { morning: "09:00" };
+  if (!state.branch_opening_times.ox.updated_at && state.branch_opening_times.ox.morning === "10:00") state.branch_opening_times.ox.morning = "09:00"; // old seed
+  // OX is not shown on the weekly schedule before 24 Nov 2026; once there it runs ONE morning shift 9:00–18:00 (2 baristas), no night shift.
+  const OX_SCHEDULE_FROM = "2026-11-24";
+  const _otOxVisible = _brToday() >= OX_SCHEDULE_FROM;
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
     "Sign-in stamps are checked against these times — morning AND evening shift each need their own stamp, with the same rules (evening rule starts 20 Oct 2026). 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time or no stamp = no show = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
   for (const otBranch of allBranches()) {
+    if (otBranch === "ox" && !_otOxVisible) continue;
     const brLabel = branchLabel(otBranch);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
     const otMetaEl = el("div", { class: "muted small", style: { marginBottom: "4px" } });
@@ -14950,7 +14996,7 @@ routes.roster = function (u) {
     };
     drawOtMeta();
     otCard.appendChild(otMetaEl);
-    for (const otShift of ["morning", "night"]) {
+    for (const otShift of (otBranch === "ox" ? ["morning"] : ["morning", "night"])) {
       const shLabel = otShift[0].toUpperCase() + otShift.slice(1);
       const currentVal = (state.branch_opening_times[otBranch] || {})[otShift] || "";
       const otRow = el("div", { class: "kv", style: { alignItems: "center" } });
@@ -15264,18 +15310,22 @@ routes.roster = function (u) {
   const body = el("div", { class: "stack" });
   wrap.appendChild(body);
 
-  function rosterEntry(branch, shift, day) {
-    return state.rosters.find(r => r.week_of === weekOf && r.branch === branch && r.shift === shift && r.day === day);
+  // slot: OX runs 2 baristas on the same morning shift — slot 1 (default) and slot 2.
+  function rosterEntry(branch, shift, day, slot) {
+    slot = slot || 1;
+    return state.rosters.find(r => r.week_of === weekOf && r.branch === branch && r.shift === shift && r.day === day && (r.slot || 1) === slot);
   }
   // Same person can't work the same day+shift at two branches. Returns the other branch or null.
-  function rosterConflict(userId, branch, shift, day) {
+  function rosterConflict(userId, branch, shift, day, slot) {
     if (!userId) return null;
-    const c = state.rosters.find(r => r.week_of === weekOf && r.user_id === userId && r.shift === shift && r.day === day && r.branch !== branch);
+    slot = slot || 1;
+    const c = state.rosters.find(r => r.week_of === weekOf && r.user_id === userId && r.shift === shift && r.day === day && (r.branch !== branch || (r.slot || 1) !== slot));
     return c ? c.branch : null;
   }
-  function setRosterEntry(branch, shift, day, user) {
+  function setRosterEntry(branch, shift, day, user, slot) {
     const s = stamp();
-    const existing = rosterEntry(branch, shift, day);
+    slot = slot || 1;
+    const existing = rosterEntry(branch, shift, day, slot);
     if (!user) {
       if (existing) state.rosters = state.rosters.filter(r => r.id !== existing.id);
     } else if (existing) {
@@ -15284,6 +15334,7 @@ routes.roster = function (u) {
     } else {
       state.rosters.push({
         id: uuid(), week_of: weekOf, branch, shift, day,
+        ...(slot > 1 ? { slot } : {}),
         user_id: user.id, user_name: user.name,
         by: s.by, by_name: s.by_name, at: s.at,
       });
@@ -15381,7 +15432,7 @@ routes.roster = function (u) {
       const onLeave = onLeaveIds(dayDateStr);
       const { holidays, inRamadan } = getCalendarContext(dayDateStr);
       const daySpecialDates = (state.special_dates || []).filter(e =>
-        e.date === dayDateStr && (e.branch === "all" || e.branch === "maadi" || e.branch === "zawya" || e.branch === "events")
+        e.date === dayDateStr && (e.branch === "all" || e.branch === "maadi" || e.branch === "zawya" || e.branch === "ox" || e.branch === "events")
       );
 
       // Choose card tint based on calendar context
@@ -15423,7 +15474,12 @@ routes.roster = function (u) {
       // External baristas (active only) — for events shifts
       const activeExtBaristas = (state.external_baristas || []).filter(b => b.active !== false);
 
-      for (const branch of ["maadi","zawya","events"]) {
+      // Zawya drops off after its last trading day; OX appears from 24 Nov 2026.
+      const _rosterBranches = ["maadi"];
+      if (!BRANCH_LIFECYCLE.zawya.close || dayDateStr <= BRANCH_LIFECYCLE.zawya.close) _rosterBranches.push("zawya");
+      if (dayDateStr >= OX_SCHEDULE_FROM) _rosterBranches.push("ox");
+      _rosterBranches.push("events");
+      for (const branch of _rosterBranches) {
         let branchLabel, shiftsForBranch;
         if (branch === "events") {
           if (calStatus === "loading") {
@@ -15438,8 +15494,8 @@ routes.roster = function (u) {
           branchLabel = `🎪 ${calEv.summary}`;
           shiftsForBranch = [calShift];
         } else {
-          branchLabel = T(branch[0].toUpperCase() + branch.slice(1), branch === "maadi" ? "معادي" : "زاوية");
-          shiftsForBranch = ROSTER_SHIFTS;
+          branchLabel = branch === "ox" ? "OX" : T(branch[0].toUpperCase() + branch.slice(1), branch === "maadi" ? "معادي" : "زاوية");
+          shiftsForBranch = branch === "ox" ? ["morning"] : ROSTER_SHIFTS;
         }
         const closedRec = branch === "events" ? null : (state.branch_closures || []).find(c => c.date === dayDateStr && c.branch === branch);
         const branchHdr = el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", marginTop: "8px", marginBottom: "4px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } }, [el("span", {}, branchLabel)]);
@@ -15510,9 +15566,17 @@ routes.roster = function (u) {
             T(`Closed — no penalties or calculations expected. Marked by ${closedRec.by_name || "?"}.`, `مغلق — لا خصومات ولا حسابات. بواسطة ${closedRec.by_name || "?"}.`)));
           continue;
         }
-        for (const shift of shiftsForBranch) {
-          const entry = rosterEntry(branch, shift, day);
-          const shiftLabel = T(shift[0].toUpperCase() + shift.slice(1), shift === "morning" ? "الصباح" : "المساء");
+        // OX: one morning shift (9:00–18:00) staffed by 2 baristas → two slots.
+        const _slotsForBranch = [];
+        for (const sh of shiftsForBranch) {
+          if (branch === "ox") { _slotsForBranch.push({ shift: sh, slot: 1 }, { shift: sh, slot: 2 }); }
+          else _slotsForBranch.push({ shift: sh, slot: 1 });
+        }
+        for (const { shift, slot } of _slotsForBranch) {
+          const entry = rosterEntry(branch, shift, day, slot);
+          const shiftLabel = branch === "ox"
+            ? T(`Morning 9–6 · Barista ${slot}`, `الصباح 9–6 · بريستا ${slot}`)
+            : T(shift[0].toUpperCase() + shift.slice(1), shift === "morning" ? "الصباح" : "المساء");
           const row = el("div", { class: "kv", style: { alignItems: "center" } });
           row.appendChild(el("div", { class: "k", style: { minWidth: "80px" } }, shiftLabel));
           if (canEdit) {
@@ -15545,7 +15609,7 @@ routes.roster = function (u) {
             }
             // Grey out anyone already rostered on this day+shift at another branch
             for (const o of sel.querySelectorAll("option")) {
-              const other = rosterConflict(o.value, branch, shift, day);
+              const other = rosterConflict(o.value, branch, shift, day, slot);
               if (other && !o.selected) {
                 o.disabled = true;
                 o.textContent += T(` — already at ${other[0].toUpperCase() + other.slice(1)}`, ` — معيّن في ${other === "maadi" ? "معادي" : other === "zawya" ? "زاوية" : other}`);
@@ -15564,7 +15628,7 @@ routes.roster = function (u) {
                 sel.value = entry ? entry.user_id : "";
                 return;
               }
-              const _clash = rosterConflict(sel.value, branch, shift, day);
+              const _clash = rosterConflict(sel.value, branch, shift, day, slot);
               if (_clash) {
                 toast(T(`Already rostered at ${_clash[0].toUpperCase() + _clash.slice(1)} on this day and shift — cannot be in two branches at once.`, `معيّن بالفعل في فرع آخر (${_clash === "maadi" ? "معادي" : _clash === "zawya" ? "زاوية" : _clash}) في نفس اليوم والشيفت — لا يمكن التواجد في فرعين.`), "error");
                 sel.value = entry ? entry.user_id : "";
@@ -15577,7 +15641,7 @@ routes.roster = function (u) {
               const user = isExt
                 ? (extPerson ? { id: "ext_" + extPerson.id, name: extPerson.name, _external: true, _daily_rate: extPerson.daily_rate } : null)
                 : (staff.find(s => s.id === sel.value) || null);
-              setRosterEntry(branch, shift, day, user);
+              setRosterEntry(branch, shift, day, user, slot);
               // ── Events bonus automation ───────────────────────────
               if (branch === "events") {
                 state.overtime_logs = state.overtime_logs || [];
@@ -15710,11 +15774,12 @@ routes.roster = function (u) {
           const src = state.rosters.filter(r => r.week_of === prevKey);
           if (!src.length) return toast(T("No schedule found for last week","لا يوجد جدول للأسبوع الماضي"), "error");
           for (const r of src) {
-            const exists = rosterEntry(r.branch, r.shift, r.day);
-            if (!exists && !rosterConflict(r.user_id, r.branch, r.shift, r.day)) {
+            const exists = rosterEntry(r.branch, r.shift, r.day, r.slot);
+            if (!exists && !rosterConflict(r.user_id, r.branch, r.shift, r.day, r.slot)) {
               const s = stamp();
               state.rosters.push({
                 id: uuid(), week_of: weekOf, branch: r.branch, shift: r.shift, day: r.day,
+                ...(r.slot > 1 ? { slot: r.slot } : {}),
                 user_id: r.user_id, user_name: r.user_name,
                 by: s.by, by_name: s.by_name, at: s.at,
               });
@@ -19632,12 +19697,12 @@ function removeLeaveFromRoster(leave) {
   for (let d = toD(leave.from_date), end = toD(leave.to_date); d <= end; d.setDate(d.getDate() + 1)) {
     const ds = localISODate(d), wk = sundayOf(ds), dk = ROSTER_DAYS[d.getDay()];
     for (const r of (state.rosters || []).filter(x => x.user_id === leave.user_id && x.week_of === wk && x.day === dk)) {
-      removed.push({ date: ds, week_of: r.week_of, branch: r.branch, shift: r.shift, day: r.day });
+      removed.push({ date: ds, week_of: r.week_of, branch: r.branch, shift: r.shift, day: r.day, ...(r.slot > 1 ? { slot: r.slot } : {}) });
     }
   }
   if (removed.length) {
     state.rosters = state.rosters.filter(r => !(r.user_id === leave.user_id &&
-      removed.some(x => x.week_of === r.week_of && x.day === r.day && x.branch === r.branch && x.shift === r.shift)));
+      removed.some(x => x.week_of === r.week_of && x.day === r.day && x.branch === r.branch && x.shift === r.shift && (x.slot || 1) === (r.slot || 1))));
   }
   leave.roster_removed = removed;
   return removed;
@@ -19645,9 +19710,9 @@ function removeLeaveFromRoster(leave) {
 function restoreLeaveToRoster(leave) {
   const s = stamp(), person = (state.users || []).find(u => u.id === leave.user_id);
   for (const x of (leave.roster_removed || [])) {
-    const taken = (state.rosters || []).some(r => r.week_of === x.week_of && r.day === x.day && r.branch === x.branch && r.shift === x.shift);
+    const taken = (state.rosters || []).some(r => r.week_of === x.week_of && r.day === x.day && r.branch === x.branch && r.shift === x.shift && (r.slot || 1) === (x.slot || 1));
     if (taken || !person) continue; // slot already refilled by someone else — leave it
-    state.rosters.push({ id: uuid(), week_of: x.week_of, branch: x.branch, shift: x.shift, day: x.day,
+    state.rosters.push({ id: uuid(), week_of: x.week_of, branch: x.branch, shift: x.shift, day: x.day, ...(x.slot > 1 ? { slot: x.slot } : {}),
       user_id: person.id, user_name: person.name, by: s.by, by_name: s.by_name, at: s.at });
   }
   leave.roster_removed = [];
