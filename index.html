@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-580 -->
+<!-- CB_BUILD:20261104-660 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-580";
+  var BUILD = "20261104-660";
   (function() {
     function checkFresh() {
       try {
@@ -15686,6 +15686,7 @@ routes.roster = function (u) {
 // ==============================================================
 routes.menu = function (u) {
   const wrap = el("div", {});
+  const canRemoveMenu = (u.role === "owner" || u.role === "accountant");
   wrap.appendChild(header("Menu items", "Price + cost per item. Cost drives margin; price drives revenue."));
 
   wrap.appendChild(el("div", { class: "banner-arch" }, [
@@ -15902,7 +15903,6 @@ routes.menu = function (u) {
   };
   search.addEventListener("input", draw); draw();
 
-  const canRemoveMenu = (u.role === "owner" || u.role === "accountant");
   async function removeMenuItem(m) {
     if (!canRemoveMenu) return toast("Only owner/accountant can remove menu items", "error");
     if (!confirm(`Remove "${m.name}" from the menu?\n\nIt disappears from every device and won't come back on sync.`)) return;
