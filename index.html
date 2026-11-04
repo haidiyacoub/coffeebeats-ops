@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-679 -->
+<!-- CB_BUILD:20261104-686 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-679";
+  var BUILD = "20261104-686";
   (function() {
     function checkFresh() {
       try {
@@ -15905,10 +15905,10 @@ routes.menu = function (u) {
           el("div", { class: "title" }, m.name),
           el("div", { class: "sub" }, `${m.category || "—"} · price ${money(m.price_egp)} · cost ${m.cost_egp ? money(m.cost_egp) : "—"}`),
         ]),
-        el("div", {}, [
+        el("div", { style: { flex: "none" } }, [
           margin != null ? el("span", { class: "pill", style: { color: margin>60?"var(--ok)":margin>40?"var(--warn)":"var(--bad)" } }, `${margin.toFixed(0)}%`) : el("span", { class: "pill" }, "no cost"),
         ]),
-        canRemoveMenu ? el("button", { class: "btn ghost", title: "Remove from menu", style: { marginLeft: "8px", padding: "4px 10px" },
+        canRemoveMenu ? el("button", { class: "btn ghost", title: "Remove from menu", style: { width: "40px", minHeight: "40px", flex: "none", padding: "0", marginLeft: "4px", fontSize: "16px" },
           onClick: (e) => { e.stopPropagation(); removeMenuItem(m); } }, "🗑") : null,
       ]));
     }
