@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-857 -->
+<!-- CB_BUILD:20261104-866 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-857";
+  var BUILD = "20261104-866";
   (function() {
     function checkFresh() {
       try {
@@ -3141,6 +3141,7 @@ async function pullFromFirestore() {
     // Honor deletions made on any device: drop records the remote still carries but that
     // have been tombstoned (the union-by-id merge can't express a deletion on its own).
     _applyTombstones();
+    settleDoubleShiftOT();
     state.settings = { ...remote.settings, ...settingsBak };
     state.settings.last_pull = now();
     // Load staff directory from staff_public (single source of truth for users)
@@ -14740,6 +14741,56 @@ function localISODate(d) {
   const dd = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
 }
+// Double-shift OT is settled only AFTER the roster week (Sun–Sat) has ended.
+// A barista rostered on both morning and night the same day gets 5 extra h × 1.5 OT,
+// logged on/after the Sunday that follows that week. Also purges any not-yet-due
+// double_shift rows (e.g. ones auto-logged early by the old behaviour). Idempotent.
+function settleDoubleShiftOT() {
+  try {
+    if (!state) return;
+    state.overtime_logs = state.overtime_logs || [];
+    const today = localISODate(new Date());
+    const weekDone = wk => {            // wk = Sunday date string; due from the next Sunday
+      const d = new Date(wk + "T12:00:00"); d.setDate(d.getDate() + 7);
+      return today >= localISODate(d);
+    };
+    // 1. Drop pending (week not over) double-shift rows
+    const before = state.overtime_logs.length;
+    state.overtime_logs = state.overtime_logs.filter(x => !(x.kind === "double_shift" && x.date && !weekDone(sundayOf(x.date))));
+    let changed = state.overtime_logs.length !== before;
+    // 2. Create rows for double shifts in finished weeks
+    const tomb = _tombstoneSet();
+    const seen = new Set();
+    for (const r of (state.rosters || [])) {
+      if (!r || !r.week_of || !r.user_id || r.shift !== "morning" || !weekDone(r.week_of)) continue;
+      const k = r.week_of + "|" + r.day + "|" + r.user_id;
+      if (seen.has(k)) continue; seen.add(k);
+      const hasNight = state.rosters.some(q => q.week_of === r.week_of && q.day === r.day && q.user_id === r.user_id && q.shift === "night");
+      if (!hasNight) continue;
+      const di = ROSTER_DAYS.indexOf(r.day); if (di < 0) continue;
+      const dd = new Date(r.week_of + "T12:00:00"); dd.setDate(dd.getDate() + di);
+      const date = localISODate(dd);
+      if ((state.branch_closures || []).some(c => c.date === date && c.branch === String(r.branch || "").toLowerCase())) continue;
+      const id = "dsot_" + r.user_id + "_" + date;
+      if (tomb.has(id)) continue; // owner removed it after settlement
+      if (state.overtime_logs.some(x => x.kind === "double_shift" && x.user_id === r.user_id && x.date === date)) continue;
+      const sal = getSalaryForMonth(r.user_id, date.slice(0, 7));
+      const rate = sal > 0 ? sal / 30 / 8 : 0;
+      const amt = Math.round(rate * 5 * 1.5 * 100) / 100;
+      if (!(amt > 0)) continue;
+      const person = (state.users || []).find(p => p.id === r.user_id);
+      const sb = stamp();
+      state.overtime_logs.push({
+        id, user_id: r.user_id, barista: person ? person.name : (r.user_name || r.user_id),
+        date, month: date.slice(0, 7), hours: 5, rate, multiplier: 1.5, amount: amt, kind: "double_shift",
+        note: `⏰ Double shift — 5 extra h × 1.5 OT on ${date} (logged after the week ended)`,
+        approved: true, by: sb.by, by_name: sb.by_name, at: sb.at,
+      });
+      changed = true;
+    }
+    return changed;
+  } catch (e) { console.warn("settleDoubleShiftOT failed", e); }
+}
 function mondayOf(dateStr) {
   // Parse date-only strings as LOCAL noon to avoid DST / UTC-offset shifts.
   const d = dateStr
@@ -15675,45 +15726,10 @@ routes.roster = function (u) {
                 }
                 saveState();
               }
-              // ── Double-shift overtime automation ─────────────────
-              state.overtime_logs = state.overtime_logs || [];
-              const _prevUserId = entry ? entry.user_id : null;
-              const _usersToCheck = new Set();
-              if (user) _usersToCheck.add(user.id);
-              if (_prevUserId && _prevUserId !== (user && user.id)) _usersToCheck.add(_prevUserId);
-              for (const _uid of _usersToCheck) {
-                state.overtime_logs = state.overtime_logs.filter(x =>
-                  !(x.kind === "double_shift" && x.user_id === _uid && x.date === dayDateStr)
-                );
-                const _hasMorning = (state.rosters || []).some(r =>
-                  r.week_of === weekOf && r.day === day && r.shift === "morning" && r.user_id === _uid
-                );
-                const _hasNight = (state.rosters || []).some(r =>
-                  r.week_of === weekOf && r.day === day && r.shift === "night" && r.user_id === _uid
-                );
-                if (_hasMorning && _hasNight) {
-                  const _person = (state.users || []).find(p => p.id === _uid);
-                  const _sal = getSalaryForMonth(_uid, dayDateStr.slice(0, 7));
-                  const _hrRate = _sal > 0 ? _sal / 30 / 8 : 0;
-                  // Double shift = the normal 8 h shift (already in base salary) + 5 extra
-                  // hours of overtime, paid at ×1.5 (5 × 1.5 = 7.5 h-equivalent of pay).
-                  const _otHours = 5;
-                  const _otMult  = 1.5;
-                  const _otAmt = Math.round(_hrRate * _otHours * _otMult * 100) / 100;
-                  if (_otAmt > 0) {
-                    const _sb = stamp();
-                    state.overtime_logs.push({
-                      id: uuid(), user_id: _uid, barista: _person ? _person.name : _uid,
-                      date: dayDateStr, month: dayDateStr.slice(0, 7),
-                      hours: _otHours, rate: _hrRate, multiplier: _otMult, amount: _otAmt, kind: "double_shift",
-                      note: `⏰ Double shift — 5 extra h × 1.5 OT on ${dayDateStr}`,
-                      approved: true,
-                      by: _sb.by, by_name: _sb.by_name, at: _sb.at,
-                    });
-                    toast(T(`${_person ? _person.name : _uid} — double shift OT auto-logged (+${_otAmt} L.E.)`, `${_person ? _person.name : _uid} — تم تسجيل أوفرتايم الشيفت المزدوج تلقائياً (+${_otAmt} جنيه)`));
-                  }
-                }
-              }
+              // ── Double-shift overtime: NOT logged now ────────────
+              // OT is only calculated once the roster week is over (see settleDoubleShiftOT),
+              // so a double shift entered by mistake and fixed before the week ends never counts.
+              settleDoubleShiftOT();
               saveState();
               // ─────────────────────────────────────────────────────
               toast(T(`${rosterDayLabel(day)} · ${branchLabel} · ${shiftLabel} → ${user ? user.name : "empty"}`, `${rosterDayLabel(day)} · ${branchLabel} · ${shiftLabel} → ${user ? user.name : "فارغ"}`));
