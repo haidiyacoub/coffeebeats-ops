@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-359 -->
+<!-- CB_BUILD:20261104-368 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-359";
+  var BUILD = "20261104-368";
   (function() {
     function checkFresh() {
       try {
@@ -6671,6 +6671,15 @@ routes.shift_close_list = function (u) {
               `نقدي ${money(c.cash||0)} · إنستاباي ${money(c.instapay||0)} · بطاقة ${money(c.cc||0)} · طلبات رصيد ${money(c.talabat_credit||0)} · طلبات نقدي ${money(c.talabat_cash||0)}`)
       ]),
       c.extra_money_notes ? el("div", { class: "muted small", style: { color: "var(--warn, #b45309)" } }, T(`💰 Extra: ${c.extra_money_notes}`, `💰 إضافي: ${c.extra_money_notes}`)) : null,
+      (() => {
+        const p = c.cp_pull; if (!p) return null;
+        const cpTotal = (p.cash||0) + (p.cc||0) + (p.instapay||0) + (p.talabat_credit||0) + (p.talabat_cash||0) + (p.other||0);
+        const diff = Math.round((total - cpTotal) * 100) / 100;
+        const dsc = p.discount ? ` · discounts ${money(p.discount)}` : "";
+        return el("div", { class: "muted small", style: diff ? { color: "var(--warn, #b45309)" } : { color: "var(--ok)" } },
+          diff ? T(`🔗 Counterpoint: ${p.sales} sale(s), ${money(cpTotal)}${dsc} — entered total differs by ${money(diff)}`, `🔗 Counterpoint: ${p.sales} عملية، ${money(cpTotal)}${dsc} — الإجمالي المُدخل يختلف بمقدار ${money(diff)}`)
+               : T(`🔗 Counterpoint: ${p.sales} sale(s), ${money(cpTotal)}${dsc} — matches`, `🔗 Counterpoint: ${p.sales} عملية، ${money(cpTotal)}${dsc} — مطابق`));
+      })(),
       el("div", { class: "muted small" }, T(`Barista drinks: ${baDrinks}`, `مشروبات البريستا: ${baDrinks}`)),
       el("div", { class: "muted small" }, T(`${c.branch === "zawya" ? "Cinema hospitality drink" : "Hospitality drink"}: ${c.cinema_free_count||0}${c.cinema_free_note ? " · " + c.cinema_free_note : ""}`,
         `${c.branch === "zawya" ? "مشروب ضيافة السينما" : "مشروب الضيافة"}: ${c.cinema_free_count||0}${c.cinema_free_note ? " · " + c.cinema_free_note : ""}`)),
