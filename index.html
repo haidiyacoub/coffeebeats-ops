@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261103-295 -->
+<!-- CB_BUILD:20261104-359 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261103-295";
+  var BUILD = "20261104-359";
   (function() {
     function checkFresh() {
       try {
@@ -6282,6 +6282,7 @@ routes.shift_close_new = function (u) {
   let cc       = "";
   let talabat_credit = "";
   let talabat_cash   = "";
+  let cpPull = null;   // Counterpoint takings last pulled into the form (kept on the saved record)
 
   // Barista allowance drinks — dynamic rows [{who, drink}]
   // Returns all active baristas/head-baristas/managers/helpers assigned to the current branch.
@@ -6417,6 +6418,48 @@ routes.shift_close_new = function (u) {
     // ── Cash & digital payments ──
     const cashOnly = branch === "zawya";
     form.appendChild(el("h2", { style: { marginTop: "14px" } }, T("Payments received","المدفوعات المستلمة")));
+    const cpMsg = el("div", { class: "muted small", style: { marginTop: "6px" } },
+      cpPull ? T(`Filled from Counterpoint: ${cpPull.sales} sale(s), discounts ${money(cpPull.discount)}.`, `تمت التعبئة من Counterpoint: ${cpPull.sales} عملية، خصومات ${money(cpPull.discount)}.`) : "");
+    form.appendChild(el("button", { class: "btn ghost", onClick: async (ev) => {
+      const btn = ev.currentTarget; btn.disabled = true; cpMsg.textContent = T("Reading Counterpoint…","جارٍ القراءة من Counterpoint…");
+      try {
+        const t = await cpShiftTotals(branch, date);
+        if (!t.sales) { cpMsg.textContent = T(`No Counterpoint sales found for ${branch} on ${date}.`, `لا توجد مبيعات في Counterpoint لـ ${branch} بتاريخ ${date}.`); btn.disabled = false; return; }
+        const f = (n) => n ? String(n) : "";
+        cash = f(t.cash);
+        if (branch !== "zawya") { cc = f(t.cc); instapay = f(t.instapay); talabat_credit = f(t.talabat_credit); talabat_cash = f(t.talabat_cash); }
+        cpPull = t;
+        // Complimentary drinks are rung up with a named discount: sort them into the three drink logs.
+        const baR = [], mgR = [];
+        let hospCount = 0; const hospNames = [];
+        for (const g of Object.values(t.discounts)) {
+          const who = (g.notes[0] || "").slice(0, 40);
+          const drinks = g.drinks.length ? g.drinks : Array(g.count).fill(g.name);
+          if (/hospitality|cinema|guest|ضيافة/i.test(g.name)) { hospCount += g.count; hospNames.push(g.name + (g.notes.length ? " — " + g.notes.join("; ") : "")); }
+          else if (/manag|owner|haidi|haïdi|luke|youssef|إدارة/i.test(g.name)) {
+            const m = MANAGERS.find(x => new RegExp(x, "i").test(g.name + " " + g.notes.join(" "))) || MANAGERS[0];
+            drinks.forEach(d => mgR.push({ who: m, drink: d }));
+          }
+          else if (/barista|staff|team|employee|allowance|بريستا|موظف/i.test(g.name)) drinks.forEach(d => baR.push({ who, drink: d }));
+        }
+        if (baR.length) baristaAllowanceDrinks = baR;
+        if (mgR.length) mgmtDrinks = mgR;
+        if (hospCount) { cinemaFreeCount = String(hospCount); cinemaFreeNote = hospNames.join(" · "); }
+        const oth = t.other ? ` ⚠ ${money(t.other)} paid by ${Object.keys(t.otherNames).join(", ")} — not in any field above, add it by hand.` : "";
+        if (oth) extraMoneyNotes = (extraMoneyNotes ? extraMoneyNotes + "\n" : "") + `Counterpoint other tender: ${money(t.other)} (${Object.keys(t.otherNames).join(", ")})`;
+        draw();
+        toast(T("Filled from Counterpoint ✓" + oth, "تمت التعبئة من Counterpoint ✓" + oth));
+      } catch (e) { cpMsg.textContent = T("Couldn't read Counterpoint: ","تعذّرت القراءة من Counterpoint: ") + (e.message || e); btn.disabled = false; }
+    } }, T("⬇ Pull from Counterpoint","⬇ سحب من Counterpoint")));
+    form.appendChild(cpMsg);
+    if (cpPull && Object.keys(cpPull.discounts).length) {
+      form.appendChild(el("div", { class: "card", style: { marginTop: "8px" } }, [
+        el("div", { style: { fontWeight: "600" } }, T("Discounts rung up in Counterpoint","الخصومات المسجلة في Counterpoint")),
+        ...Object.values(cpPull.discounts).map(g => el("div", { class: "muted small" },
+          `${g.name} · ${g.count} sale(s) · ${money(g.amount)}${g.drinks.length ? " · " + g.drinks.join(", ") : ""}`)),
+        el("div", { class: "muted small", style: { marginTop: "4px" } }, T("Names containing barista/staff, hospitality/cinema, or management/Haïdi/Luke/Youssef are filled into the drink logs below. Check them.","الأسماء التي تحتوي على بريستا/موظف أو ضيافة/سينما أو إدارة/هايدي/لوك/يوسف تُعبَّأ في سجلات المشروبات أدناه. راجعها.")),
+      ]));
+    }
     if (cashOnly) {
       form.appendChild(el("div", { class: "muted small" }, T("Zawya is a concession inside the cinema — card, InstaPay and Talabat are settled by the venue, so only cash is counted here.","زاوية ركن داخل السينما — البطاقة وإنستاباي وطلبات يسوّيها المكان، لذا يُحتسب النقدي فقط هنا.")));
     }
@@ -6516,6 +6559,7 @@ routes.shift_close_new = function (u) {
         talabat_credit:  Number(talabat_credit) || 0,
         talabat_cash:    Number(talabat_cash)   || 0,
         extra_money_notes: extraMoneyNotes.trim(),
+        ...(cpPull ? { cp_pull: { sales: cpPull.sales, cash: cpPull.cash, cc: cpPull.cc, instapay: cpPull.instapay, talabat_credit: cpPull.talabat_credit, talabat_cash: cpPull.talabat_cash, other: cpPull.other, discount: cpPull.discount, discount_sales: cpPull.discountSales, discounts: Object.values(cpPull.discounts).map(g => ({ name: g.name, count: g.count, amount: Math.round(g.amount * 100) / 100, drinks: g.drinks })), at: new Date().toISOString() } } : {}),
         barista_allowance_drinks: baristaAllowanceDrinks.filter(r => r.drink.trim()),
         cinema_free_count: Number(cinemaFreeCount) || 0,
         cinema_free_note:  cinemaFreeNote.trim(),
@@ -13648,6 +13692,53 @@ async function cpBuildMonth(branch, month) {
   const sales = [...agg.values()].map(a => ({ ...a, qty: r2(a.qty), gross: r2(a.gross), net: r2(a.net), discount: r2(a.discount) }));
   st.excludedNet = r2(st.excludedNet); st.excludedGross = r2(st.excludedGross);
   return { branch, month, sales, orderItems, orders, stats: st, netTotal: r2(sales.reduce((a, x) => a + x.net, 0)) };
+}
+// One branch-day of Counterpoint takings, grouped the way the shift-close form asks for them.
+// Tenders are net of refunds (a partly/fully refunded sale is scaled down). Unrecognised tender
+// names land in `other` so nothing is silently dropped.
+async function cpShiftTotals(branch, date) {
+  const re = { maadi: /maadi/i, zawya: /zawya/i, ox: /\box\b/i }[branch];
+  const locSnap = await db.collection("counterpoint_locations").get();
+  let locId = null;
+  locSnap.docs.forEach(d => { if (re && re.test(d.data().name || "")) locId = d.id; });
+  if (!locId) throw new Error(`Counterpoint has no location named like "${branch}" yet.`);
+  const d0 = new Date(date + "T00:00:00Z").getTime();
+  const snap = await db.collection("counterpoint_sales")
+    .where("createdAt", ">=", new Date(d0 - 86400000).toISOString())
+    .where("createdAt", "<", new Date(d0 + 2 * 86400000).toISOString()).get();
+  const num = (x) => Number(x) || 0, r2 = (x) => Math.round(x * 100) / 100;
+  const t = { cash: 0, cc: 0, instapay: 0, talabat_credit: 0, talabat_cash: 0, other: 0, otherNames: {}, discounts: {}, sales: 0, discount: 0, discountSales: 0, refunded: 0 };
+  for (const doc of snap.docs) {
+    const s = doc.data();
+    if (s.kind === "refund.created") continue;   // the original sale already carries its refunded amount
+    if (s.locationId != null && String(s.locationId) !== String(locId)) continue;
+    if (!s.createdAt || _cairoDate(s.createdAt) !== date) continue;
+    const total = num(s.total), refunded = num(s.refundedTotal);
+    const keep = s.refunded === true ? 0 : (total > 0 && refunded > 0 ? Math.max(0, 1 - refunded / total) : 1);
+    t.sales++; t.refunded += refunded;
+    if (num(s.discount) > 0 || s.discountName) {
+      if (num(s.discount) > 0) { t.discount += num(s.discount) * keep; t.discountSales++; }
+      if (keep > 0) {
+        const dn = String(s.discountName || "(no name)").trim();
+        const g = t.discounts[dn] || (t.discounts[dn] = { name: dn, count: 0, amount: 0, drinks: [], notes: [] });
+        g.count++; g.amount += num(s.discount) * keep;
+        const note = String(s.discountNote || s.approvalReason || "").trim();
+        if (note) g.notes.push(note);
+        for (const l of (s.lines || [])) for (let i = 0; i < Math.max(1, num(l.quantity ?? l.qty ?? 1)); i++) g.drinks.push(l.name || l.sku || "?");
+      }
+    }
+    const tenders = Array.isArray(s.tenders) && s.tenders.length ? s.tenders : [{ tender: s.tender, amount: s.total }];
+    for (const x of tenders) {
+      const name = String(x.tender || "").toLowerCase(), amt = num(x.amount) * keep;
+      if (name === "cash") t.cash += amt;
+      else if (name === "card") t.cc += amt;
+      else if (/insta/.test(name)) t.instapay += amt;
+      else if (/talabat/.test(name)) { if (/cash/.test(name)) t.talabat_cash += amt; else t.talabat_credit += amt; }
+      else { t.other += amt; t.otherNames[name || "?"] = 1; }
+    }
+  }
+  for (const k of ["cash", "cc", "instapay", "talabat_credit", "talabat_cash", "other", "discount", "refunded"]) t[k] = r2(t[k]);
+  return t;
 }
 function cpCommitMonth(b) {
   const s = stamp(), batch = uuid(), { branch, month } = b;
