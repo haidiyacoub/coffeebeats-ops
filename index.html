@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261106-472 -->
+<!-- CB_BUILD:20261106-484 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261106-472";
+  var BUILD = "20261106-484";
   (function() {
     function checkFresh() {
       try {
@@ -19249,7 +19249,7 @@ routes.signin_stamp_list = function (u) {
   const selStyle = { padding: "6px 8px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "inherit", fontSize: "13px" };
 
   // ── Filters ─────────────────────────────────────────────
-  let fBranch = "all", fStaff = "all", fStatus = "all", fFrom = "", fTo = "";
+  let fBranch = "all", fStaff = "all", fStatus = "all", fMonth = localISODate(new Date()).slice(0, 7);
   const branchOptions = ["all", ...Array.from(new Set(all.map(s => (s.branch||"").toLowerCase()).filter(Boolean))).sort()];
   const staffOptions  = ["all", ...Array.from(new Set(all.map(s => s.by_name).filter(Boolean))).sort()];
 
@@ -19278,13 +19278,21 @@ routes.signin_stamp_list = function (u) {
   statusSel.addEventListener("change", () => { fStatus = statusSel.value; draw(); });
   filterBar.appendChild(statusSel);
 
-  const fromInput = el("input", { type: "date", style: selStyle });
-  fromInput.addEventListener("input", () => { fFrom = fromInput.value; draw(); });
-  filterBar.appendChild(fromInput);
-
-  const toInput = el("input", { type: "date", style: selStyle });
-  toInput.addEventListener("input", () => { fTo = toInput.value; draw(); });
-  filterBar.appendChild(toInput);
+  // ── Month view: ◀ month ▶ (defaults to the current month; "All" shows every month) ──
+  const monthInp = el("input", { type: "month", value: fMonth, style: selStyle });
+  const shiftMonth = (d) => {
+    const base = fMonth || localISODate(new Date()).slice(0, 7);
+    const [y, m] = base.split("-").map(Number);
+    const dt = new Date(y, m - 1 + d, 1);
+    fMonth = dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0");
+    monthInp.value = fMonth; draw();
+  };
+  const mBtn = (label, fn) => el("button", { class: "btn ghost", style: { width: "auto", padding: "6px 12px" }, onClick: fn }, label);
+  monthInp.addEventListener("input", () => { fMonth = monthInp.value; draw(); });
+  filterBar.appendChild(mBtn("◀", () => shiftMonth(-1)));
+  filterBar.appendChild(monthInp);
+  filterBar.appendChild(mBtn("▶", () => shiftMonth(1)));
+  filterBar.appendChild(mBtn(T("All months","كل الأشهر"), () => { fMonth = ""; monthInp.value = ""; draw(); }));
 
   wrap.appendChild(filterBar);
 
@@ -19407,8 +19415,7 @@ routes.signin_stamp_list = function (u) {
     let rows = all.slice().sort((a, b) => b.at.localeCompare(a.at));
     if (fBranch !== "all") rows = rows.filter(s => (s.branch||"").toLowerCase() === fBranch);
     if (fStaff  !== "all") rows = rows.filter(s => s.by_name === fStaff);
-    if (fFrom) rows = rows.filter(s => localISODate(new Date(s.at)) >= fFrom);
-    if (fTo)   rows = rows.filter(s => localISODate(new Date(s.at)) <= fTo);
+    if (fMonth) rows = rows.filter(s => localISODate(new Date(s.at)).slice(0, 7) === fMonth);
 
     let scored = rows.map(s => { const minsLate = _signinMinsLate(s); return { s, minsLate, status: _signinStatus(minsLate) }; });
     if (fStatus !== "all") scored = scored.filter(r => r.status === fStatus);
@@ -19425,7 +19432,7 @@ routes.signin_stamp_list = function (u) {
       `${scored.length} سجل · ${counts.early} مبكر · ${counts.ontime} في الموعد · ${lateCount} متأخر`
     );
 
-    if (shown.length === 0) { list.appendChild(el("div", { class: "muted" }, T("No sign-in stamps match these filters.","لا توجد بصمات حضور مطابقة لهذه الفلاتر."))); return; }
+    if (shown.length === 0) { list.appendChild(el("div", { class: "muted" }, T("No sign-in stamps match these filters for this month.","لا توجد بصمات حضور مطابقة لهذه الفلاتر في هذا الشهر."))); return; }
 
     for (const { s, minsLate, status } of shown) {
       const covered = isCoverStamp(s);
@@ -21963,6 +21970,26 @@ routes.handbook = function (u) {
     toast(`Exported ${rows.length} recipes`);
   });
   handbookBar.appendChild(exportRecipesBtn);
+
+  // Arabic export: same columns, with names / ingredients / steps / notes translated via hbArRecipe
+  // (anything without an Arabic translation falls back to the English text). BOM so Excel reads UTF-8.
+  const exportRecipesArBtn = el("button", { class: "btn secondary" }, "⬇ تصدير الوصفات (عربي)");
+  exportRecipesArBtn.addEventListener("click", () => {
+    const rows = (state.handbook_recipes || []).map(r => {
+      const a = hbArRecipe(r);
+      return {
+        "الفئة": r.category, "الاسم": a.name, "الحجم": a.size, "الوقت": a.time,
+        "ملاحظات القهوة": a.coffee_notes || "", "الوصف": r.description || "",
+        "المكونات": (a.ingredients || []).join(" | "),
+        "الخطوات": (a.steps || []).join(" | "),
+      };
+    });
+    if (!rows.length) { toast("No recipes to export."); return; }
+    const dateStr = new Date().toISOString().slice(0, 10);
+    download(`cb-handbook-recipes-ar-${dateStr}.csv`, new Blob(["\ufeff" + toCSV(rows)], { type: "text/csv;charset=utf-8" }));
+    toast(`تم تصدير ${rows.length} وصفة`);
+  });
+  handbookBar.appendChild(exportRecipesArBtn);
 
   const exportOMBtn = el("button", { class: "btn secondary" }, "⬇ Export Operating Model");
   exportOMBtn.addEventListener("click", () => {
