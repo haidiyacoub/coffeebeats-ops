@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261104-041 -->
+<!-- CB_BUILD:20261106-408 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261104-041";
+  var BUILD = "20261106-408";
   (function() {
     function checkFresh() {
       try {
@@ -7292,6 +7292,111 @@ routes.snapshot_new = function (u) {
 //   - "inventory" — an item that sits in the stock count. Has a purchase unit
 //     (bottle, pack, carton…) + pack size in the inventory unit (ml, g, pcs).
 // ==============================================================
+// ---------------- Inventory status (per branch) ----------------
+function invStatusBranches(u) {
+  const all = !u || u.role === "owner" || u.role === "accountant";
+  return activeBranches().filter(b => all || (u.branches || []).includes(b));
+}
+// Last physical count for a branch: latest snapshot taken FOR that branch (snapshots also carry
+// over other branches' values, so we go by snapshot.branch, not by entries).
+function _snapBranch(s) { return s.branch || String(s.notes || "").split(" ")[0]; }
+function inventoryStatusData(branch) {
+  const snaps = (state.snapshots || []).filter(s => _snapBranch(s) === branch)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const last = snaps[snaps.length - 1] || null;
+  const lastItem = {};   // item_id -> { as_of, by }
+  for (const s of snaps) {
+    const ids = Array.isArray(s.counted_item_ids) ? s.counted_item_ids
+      : (s.entries || []).filter(e => e.branch === branch).map(e => e.item_id);
+    for (const id of ids) lastItem[id] = { as_of: s.as_of, by: s.created_by_name || s.created_by || "" };
+  }
+  const stocks = computeStock(branch);
+  const rows = [];
+  for (const it of (state.items || [])) {
+    if (!it.active) continue;
+    const cfg = (state.inventory_alerts || {})[it.id] || {};
+    const threshold = Number(cfg.reorder_threshold_days) > 0 ? Number(cfg.reorder_threshold_days) : 7;
+    const stock = stocks[it.id] || 0;
+    const usage = computeDailyUsage(it.id, branch);
+    const cover = usage > 0 ? stock / usage : null;
+    let status = "ok";
+    if (stock <= 0) status = "out";
+    else if (cover != null && cover < threshold) status = "low";
+    else if (cover == null) status = "nodata";
+    rows.push({ item: it, stock, usage, cover, threshold, status, counted: lastItem[it.id] || null });
+  }
+  const rank = { out: 0, low: 1, ok: 2, nodata: 3 };
+  rows.sort((a, b) => (rank[a.status] - rank[b.status])
+    || ((a.cover == null ? 1e9 : a.cover) - (b.cover == null ? 1e9 : b.cover))
+    || a.item.name.localeCompare(b.item.name));
+  return { branch, last: last ? { as_of: last.as_of, at: last.created_at, by: last.created_by_name || last.created_by || "—" } : null, rows };
+}
+const INV_STATUS_LABEL = {
+  out:    ["Out of stock", "نفد المخزون", "var(--bad)"],
+  low:    ["Low", "منخفض", "var(--bad)"],
+  ok:     ["OK", "جيد", "var(--ok)"],
+  nodata: ["No usage data", "لا بيانات استهلاك", "var(--muted)"],
+};
+function inventoryStatusCard(d) {
+  const card = el("div", { class: "card", style: { marginBottom: "16px" } });
+  const nLow = d.rows.filter(r => r.status === "out" || r.status === "low").length;
+  card.appendChild(el("div", { style: { fontWeight: "700", fontSize: "18px" } }, `📦 ${branchLabel(d.branch)}`));
+  card.appendChild(el("div", { class: "muted small", style: { margin: "2px 0 6px" } }, d.last
+    ? T(`Last count: ${fmtDay(d.last.as_of)} by ${d.last.by}`, `آخر جرد: ${fmtDay(d.last.as_of)} بواسطة ${d.last.by}`)
+    : T("No count recorded yet for this branch","لم يُسجَّل أي جرد لهذا الفرع بعد")));
+  card.appendChild(el("div", { style: { color: nLow ? "var(--bad)" : "var(--ok)", fontWeight: "600", marginBottom: "8px" } }, nLow
+    ? T(`⚠ ${nLow} item${nLow > 1 ? "s" : ""} low or out — most urgent first`, `⚠ ${nLow} صنف منخفض أو نافد — الأكثر استعجالاً أولاً`)
+    : T("✅ All items well stocked","✅ كل الأصناف بمخزون جيد")));
+  for (const r of d.rows) {
+    const [en, ar, color] = INV_STATUS_LABEL[r.status];
+    const coverTxt = r.cover == null ? "" : T(` · ~${r.cover.toFixed(1)}d cover`, ` · ~${r.cover.toFixed(1)} يوم تغطية`);
+    const cnt = r.counted ? T(` · counted ${fmtDay(r.counted.as_of)}`, ` · جرد ${fmtDay(r.counted.as_of)}`) : "";
+    card.appendChild(el("div", { class: "kv" }, [
+      el("div", { class: "k" }, [
+        el("div", { style: r.status === "out" || r.status === "low" ? { fontWeight: "700" } : {} }, r.item.name),
+        el("div", { class: "muted small" }, `${r.item.category || ""}${cnt}${r.counted && r.counted.by ? " · " + r.counted.by : ""}`),
+      ]),
+      el("div", { class: "v", style: { textAlign: "right" } }, [
+        el("div", {}, fmtQty(r.stock, r.item.unit)),
+        el("div", { class: "small", style: { color, fontWeight: "600" } }, T(en, ar) + coverTxt),
+      ]),
+    ]));
+  }
+  return card;
+}
+function exportInventoryStatusXlsx(branches) {
+  const wb = XLSX.utils.book_new();
+  const fmtD = (x) => (x ? String(x).slice(0, 10) : "");
+  const datas = branches.map(b => inventoryStatusData(b));
+  const summary = [["Branch", "Last count date", "Counted by", "Items", "Out of stock", "Low", "OK", "No usage data"]];
+  for (const d of datas) {
+    const n = (s) => d.rows.filter(r => r.status === s).length;
+    summary.push([branchLabel(d.branch), d.last ? fmtD(d.last.as_of) : "never", d.last ? d.last.by : "", d.rows.length, n("out"), n("low"), n("ok"), n("nodata")]);
+  }
+  const sws = XLSX.utils.aoa_to_sheet(summary);
+  sws["!cols"] = [{ wch: 14 }, { wch: 16 }, { wch: 22 }, { wch: 8 }, { wch: 13 }, { wch: 8 }, { wch: 8 }, { wch: 14 }];
+  XLSX.utils.book_append_sheet(wb, sws, "Summary");
+  for (const d of datas) {
+    const aoa = [
+      [`${branchLabel(d.branch)} — inventory status`],
+      [d.last ? `Last count: ${fmtD(d.last.as_of)} by ${d.last.by}` : "No count recorded yet"],
+      [`Exported ${new Date().toISOString().slice(0, 16).replace("T", " ")} · most urgent first`],
+      [],
+      ["Priority", "Item", "Category", "Unit", "Status", "Theoretical stock", "Daily use", "Days of cover", "Alert threshold (days)", "Item last counted", "Item counted by"],
+    ];
+    d.rows.forEach((r, i) => aoa.push([
+      i + 1, r.item.name, r.item.category || "", r.item.unit || "", INV_STATUS_LABEL[r.status][0],
+      Math.round(r.stock * 100) / 100, Math.round(r.usage * 100) / 100,
+      r.cover == null ? "" : Math.round(r.cover * 10) / 10, r.threshold,
+      r.counted ? fmtD(r.counted.as_of) : "", r.counted ? r.counted.by : "",
+    ]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 8 }, { wch: 30 }, { wch: 16 }, { wch: 7 }, { wch: 15 }, { wch: 17 }, { wch: 11 }, { wch: 14 }, { wch: 20 }, { wch: 17 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, ws, branchLabel(d.branch).slice(0, 31));
+  }
+  XLSX.writeFile(wb, `inventory-status-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
 routes.reorder_action_list = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header(T("Inventory Status","حالة المخزون"), T("Low-stock alerts · restock logged by baristas.","تنبيهات نقص المخزون · إعادة الطلب المسجّلة من البريستا.")));
@@ -7299,26 +7404,20 @@ routes.reorder_action_list = function (u) {
   state.alert_log = state.alert_log || [];
   state.reorder_actions = state.reorder_actions || [];
 
-  // ── Low-stock summary card ──────────────────────────────────────
-  const lowBothIS = [
-    ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
-    ...lowStockItems("zawya").map(r => ({...r, _b: "zawya"})),
-  ];
-  if (lowBothIS.length) {
-    const lsCard = el("div", { class: "card", style: { borderColor: "var(--bad)", marginBottom: "16px" } });
-    lsCard.appendChild(el("div", { style: { color: "var(--bad)", fontWeight: "700", marginBottom: "8px" } },
-      T(`⚠ Low stock — ${lowBothIS.length} item${lowBothIS.length > 1 ? "s" : ""} need re-ordering`, `⚠ مخزون منخفض — ${lowBothIS.length} صنف يحتاج إعادة طلب`)));
-    for (const r of lowBothIS) {
-      lsCard.appendChild(el("div", { class: "kv" }, [
-        el("div", { class: "k" }, `${r.item.name} · ${r._b}`),
-        el("div", { class: "v" }, T(`${fmtQty(r.stock, r.item.unit)} · ~${r.days_of_cover.toFixed(1)}d cover`, `${fmtQty(r.stock, r.item.unit)} · ~${r.days_of_cover.toFixed(1)} يوم تغطية`)),
-      ]));
-    }
-    wrap.appendChild(lsCard);
-  } else {
-    wrap.appendChild(el("div", { class: "card", style: { borderColor: "var(--ok)", marginBottom: "16px", color: "var(--ok)", fontWeight: "600" } },
-      T("✅ All items well stocked","✅ كل الأصناف بمخزون جيد")));
+  // ── Per-branch stock status (low stock first, most urgent on top) + last count + Excel export ──
+  const statusHost = el("div", {});
+  const exportBtn = el("button", { class: "btn", style: { marginBottom: "12px" } }, T("⬇ Export full status to Excel","⬇ تصدير الحالة الكاملة إلى Excel"));
+  exportBtn.addEventListener("click", () => exportInventoryStatusXlsx(invStatusBranches(u)));
+  wrap.appendChild(exportBtn);
+  wrap.appendChild(statusHost);
+  function drawStatus() {
+    statusHost.innerHTML = "";
+    for (const b of invStatusBranches(u)) statusHost.appendChild(inventoryStatusCard(inventoryStatusData(b)));
   }
+  drawStatus();
+  loadCpSales().then(drawStatus).catch(() => {});
+
+  wrap.appendChild(el("h3", { style: { margin: "20px 0 8px" } }, T("Low-stock alert log","سجل تنبيهات النقص")));
 
   const now = Date.now();
 
