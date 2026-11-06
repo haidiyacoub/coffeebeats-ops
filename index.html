@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261106-408 -->
+<!-- CB_BUILD:20261106-413 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261106-408";
+  var BUILD = "20261106-413";
   (function() {
     function checkFresh() {
       try {
@@ -7380,21 +7380,75 @@ function exportInventoryStatusXlsx(branches) {
     const aoa = [
       [`${branchLabel(d.branch)} — inventory status`],
       [d.last ? `Last count: ${fmtD(d.last.as_of)} by ${d.last.by}` : "No count recorded yet"],
-      [`Exported ${new Date().toISOString().slice(0, 16).replace("T", " ")} · most urgent first`],
+      [`Exported ${new Date().toISOString().slice(0, 16).replace("T", " ")} · most urgent first · type counts in "New count" and re-import to update stock`],
       [],
-      ["Priority", "Item", "Category", "Unit", "Status", "Theoretical stock", "Daily use", "Days of cover", "Alert threshold (days)", "Item last counted", "Item counted by"],
+      ["Priority", "Item", "Category", "Unit", "Status", "Theoretical stock", "New count (fill in to update)", "Daily use", "Days of cover", "Alert threshold (days)", "Item last counted", "Item counted by", "Item ID"],
     ];
     d.rows.forEach((r, i) => aoa.push([
       i + 1, r.item.name, r.item.category || "", r.item.unit || "", INV_STATUS_LABEL[r.status][0],
-      Math.round(r.stock * 100) / 100, Math.round(r.usage * 100) / 100,
+      Math.round(r.stock * 100) / 100, "", Math.round(r.usage * 100) / 100,
       r.cover == null ? "" : Math.round(r.cover * 10) / 10, r.threshold,
-      r.counted ? fmtD(r.counted.as_of) : "", r.counted ? r.counted.by : "",
+      r.counted ? fmtD(r.counted.as_of) : "", r.counted ? r.counted.by : "", r.item.id,
     ]));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 8 }, { wch: 30 }, { wch: 16 }, { wch: 7 }, { wch: 15 }, { wch: 17 }, { wch: 11 }, { wch: 14 }, { wch: 20 }, { wch: 17 }, { wch: 20 }];
+    ws["!cols"] = [{ wch: 8 }, { wch: 30 }, { wch: 16 }, { wch: 7 }, { wch: 15 }, { wch: 17 }, { wch: 26 }, { wch: 11 }, { wch: 14 }, { wch: 20 }, { wch: 17 }, { wch: 20 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, ws, branchLabel(d.branch).slice(0, 31));
   }
   XLSX.writeFile(wb, `inventory-status-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// Import a (previously exported, then edited) status workbook: every row with a number in
+// "New count" becomes a real stock count for that branch (same record as the Monthly count form).
+async function importInventoryStatusXlsx(file, u, onDone) {
+  let wb;
+  try { wb = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: "array" }); }
+  catch (e) { return toast(T("Could not read that file","تعذّر قراءة الملف"), "error"); }
+  const allowed = invStatusBranches(u);
+  const plan = [];   // { branch, counts: [{item, qty}], skipped: n }
+  for (const sn of wb.SheetNames) {
+    const br = canonBranch(sn);
+    if (!allowed.includes(br)) continue;
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: "" });
+    const hi = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === "item"));
+    if (hi < 0) continue;
+    const head = aoa[hi].map(c => String(c).trim().toLowerCase());
+    const cItem = head.indexOf("item"), cId = head.indexOf("item id");
+    const cNew = head.findIndex(h => h.startsWith("new count"));
+    if (cNew < 0) continue;
+    const counts = []; let skipped = 0;
+    for (const r of aoa.slice(hi + 1)) {
+      const raw = r[cNew];
+      if (raw === "" || raw == null) continue;
+      const qty = Number(String(raw).replace(/,/g, ""));
+      const it = (cId >= 0 && (state.items || []).find(i => i.id === String(r[cId]).trim()))
+        || (state.items || []).find(i => i.name.trim().toLowerCase() === String(r[cItem]).trim().toLowerCase());
+      if (!it || !isFinite(qty) || qty < 0) { skipped++; continue; }
+      counts.push({ item: it, qty });
+    }
+    if (counts.length || skipped) plan.push({ branch: br, counts, skipped });
+  }
+  if (!plan.some(p => p.counts.length)) return toast(T("No filled-in \"New count\" cells found for your branches","لا توجد خلايا \"New count\" معبّأة لفروعك"), "error");
+  const msg = plan.map(p => `${branchLabel(p.branch)}: ${p.counts.length} item count(s)` + (p.skipped ? ` (${p.skipped} row(s) skipped — unknown item or bad number)` : "")).join("\n");
+  if (!confirm(T("Apply these counts as of today?\n\n", "تطبيق هذه الأعداد اعتباراً من اليوم؟\n\n") + msg)) return;
+  const s = stamp();
+  const asOf = new Date().toISOString().slice(0, 10);
+  for (const p of plan) {
+    if (!p.counts.length) continue;
+    // carry over the latest known values for every branch, replace this branch's counted items
+    const latest = state.snapshots.slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(-1)[0];
+    const byKey = {};
+    if (latest) for (const e of latest.entries) byKey[e.branch + "|" + e.item_id] = Number(e.qty) || 0;
+    for (const c of p.counts) byKey[p.branch + "|" + c.item.id] = c.qty;
+    const entries = Object.entries(byKey).map(([k, v]) => { const [br, id] = k.split("|"); return { branch: br, item_id: id, qty: v }; });
+    state.snapshots.push({
+      id: uuid(), as_of: asOf, branch: p.branch, created_at: now(), created_by: s.by, created_by_name: s.by_name, device: s.device,
+      entries, counted_item_ids: p.counts.map(c => c.item.id), notes: `${p.branch} count (Excel import)`, image_url: "",
+    });
+  }
+  saveState();
+  toast(T("Counts imported — stock status updated","تم استيراد الأعداد — تم تحديث حالة المخزون"));
+  try { scanAndNotifyLowStock(); } catch (e) { console.warn(e); }
+  onDone && onDone();
 }
 
 routes.reorder_action_list = function (u) {
@@ -7408,7 +7462,14 @@ routes.reorder_action_list = function (u) {
   const statusHost = el("div", {});
   const exportBtn = el("button", { class: "btn", style: { marginBottom: "12px" } }, T("⬇ Export full status to Excel","⬇ تصدير الحالة الكاملة إلى Excel"));
   exportBtn.addEventListener("click", () => exportInventoryStatusXlsx(invStatusBranches(u)));
-  wrap.appendChild(exportBtn);
+  const fileIn = el("input", { type: "file", accept: ".xlsx,.xls", style: { display: "none" } });
+  fileIn.addEventListener("change", async () => {
+    const f = fileIn.files[0]; fileIn.value = "";
+    if (f) await importInventoryStatusXlsx(f, u, drawStatus);
+  });
+  const importBtn = el("button", { class: "btn ghost", style: { marginBottom: "12px", marginLeft: "8px" } }, T("⬆ Import counts from Excel","⬆ استيراد الأعداد من Excel"));
+  importBtn.addEventListener("click", () => fileIn.click());
+  wrap.appendChild(el("div", {}, [exportBtn, importBtn, fileIn]));
   wrap.appendChild(statusHost);
   function drawStatus() {
     statusHost.innerHTML = "";
