@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261108-324 -->
+<!-- CB_BUILD:20261108-862 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261108-324";
+  var BUILD = "20261108-862";
   (function() {
     function checkFresh() {
       try {
@@ -1214,6 +1214,13 @@ function loadState(raw) {
 // Runs once per load. Safe to re-run — each step is idempotent.
 // NOTE: user seeding previously done here is now managed via Cloud Functions
 // and Firestore staff_public. staffDir.load() is called after pullFromFirestore.
+// Fixed timestamp for one-time data migrations below. They used to stamp rows with
+// new Date() — "now" — which made a STALE device's migrated copy look newer than the
+// real edits on the server. Merge is newer-wins, so that stale row overwrote Firestore:
+// the root cause of handbook names/milk amounts "reverting to old data" (Nov 2026).
+// A fixed past stamp means a migrated row can only win over rows that are even older.
+const _MIGRATION_STAMP = "2026-11-01T00:00:00.000Z";
+
 function migrateState(s) {
   // Ensure users array exists (will be overwritten by staffDir.load() at runtime)
   s.users = s.users || [];
@@ -1229,7 +1236,7 @@ function migrateState(s) {
   // One-time migration: align menu + handbook recipe names with "Coffee Beats Menu Analysis ver3" (2026-11-04).
   if (!s._names_ver3_migrated) {
     const MAP = {"The artist (Hot/Ice)": "The Artist", "The Diva (Hot/Ice)": "The Diva", "Matcha Blended Beats": "Blended Matcha Latte", "Salted Caramel Matcha  Blended": "Blended Salted Caramel Matcha Latte", "White Matcha Blended Beats": "Blended White Matcha Latte", "Blended Spanish Matcha": "Blended Spanish Matcha Latte", "Condensed Milk": "Extra Condensed Milk", "Oat milk": "Extra Oat Milk", "Coconut Milk": "Extra Coconut Milk", "Almond Milk": "Extra Almond Milk", "Full Cream Milk": "Extra Full Cream Milk", "Skimmed Milk": "Extra Skimmed Milk", "Honey": "Extra Honey", "Salted Caramel Sauce": "Extra Salted Caramel Sauce", "Double O": "Double O by Omar Omar", "Turkish": "Turkish Coffee", "Original Beats (Espresso)": "Original Beats - Espresso", "Consistent Beats (Americano)": "Consistent Beats - Americano", "The writer": "The Writer", "Original Beats — Espresso": "Original Beats - Espresso", "Consistent Beats — Americano": "Consistent Beats - Americano", "Espresso Macchiato": "Macchiato", "Mocha — Dark": "Mocha Latte", "Mocha — White": "White Mocha Latte", "Iced Latte": "Ice Latte", "Iced Americano": "Ice Consistent Beats", "Iced Spanish Latte": "Ice Spanish Latte", "Iced Salted Caramel Latte": "Ice Salted Caramel Latte", "Iced Mocha — Dark": "Ice Mocha Latte", "Iced Mocha — White": "Ice White Mocha Latte", "Hot Matcha Latte": "Matcha Latte", "Iced Matcha Latte": "Ice Matcha Latte", "Iced White Matcha Latte": "Ice White Matcha Latte", "Iced Salted Matcha Latte": "Ice Salted Caramel Matcha Latte", "Iced Spanish Matcha Latte": "Ice Spanish Matcha Latte", "Blended Salted Caramel Matcha": "Blended Salted Caramel Matcha Latte", "Mint to Be": "Mint to Be Hot Chocolate", "Passion Fruit Iced Tea": "Passion Fruit Ice Tea", "Mango Peach Iced Tea": "Mango Peach Ice Tea", "Peach Iced Tea": "Peach Ice Tea", "El 3alamey": "ElAlamy by Hamza Diab"};
-    const stamp = new Date().toISOString();
+    const stamp = _MIGRATION_STAMP;
     (s.menu || []).forEach(r => { const n = MAP[r && r.name]; if (n) { r.name = n; r.last_edited_at = stamp; } });
     (s.recipes || []).forEach(r => { const n = MAP[r && r.name]; if (n) { r.name = n; r.last_edited_at = stamp; } });
     s._names_ver3_migrated = true;
@@ -1238,7 +1245,7 @@ function migrateState(s) {
   // One-time migration: match ops menu names to the Counterpoint product names (rows that carry a CP sku).
   if (!s._names_cp_migrated) {
     const MAP = {"Spanish  Blended Beats": "Spanish Blended Beats", "Mixed Nuts Bag": "Mixed Nuts (80 gr)", "Drip Coffee Bags": "Drip Coffee Bag", "Original Beats": "Original Beats - Espresso", "Consistent Beats": "Consistent Beats - Americano"};
-    const stamp = new Date().toISOString();
+    const stamp = _MIGRATION_STAMP;
     (s.menu || []).forEach(r => { const n = r && MAP[r.name]; if (n) { r.name = n; r.last_edited_at = stamp; } });
     s._names_cp_migrated = true;
   }
@@ -1247,7 +1254,7 @@ function migrateState(s) {
   // stale devices can't overwrite them (merge is newer-wins) and the enforceMenuRemovals Cloud Function keeps them.
   if (!s._prices_ver3_migrated) {
     const PR = {"original beats espresso":90,"consistent beats americano":105,"cappuccino":120,"turkish coffee":50,"flat white":115,"latte":135,"macchiato":115,"cortado":115,"cortado team":110,"salted caramel latte":185,"mocha latte":185,"white mocha latte":190,"spanish latte":170,"french coffee":75,"ice consistent beats":110,"ice latte":135,"ice salted caramel latte":185,"ice spanish latte":180,"ice mocha latte":190,"ice white mocha latte":195,"queen moka":260,"lady moka":250,"classic blended beats":150,"mocha blended beats":190,"salted caramel blended beats":195,"white mocha blended beats":205,"spanish blended beats":190,"hot choco beats m":165,"choco mallow beats m":190,"spicy choco beats m":130,"mint to be hot chocolate":130,"peach ice tea":160,"passion fruit ice tea":160,"green ice tea":180,"mango peach ice tea":160,"the actor":140,"the director":180,"the director blended":190,"the producer":190,"the writer":100,"the artist":190,"the dancer":210,"the dancer blended":230,"the diva":260,"berry hot":250,"berry matching ice":260,"berry matching blended":260,"matcha latte":190,"ice matcha latte":195,"blended matcha latte":215,"salted caramel matcha latte":210,"ice salted caramel matcha latte":210,"blended salted caramel matcha latte":220,"white matcha latte":220,"ice white matcha latte":220,"blended white matcha latte":230,"spanish matcha latte":195,"ice spanish matcha latte":195,"blended spanish matcha latte":205,"double o by omar omar":135,"elalamy by hamza diab":130,"decaf extra shot":65,"coffee extra shot":50,"white mocha sauce":60,"whipped cream":35,"extra condensed milk":45,"extra oat milk":55,"extra coconut milk":55,"extra almond milk":55,"extra full cream milk":30,"extra skimmed milk":30,"extra honey":20,"extra salted caramel sauce":55,"dark mocha sauce":55,"english breakfast tea":50,"green tea":50,"anise":40,"small water bottle":20,"sparkling water":55,"ginger":65,"mint":50,"halo choc coco berries":95,"halo choc mixed crunch":95,"halo choc nutty peanuts":95,"e bar coco berries":75,"e bar nutty peanuts":75,"e bar mixed crunch":75,"halo sweet chili chips":35,"halo honey mustard chips":35,"halo green peas chips":35,"halo greek cheese puffs":30,"halo parmesan cheese puffs":30,"halo sour cream onion puffs":30,"v7 cola":30,"v7 diet cola":30,"v7 pink lemonade":30,"mixed nuts 80 gr":180,"lady moka cup":700,"lady moka espresso cup":450,"detox water bottle":400,"drip coffee bag":65,"drip coffee bags bundle of 10 9 1 free":600};
-    const stamp = new Date().toISOString();
+    const stamp = _MIGRATION_STAMP;
     (s.menu || []).forEach(r => {
       const k = String((r && r.name) || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       if (PR[k] != null && r.price_egp !== PR[k]) { r.price_egp = PR[k]; r.last_edited_at = stamp; }
@@ -1258,7 +1265,7 @@ function migrateState(s) {
   // One-time migration: Haïdi's price changes (2026-11-04): Queen Moka 260, Lady Moka 250, Classic Blended Beats 150, The Producer 190.
   if (!s._prices_nov4b_migrated) {
     const PR2 = {"queen moka":260,"lady moka":250,"classic blended beats":150,"the producer":190};
-    const stamp = new Date().toISOString();
+    const stamp = _MIGRATION_STAMP;
     (s.menu || []).forEach(r => {
       const k = String((r && r.name) || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       if (PR2[k] != null && r.price_egp !== PR2[k]) { r.price_egp = PR2[k]; r.last_edited_at = stamp; }
@@ -1269,7 +1276,7 @@ function migrateState(s) {
   // One-time migration: Haïdi's shop price changes (2026-11-08).
   if (!s._prices_nov8_migrated) {
     const PR3 = {"drip coffee bag":65,"drip coffee bags bundle of 10 9 1 free":600,"lady moka espresso cup":450,"detox water bottle":400,"lady moka cup":700};
-    const stamp = new Date().toISOString();
+    const stamp = _MIGRATION_STAMP;
     (s.menu || []).forEach(r => {
       const k = String((r && r.name) || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       if (PR3[k] != null && r.price_egp !== PR3[k]) { r.price_egp = PR3[k]; r.last_edited_at = stamp; }
@@ -1283,7 +1290,7 @@ function migrateState(s) {
   if (!s._milk_ver3_migrated) {
     const MILK = {"cappuccino":150,"latte":250,"macchiato":25,"cortado":55,"cortado team":55,"salted caramel latte":235,"mocha latte":235,"white mocha latte":235,"spanish latte":235,"hot choco beats":180,"hot choco beats m":180,"choco mallow beats":180,"choco mallow beats m":180,"spicy choco beats":180,"spicy choco beats m":180,"the director":230,"the producer":230,"the dancer":250,"berry hot":250,"matcha latte":250,"salted caramel matcha latte":235,"white matcha latte":235,"spanish matcha latte":235,"double o by omar omar":65,"elalamy by hamza diab":65};
     const nrm = (n) => String(n || "").split(" — ")[0].toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    const stamp = new Date().toISOString();
+    const stamp = _MIGRATION_STAMP;
     (s.handbook_recipes || []).forEach(r => {
       const q = MILK[nrm(r && r.name)];
       if (q == null || !Array.isArray(r.ingredients)) return;
@@ -1302,7 +1309,7 @@ function migrateState(s) {
 
   // One-time: Latte milk = 250 ml (rounded from 245 for ease, Haïdi 2026-11-04) — handbook + ops BOM Full Cream line.
   if (!s._milk_latte250_migrated) {
-    const stamp = new Date().toISOString();
+    const stamp = _MIGRATION_STAMP;
     (s.handbook_recipes || []).forEach(r => {
       if (String(r && r.name).trim().toLowerCase() !== "latte" || !Array.isArray(r.ingredients)) return;
       const i = r.ingredients.findIndex(x => /^steamed whole milk/i.test(x));
@@ -2151,9 +2158,14 @@ function dedupeMenuRows(rows) {
   const keyless = [];
   for (const m of rows) {
     if (!m || typeof m !== "object") { keyless.push(m); continue; }
-    const k = nk(m.name);
+    // Brackets are ignored for matching (so "X (100 gr)" and "X" collapse), EXCEPT when they
+    // name a different drink: "Berry Matching (ice)" and "Berry Matching (Blended)" are two
+    // products. A distinct Counterpoint SKU also always means a distinct product.
+    const variant = (String(m.name || "").match(/\(\s*(ice|iced|blended|hot|cold)\s*\)/i) || [])[1];
+    let k = nk(m.name) + (variant ? "|" + variant.toLowerCase().replace(/^iced$/, "ice") : "");
     if (!k) { keyless.push(m); continue; }
-    const cur = byName.get(k);
+    let cur = byName.get(k);
+    if (cur && m.pos_sku && cur.pos_sku && m.pos_sku !== cur.pos_sku) { k += "|" + m.pos_sku; cur = byName.get(k); }
     if (!cur) { byName.set(k, m); continue; }
     const cmp =
       ((Number(m.cost_egp)||0)  - (Number(cur.cost_egp)||0))  ||
@@ -2875,7 +2887,12 @@ async function doSync() {
           toast(`⚠️ Data chunk "${chunk}" is getting large (${(approxBytes/1024).toFixed(0)} KB). Contact support to archive old records.`, "error");
         }
         return db.collection("state").doc(chunk).set(doc)
-          .then(() => _snapshotChunk(chunk, keys));
+          .then(() => {
+            // Keep this device in step with what was just written (local ∪ server,
+            // newer-wins), so a stale device converges instead of re-pushing old cards.
+            if (chunk === "recipes" && Array.isArray(doc.handbook_recipes)) state.handbook_recipes = doc.handbook_recipes;
+            _snapshotChunk(chunk, keys);
+          });
       }).catch(err => { err._chunk = chunk; throw err; });
     });
     const salesChanged = _shardChanged("sales") || _shardChanged("order_items") || _shardChanged("orders");
@@ -20901,12 +20918,49 @@ function hbArRecipe(r) {
   };
 }
 
+// One-doc refresh of the handbook (state/recipes + tombstones), merged newer-wins into the
+// local copy. Used when the full pull hasn't finished (it can take 40s+), so a stale device
+// never displays or edits old recipe cards. Runs once per page load.
+let _recipesRefreshStarted = false;
+async function _refreshRecipesChunk() {
+  if (_recipesRefreshStarted) return;
+  _recipesRefreshStarted = true;
+  try {
+    const [rSnap, tSnap] = await Promise.all([
+      db.collection("state").doc("recipes").get(),
+      db.collection("state").doc("tombstones").get(),
+    ]);
+    if (tSnap.exists && Array.isArray(tSnap.data().deleted_ids)) {
+      const have = new Set((state.deleted_ids || []).map(t => t && t.id));
+      state.deleted_ids = [...(state.deleted_ids || []), ...tSnap.data().deleted_ids.filter(t => t && !have.has(t.id))];
+    }
+    const remote = rSnap.exists ? (rSnap.data().handbook_recipes || []) : [];
+    const before = JSON.stringify(state.handbook_recipes || []);
+    state.handbook_recipes = _stripTomb(_mergeArrays(state.handbook_recipes || [], remote), _tombstoneSet());
+    if (JSON.stringify(state.handbook_recipes) !== before) {
+      LocalCache.set(state);
+      render();
+    }
+  } catch (e) {
+    _recipesRefreshStarted = false; // offline — try again next time the handbook opens
+    console.warn("Handbook refresh failed", e);
+  }
+}
+
 routes.handbook = function (u) {
-  // Seed on first load
-  if (!state.handbook_recipes || state.handbook_recipes.length === 0) {
+  // Before the first successful pull this session, the local copy may be stale. Refresh
+  // just the recipes doc (one small read) so the handbook shows — and edits start from —
+  // the server's version, not this device's old cache.
+  if (!_pulledThisSession) _refreshRecipesChunk();
+
+  // Seed only on a genuinely empty server. Seeding before the pull (stale/empty cache)
+  // created fresh-uuid copies of the old built-in recipes on every such device, which
+  // then merged into Firestore as duplicates with the old names.
+  if ((!state.handbook_recipes || state.handbook_recipes.length === 0) && _pulledThisSession) {
     state.handbook_recipes = handbookSeedRecipes();
     saveState();
   }
+  state.handbook_recipes = state.handbook_recipes || [];
 
   // One-time migration: apply coffee_notes to existing saved recipes missing the field
   const _T1  = "Coffee Type 1 · Extraction: 26–30 sec · Brew Ratio 1:2";
@@ -20965,7 +21019,7 @@ routes.handbook = function (u) {
   }
 
   // One-time fill: add Excel-sheet recipes the handbook lacks (matched by name, never overwrites).
-  if (!state._hb_excel_fill_v1) {
+  if (!state._hb_excel_fill_v1 && _pulledThisSession) {
     const _norm = n => String(n || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     const _have = new Set(state.handbook_recipes.map(r => _norm(r.name)));
     const _ALIAS = { greenicedtea: ["greenicetea"] };
