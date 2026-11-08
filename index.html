@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261108-838 -->
+<!-- CB_BUILD:20261108-862 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261108-838";
+  var BUILD = "20261108-862";
   (function() {
     function checkFresh() {
       try {
@@ -2158,9 +2158,14 @@ function dedupeMenuRows(rows) {
   const keyless = [];
   for (const m of rows) {
     if (!m || typeof m !== "object") { keyless.push(m); continue; }
-    const k = nk(m.name);
+    // Brackets are ignored for matching (so "X (100 gr)" and "X" collapse), EXCEPT when they
+    // name a different drink: "Berry Matching (ice)" and "Berry Matching (Blended)" are two
+    // products. A distinct Counterpoint SKU also always means a distinct product.
+    const variant = (String(m.name || "").match(/\(\s*(ice|iced|blended|hot|cold)\s*\)/i) || [])[1];
+    let k = nk(m.name) + (variant ? "|" + variant.toLowerCase().replace(/^iced$/, "ice") : "");
     if (!k) { keyless.push(m); continue; }
-    const cur = byName.get(k);
+    let cur = byName.get(k);
+    if (cur && m.pos_sku && cur.pos_sku && m.pos_sku !== cur.pos_sku) { k += "|" + m.pos_sku; cur = byName.get(k); }
     if (!cur) { byName.set(k, m); continue; }
     const cmp =
       ((Number(m.cost_egp)||0)  - (Number(cur.cost_egp)||0))  ||
