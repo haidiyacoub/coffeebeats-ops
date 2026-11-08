@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261108-318 -->
+<!-- CB_BUILD:20261108-324 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261108-318";
+  var BUILD = "20261108-324";
   (function() {
     function checkFresh() {
       try {
@@ -3999,6 +3999,15 @@ function scanCashDepositReminders() {
   );
 }
 
+function penaltyPersonName(r) {
+  // Some auto-penalties stored the raw user id as the name (staff roster hadn't loaded) — resolve at display time
+  const looksLikeId = n => !n || /^[A-Za-z0-9]{20,}$/.test(n);
+  if (looksLikeId(r.barista) && r.user_id) {
+    const u = staffDir.resolve(r.user_id) || (state.users || []).find(x => x.id === r.user_id);
+    if (u && u.name) return u.name;
+  }
+  return r.barista || "—";
+}
 function scanCashDepositPenalties() {
   return; // Penalty for a missed weekly Maadi deposit removed (Haïdi, 2026-11-08) — reminders only
   const today = new Date();
@@ -10313,7 +10322,7 @@ routes.penalties = function (u) {
     const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
     const row = el("div", { class: "kv", style: { alignItems: "center" } }, [
       el("div", { class: "k" }, [
-        el("div", {}, `${r.barista || "—"} · ${kindLabel} · ${r.branch || ""}`),
+        el("div", {}, `${penaltyPersonName(r)} · ${kindLabel} · ${r.branch || ""}`),
         el("div", { class: "muted small" }, `${fmtDate(r.at)} · by ${r.by_name || r.by || "—"} · ${reasonLabel}${r.note ? " — " + r.note : ""}`),
       ]),
       el("div", { class: "v" }, money(r.amount)),
@@ -10395,7 +10404,7 @@ routes.penalties = function (u) {
       const groups = new Map();
       for (const r of visible) {
         const k = r.user_id || r.barista || "—";
-        if (!groups.has(k)) groups.set(k, { name: r.barista || "—", rows: [] });
+        if (!groups.has(k)) groups.set(k, { name: penaltyPersonName(r), rows: [] });
         groups.get(k).rows.push(r);
       }
       for (const [uid, o] of overages) if (!groups.has(uid)) groups.set(uid, { name: o.name, rows: [] });
@@ -10448,7 +10457,7 @@ routes.penalties = function (u) {
         const kindLabel = r.kind_label || (PENALTY_KINDS.find(x => x.value === r.kind) || {}).label || r.kind || "—";
         trash.appendChild(el("div", { class: "kv", style: { alignItems:"center" } }, [
           el("div", { class: "k" }, [
-            el("div", { style: { color: "var(--ink-dim)" } }, `${r.barista || "—"} · ${kindLabel} · ${money(r.amount)}`),
+            el("div", { style: { color: "var(--ink-dim)" } }, `${penaltyPersonName(r)} · ${kindLabel} · ${money(r.amount)}`),
             el("div", { class: "muted small" }, `Deleted ${fmtDate(r.deleted_at)} · originally ${fmtDate(r.at)}`),
           ]),
           el("button", {
