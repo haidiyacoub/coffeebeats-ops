@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261108-324 -->
+<!-- CB_BUILD:20261109-871 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261108-324";
+  var BUILD = "20261109-871";
   (function() {
     function checkFresh() {
       try {
@@ -1329,6 +1329,7 @@ function migrateState(s) {
     }
     s._loan_payments_seeded = true;
   }
+  s.hb_recipe_order         = s.hb_recipe_order         || { ids: [], updated_at: "" }; // handbook recipe display order (synced, config chunk)
   s.hb_incentive_config     = s.hb_incentive_config     || {
     maadi_target:        80000,
     zawya_target:        130000,
@@ -1822,7 +1823,7 @@ let _pullPendingAfterFlush = false;
 // NOTE: `users` is no longer synced here — staff come from Firestore `staff_public`
 // via staffDir.load() and are kept as an in-memory computed view (state.users).
 const STATE_CHUNKS = {
-  config:        ["settings", "salary_config", "hb_incentive_config", "gcal_api_key", "events_config", "om_overrides", "om_ar_overrides", "blocked_feedback_ids"],
+  config:        ["settings", "salary_config", "hb_incentive_config", "hb_recipe_order", "gcal_api_key", "events_config", "om_overrides", "om_ar_overrides", "blocked_feedback_ids"],
   menu_data:     ["menu"],
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
@@ -21128,9 +21129,42 @@ routes.handbook = function (u) {
     });
     t2.appendChild(tbody2);
     refBody.appendChild(t2);
+
+    // ── Milk Quantity Cheat-Sheet (computed live from the recipes) ──
+    refBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", margin: "20px 0 4px", color: "var(--ink)" } },
+      isAr ? "ملخص كميات الحليب لكل فئة" : "Milk Quantity Cheat-Sheet"));
+    refBody.appendChild(el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "10px", lineHeight: "1.5" } },
+      isAr ? "الكمية نفسها لكل أنواع الحليب الخمسة: كامل الدسم، خالي الدسم، شوفان، لوز، جوز الهند. (من ملف الوصفات ver3)"
+           : "Same amount whichever milk you use — full cream, skimmed, oat, almond or coconut. (From the ver3 recipe sheet.)"));
+    // Source: "Coffee Beats Menu Analysis ver3.xlsx" → Receipe tab (milk ml per serving, same for all 5 milks).
+    const MILK_SUMMARY = [
+      ["Small drinks", "مشروبات صغيرة", "100 ml", "Macchiato · Cortado · Double O · ElAlamy · French Coffee", "ماكياتو · كورتادو · دبل أو · العلمي · فرنش كوفي"],
+      ["Hot — classics", "ساخن — كلاسيك", "150 / 180 / 230 ml", "Flat White 150 · Cappuccino 180 · Latte 230", "فلات وايت 150 · كابتشينو 180 · لاتيه 230"],
+      ["Hot flavoured lattes", "لاتيه بنكهات ساخن", "200 ml", "Salted Caramel · Mocha · White Mocha · Spanish · Director · Producer", "سولتد كراميل · موكا · وايت موكا · سبانيش · دايركتور · بروديوسر"],
+      ["Hot chocolate", "شوكولاتة ساخنة", "180 ml", "Hot Choco · Choco Mallow · Spicy Choco · Mint to Be (Berry Hot 250)", "هوت شوكو · شوكو مالو · سبايسي · مينت تو بي (بيري هوت 250)"],
+      ["Hot matcha", "ماتشا ساخن", "250 / 200 ml", "Matcha Latte 250 · flavoured matcha (Salted Caramel, White, Spanish, Dancer) 200", "ماتشا لاتيه 250 · ماتشا بنكهات ودانسر 200"],
+      ["Iced coffee", "قهوة مثلجة", "190 / 160 ml", "Ice Latte 190 · Ice flavoured lattes (Salted Caramel, Spanish, Mocha, White Mocha, Director) 160", "آيس لاتيه 190 · آيس بنكهات 160"],
+      ["Iced matcha", "ماتشا مثلج", "200 / 170 ml", "Ice Matcha Latte 200 · flavoured ice matcha (incl. Ice Dancer) 170 · Berry Matching (ice) 200", "آيس ماتشا 200 · آيس ماتشا بنكهات وآيس دانسر 170 · بيري ماتشينج 200"],
+      ["Blended coffee", "بلندد", "100 / 90 ml", "Classic Blended 100 · Mocha, Salted Caramel, White Mocha, Spanish, Director, Diva 90", "كلاسيك 100 · الباقي 90"],
+      ["Blended matcha", "بلندد ماتشا", "160 / 150 ml", "Blended Matcha 160 · flavoured blended matcha, Dancer & Berry Blended 150", "بلندد ماتشا 160 · بنكهات ودانسر وبيري 150"],
+      ["Extra milk add-on", "حليب إضافي", "120 ml", "Any milk (full cream, skimmed, oat, almond, coconut)", "أي نوع حليب"],
+    ];
+    const t3 = el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12px" } });
+    const hr3 = el("tr", {});
+    (isAr ? ["الفئة", "الحليب", "المشروبات"] : ["Category", "Milk", "Drinks"]).forEach(h => hr3.appendChild(el("th", { style: thStyle }, h)));
+    const th3 = el("thead", {}); th3.appendChild(hr3); t3.appendChild(th3);
+    const tb3 = el("tbody", {});
+    MILK_SUMMARY.forEach((row, ri) => {
+      const tr = el("tr", { style: { background: ri % 2 === 0 ? "var(--surface-2)" : "" } });
+      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "600" } }, isAr ? row[1] : row[0]));
+      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "700", whiteSpace: "nowrap" } }, row[2]));
+      tr.appendChild(el("td", { style: { ...tdStyle, color: "var(--ink-dim)" } }, isAr ? row[4] : row[3]));
+      tb3.appendChild(tr);
+    });
+    t3.appendChild(tb3);
+    refBody.appendChild(t3);
   }
 
-  buildRefGuide();
   refGuide.appendChild(refHead);
   refGuide.appendChild(refBody);
   recipesSection.appendChild(refGuide);
@@ -21170,6 +21204,18 @@ routes.handbook = function (u) {
   buildTabs();
   recipesSection.appendChild(tabBar);
 
+  // ── Reorder toggle (owners & head baristas) ──
+  let reorderMode = false;
+  if (canEdit) {
+    const roBtn = el("button", { class: "btn secondary", style: { marginBottom: "12px" } }, "⇅ Reorder recipes");
+    roBtn.addEventListener("click", () => {
+      reorderMode = !reorderMode;
+      roBtn.textContent = reorderMode ? "✓ Done reordering" : "⇅ Reorder recipes";
+      renderRecipes();
+    });
+    recipesSection.appendChild(roBtn);
+  }
+
   // ── Search ──
   let searchQ = "";
   const searchRow = el("div", { style: { marginBottom: "12px" } });
@@ -21205,7 +21251,22 @@ routes.handbook = function (u) {
     const groups = {};
     filtered.forEach(r => { (groups[r.category] = groups[r.category] || []).push(r); });
 
-    Object.entries(groups).forEach(([cat, recipes]) => {
+    const _ord = (state.hb_recipe_order && state.hb_recipe_order.ids) || [];
+    const _rank = new Map(_ord.map((id, i) => [id, i]));
+    const _sortCat = arr => arr.map((r, i) => [r, i]).sort((a, b) => ((_rank.has(a[0].id) ? _rank.get(a[0].id) : 1e6 + a[1]) - (_rank.has(b[0].id) ? _rank.get(b[0].id) : 1e6 + b[1]))).map(x => x[0]);
+    function moveRecipe(rec, dir) {
+      const cats = [...new Set(state.handbook_recipes.map(r => r.category))];
+      const seqs = cats.map(c => _sortCat(state.handbook_recipes.filter(r => r.category === c)));
+      const seq = seqs[cats.indexOf(rec.category)];
+      const i = seq.findIndex(r => r.id === rec.id), j = i + dir;
+      if (i < 0 || j < 0 || j >= seq.length) return;
+      [seq[i], seq[j]] = [seq[j], seq[i]];
+      state.hb_recipe_order = { ids: seqs.flat().map(r => r.id), updated_at: new Date().toISOString() };
+      saveState(); renderRecipes();
+    }
+    const _reorder = canEdit && reorderMode && !searchQ;
+    Object.entries(groups).forEach(([cat, recipes0]) => {
+      const recipes = _sortCat(recipes0);
       // Category heading — always shown as bold section label above cards
       recipeBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", textTransform: "uppercase", letterSpacing: "1.4px", color: "var(--ink)", margin: "20px 0 10px", paddingBottom: "4px", borderBottom: "2px solid var(--ink)", direction: lang === "ar" ? "rtl" : "ltr" } }, lang === "ar" ? (CAT_AR[cat] || cat) : cat));
 
@@ -21220,6 +21281,13 @@ routes.handbook = function (u) {
           const editBtn = el("button", { style: { background: "transparent", border: "1px solid rgba(245,230,211,0.35)", borderRadius: "6px", color: "#f5e6d3", padding: "4px 10px", cursor: "pointer", fontSize: "12px", flexShrink: "0" } }, "Edit");
           editBtn.addEventListener("click", () => openRecipeEditor(recipe0));
           cardHead.appendChild(editBtn);
+        }
+        if (_reorder) {
+          const mk = (txt, dir, dis) => { const b = el("button", { style: { background: "transparent", border: "1px solid rgba(245,230,211,0.35)", borderRadius: "6px", color: "#f5e6d3", padding: "4px 9px", cursor: dis ? "default" : "pointer", fontSize: "12px", marginInlineStart: "6px", opacity: dis ? "0.3" : "1" } }, txt); if (!dis) b.addEventListener("click", () => moveRecipe(recipe0, dir)); return b; };
+          const pos = recipes.indexOf(recipe0);
+          const mv = el("div", { style: { display: "flex", flexShrink: "0" } });
+          mv.appendChild(mk("▲", -1, pos === 0)); mv.appendChild(mk("▼", 1, pos === recipes.length - 1));
+          cardHead.appendChild(mv);
         }
         card.appendChild(cardHead);
 
@@ -21277,6 +21345,7 @@ routes.handbook = function (u) {
   }
 
   renderRecipes();
+  buildRefGuide();   // after CAT_AR/catLabel exist (used by the milk cheat-sheet)
 
   // ── Add new recipe (owners & head baristas) ──
   if (canEdit) {
@@ -21950,7 +22019,7 @@ routes.handbook = function (u) {
       const normName = draft.name.trim().toLowerCase();
       state.handbook_recipes = state.handbook_recipes.filter(r => r.name.trim().toLowerCase() !== normName);
       state.handbook_recipes.push(draft);
-      saveState(); root.innerHTML = ""; renderRecipes(); buildTabs();
+      saveState(); root.innerHTML = ""; renderRecipes(); buildTabs(); buildRefGuide();
       toast(isNew ? "Recipe added ✓" : "Recipe updated ✓");
     });
     topBtnRow.appendChild(saveBtn);
@@ -21962,7 +22031,7 @@ routes.handbook = function (u) {
       delBtn.addEventListener("click", () => {
         if (!confirm(`Delete "${existing.name}"?`)) return;
         state.handbook_recipes = state.handbook_recipes.filter(r => r.id !== existing.id);
-        saveState(); root.innerHTML = ""; renderRecipes(); buildTabs(); toast("Recipe deleted.");
+        saveState(); root.innerHTML = ""; renderRecipes(); buildTabs(); buildRefGuide(); toast("Recipe deleted.");
       });
       delRow.appendChild(delBtn);
       inner.appendChild(delRow);
