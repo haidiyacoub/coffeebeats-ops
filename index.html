@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261109-878 -->
+<!-- CB_BUILD:20261109-899 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261109-878";
+  var BUILD = "20261109-899";
   (function() {
     function checkFresh() {
       try {
@@ -1319,6 +1319,46 @@ function migrateState(s) {
       if (String(r && r.menu_item_name).trim().toLowerCase() === "latte" && /full.?cream/i.test(String(r.ingredient_name || "")) && String(r.unit || "").toLowerCase() === "ml" && Number(r.qty_per_serving) !== 250) { r.qty_per_serving = 250; r.last_edited_at = stamp; }
     });
     s._milk_latte250_migrated = true;
+  }
+
+  // One-time: sauce / chocolate-powder / honey standardisation (Haïdi 2026-11-09, "Menu Analysis ver3" updated).
+  // Sauces 35 g (blended 30 g; Double O + extra sauce stay 20 g), chocolate powder 40 g in hot chocolates + Berry Hot,
+  // extra honey 15 g. Updates handbook recipes AND ops BOM rows; fresh edit time so stale devices can't revert (newer-wins).
+  if (!s._sauce_powder_nov9_migrated) {
+    const key = (n) => String(n || "").split(" — ")[0].toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(w => w && w !== "the" && w.length > 1).sort().join(" ");
+    const SAUCE = {}, CHOC = {}, HONEY = {};
+    ["Salted Caramel Latte", "Mocha Latte", "White Mocha Latte", "Ice Salted Caramel Latte", "Ice Mocha Latte", "Ice White Mocha Latte",
+     "The Director", "The Director (Ice)", "The Dancer", "The Dancer (Ice)", "Salted Caramel Matcha Latte", "Ice Salted Caramel Matcha Latte", "White Matcha Latte", "Ice White Matcha Latte"].forEach(n => SAUCE[key(n)] = 35);
+    ["Mocha Blended Beats", "Salted Caramel Blended Beats", "White Mocha Blended Beats", "The Dancer Blended", "The Director Blended",
+     "Blended Salted Caramel Matcha Latte", "Blended White Matcha Latte"].forEach(n => SAUCE[key(n)] = 30);
+    ["Hot Choco Beats", "Choco Mallow Beats", "Spicy Choco Beats", "Mint to Be Hot Chocolate", "Berry Hot"].forEach(n => CHOC[key(n)] = 40);
+    ["Extra Honey", "Honey"].forEach(n => HONEY[key(n)] = 15);
+    const stamp = new Date().toISOString();
+    const setQty = (txt, q) => txt.replace(/(:\s*)\d+(?:\.\d+)?(\s*(?:g|gr|ml))/i, "$1" + q + "$2");
+    (s.handbook_recipes || []).forEach(r => {
+      if (!r || !Array.isArray(r.ingredients)) return;
+      const k = key(r.name);
+      let hit = false;
+      r.ingredients = r.ingredients.map(x => {
+        let q = null;
+        if (SAUCE[k] != null && /\bsauce\b/i.test(x) && !/condensed/i.test(x)) q = SAUCE[k];
+        else if (CHOC[k] != null && /chocolate powder/i.test(x)) q = CHOC[k];
+        else if (HONEY[k] != null && /^honey\b/i.test(x)) q = HONEY[k];
+        if (q == null) return x;
+        const n = setQty(x, q); if (n !== x) hit = true; return n;
+      });
+      if (hit) r.last_edited_at = stamp;
+    });
+    (s.inv_engine_recipes || []).forEach(r => {
+      if (!r || String(r.unit || "").toLowerCase() !== "g") return;
+      const k = key(r.menu_item_name), ing = String(r.ingredient_name || "");
+      let q = null;
+      if (SAUCE[k] != null && (/\bsauce\b/i.test(ing) || /sea.?salt/i.test(ing)) && !/condensed/i.test(ing)) q = SAUCE[k];
+      else if (CHOC[k] != null && /chocolate powder/i.test(ing)) q = CHOC[k];
+      else if (HONEY[k] != null && /honey/i.test(ing)) q = HONEY[k];
+      if (q != null && Number(r.qty_per_serving) !== q) { r.qty_per_serving = q; r.last_edited_at = stamp; }
+    });
+    s._sauce_powder_nov9_migrated = true;
   }
 
   // Ensure new collections exist
@@ -21123,6 +21163,20 @@ routes.handbook = function (u) {
   const recipesSection = el("div", {});
 
   // ── Espresso & Milk Reference Tables ──
+  const cheatGuide = el("div", { style: { marginBottom: "18px", border: "1px solid var(--border)", borderRadius: "10px", overflow: "hidden" } });
+  const cheatHead = el("div", { style: { background: "#3b2314", color: "#f5e6d3", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" } });
+  const cheatTitle = el("span", { style: { fontWeight: "700", fontSize: "13px", letterSpacing: "0.3px" } }, "🥛 Barista Cheat Sheet — Milk, Sauces & Powders");
+  const cheatToggle = el("span", { style: { fontSize: "12px", opacity: "0.8" } }, "▲");
+  cheatHead.appendChild(cheatTitle); cheatHead.appendChild(cheatToggle);
+  const cheatBody = el("div", { style: { padding: "14px", overflowX: "auto" } });
+  cheatHead.addEventListener("click", () => {
+    const open = cheatBody.style.display !== "none";
+    cheatBody.style.display = open ? "none" : "";
+    cheatToggle.textContent = open ? "▼" : "▲";
+  });
+  cheatGuide.appendChild(cheatHead); cheatGuide.appendChild(cheatBody);
+  recipesSection.appendChild(cheatGuide);
+
   const refGuide = el("div", { style: { marginBottom: "18px", border: "1px solid var(--border)", borderRadius: "10px", overflow: "hidden" } });
 
   const refHead = el("div", {
@@ -21141,6 +21195,79 @@ routes.handbook = function (u) {
     refToggle.textContent = open ? "▼" : "▲";
     refTitle.textContent = lang === "ar" ? "☕ مرجع الإسبريسو والحليب" : "☕ Espresso & Milk Reference Guide";
   });
+
+  // ── Barista Cheat Sheet (milk, sauces & powders) — sits above the recipes ──
+  function buildCheatSheet() {
+    cheatBody.innerHTML = "";
+    const isAr = lang === "ar";
+    cheatTitle.textContent = isAr ? "🥛 ورقة الغش للباريستا — الحليب والصوصات والبودرة" : "🥛 Barista Cheat Sheet — Milk, Sauces & Powders";
+    cheatBody.style.direction = isAr ? "rtl" : "ltr";
+    const thStyle = { background: "#3b2314", color: "#f5e6d3", padding: "7px 10px", fontSize: "12px", fontWeight: "700", textAlign: isAr ? "right" : "left", whiteSpace: "nowrap" };
+    const tdStyle = { padding: "7px 10px", fontSize: "12px", verticalAlign: "top", borderBottom: "1px solid var(--border)" };
+    // ── Milk Quantity Cheat-Sheet (computed live from the recipes) ──
+    cheatBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", margin: "20px 0 4px", color: "var(--ink)" } },
+      isAr ? "ملخص كميات الحليب لكل فئة" : "Milk Quantity Cheat-Sheet"));
+    cheatBody.appendChild(el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "10px", lineHeight: "1.5" } },
+      isAr ? "الكمية نفسها لكل أنواع الحليب الخمسة: كامل الدسم، خالي الدسم، شوفان، لوز، جوز الهند. (من ملف الوصفات ver3)"
+           : "Same amount whichever milk you use — full cream, skimmed, oat, almond or coconut. (From the ver3 recipe sheet.)"));
+    // Source: "Coffee Beats Menu Analysis ver3.xlsx" → Receipe tab (milk ml per serving, same for all 5 milks).
+    const MILK_SUMMARY = [
+      ["Small drinks", "مشروبات صغيرة", "100 ml", "Macchiato · Cortado · Double O · ElAlamy · French Coffee", "ماكياتو · كورتادو · دبل أو · العلمي · فرنش كوفي"],
+      ["Hot — classics", "ساخن — كلاسيك", "150 / 180 / 230 ml", "Flat White 150 · Cappuccino 180 · Latte 230", "فلات وايت 150 · كابتشينو 180 · لاتيه 230"],
+      ["Hot flavoured lattes", "لاتيه بنكهات ساخن", "200 ml", "Salted Caramel · Mocha · White Mocha · Spanish · Director · Producer", "سولتد كراميل · موكا · وايت موكا · سبانيش · دايركتور · بروديوسر"],
+      ["Hot chocolate", "شوكولاتة ساخنة", "180 ml", "Hot Choco · Choco Mallow · Spicy Choco · Mint to Be (Berry Hot 250)", "هوت شوكو · شوكو مالو · سبايسي · مينت تو بي (بيري هوت 250)"],
+      ["Hot matcha", "ماتشا ساخن", "250 / 200 ml", "Matcha Latte 250 · flavoured matcha (Salted Caramel, White, Spanish, Dancer) 200", "ماتشا لاتيه 250 · ماتشا بنكهات ودانسر 200"],
+      ["Iced coffee", "قهوة مثلجة", "190 / 160 ml", "Ice Latte 190 · Ice flavoured lattes (Salted Caramel, Spanish, Mocha, White Mocha, Director) 160", "آيس لاتيه 190 · آيس بنكهات 160"],
+      ["Iced matcha", "ماتشا مثلج", "200 / 170 ml", "Ice Matcha Latte 200 · flavoured ice matcha (incl. Ice Dancer) 170 · Berry Matching (ice) 200", "آيس ماتشا 200 · آيس ماتشا بنكهات وآيس دانسر 170 · بيري ماتشينج 200"],
+      ["Blended coffee", "بلندد", "100 / 90 ml", "Classic Blended 100 · Mocha, Salted Caramel, White Mocha, Spanish, Director, Diva 90", "كلاسيك 100 · الباقي 90"],
+      ["Blended matcha", "بلندد ماتشا", "160 / 150 ml", "Blended Matcha 160 · flavoured blended matcha, Dancer & Berry Blended 150", "بلندد ماتشا 160 · بنكهات ودانسر وبيري 150"],
+      ["Extra milk add-on", "حليب إضافي", "120 ml", "Any milk (full cream, skimmed, oat, almond, coconut)", "أي نوع حليب"],
+    ];
+    const t3 = el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12px" } });
+    const hr3 = el("tr", {});
+    (isAr ? ["الفئة", "الحليب", "المشروبات"] : ["Category", "Milk", "Drinks"]).forEach(h => hr3.appendChild(el("th", { style: thStyle }, h)));
+    const th3 = el("thead", {}); th3.appendChild(hr3); t3.appendChild(th3);
+    const tb3 = el("tbody", {});
+    MILK_SUMMARY.forEach((row, ri) => {
+      const tr = el("tr", { style: { background: ri % 2 === 0 ? "var(--surface-2)" : "" } });
+      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "600" } }, isAr ? row[1] : row[0]));
+      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "700", whiteSpace: "nowrap" } }, row[2]));
+      tr.appendChild(el("td", { style: { ...tdStyle, color: "var(--ink-dim)" } }, isAr ? row[4] : row[3]));
+      tb3.appendChild(tr);
+    });
+    t3.appendChild(tb3);
+    cheatBody.appendChild(t3);
+
+    // ── Sauce & Powder Cheat-Sheet (source: Menu Analysis ver3 → Receipe tab, grams) ──
+    cheatBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", margin: "20px 0 4px", color: "var(--ink)" } },
+      isAr ? "ملخص كميات الصوصات والبودرة" : "Sauce & Powder Cheat-Sheet"));
+    const SP = [
+      ["Sauces (chocolate, white choc, salted caramel, sea salt vanilla)", "الصوصات (شوكولاتة، وايت، سولتد كراميل، سي سولت فانيلا)", "35 g", "Every drink — hot, iced, matcha and signature (Director, Dancer) — except blended and Double O", "كل المشروبات — ساخن، مثلج، ماتشا ومميزة (دايركتور، دانسر) — ما عدا البلندد ودبل أو"],
+      ["Sauces — blended", "الصوصات — بلندد", "30 g", "Mocha, White Mocha, Salted Caramel, Director, Dancer blended and blended matcha", "كل المشروبات البلندد"],
+      ["Sauce — Double O / extra sauce", "صوص — دبل أو / إضافة", "20 g", "Double O (salted caramel) · extra sauce add-ons", "دبل أو · إضافات الصوص"],
+      ["Vanilla powder", "بودرة فانيلا", "30 g", "Every blended drink — except Classic Blended (coffee powder) and Mocha Blended (15 g)", "كل المشروبات البلندد — ما عدا كلاسيك بلندد (بودرة قهوة) وموكا بلندد (15 غ)"],
+      ["Coffee (frappe) powder", "بودرة قهوة", "30 g", "Classic Blended Beats", "كلاسيك بلندد"],
+      ["Mocha Blended powders", "بودرة موكا بلندد", "15 + 15 g", "15 g vanilla powder + 15 g chocolate powder", "15 غ بودرة فانيلا + 15 غ بودرة شوكولاتة"],
+      ["Chocolate powder", "بودرة شوكولاتة", "40 g", "All hot chocolates and Berry Hot (Spicy Choco + 1 g cinnamon)", "كل أنواع الشوكولاتة الساخنة وبيري هوت (سبايسي + 1 غ قرفة)"],
+      ["Matcha powder", "بودرة ماتشا", "3 g", "Every matcha drink (hot, ice, blended, Dancer, Berry Matching)", "كل مشروبات الماتشا"],
+      ["Honey", "عسل", "15 g", "Matcha drinks and extra honey", "مشروبات الماتشا والعسل الإضافي"],
+      ["Vanilla syrup", "سيروب فانيلا", "20 ml", "Diva · Berry Matching", "ديفا · بيري ماتشينج"],
+    ];
+    const t4 = el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12px" } });
+    const hr4 = el("tr", {});
+    (isAr ? ["المكوّن", "الكمية", "أين"] : ["Ingredient", "Amount", "Where"]).forEach(h => hr4.appendChild(el("th", { style: thStyle }, h)));
+    const th4 = el("thead", {}); th4.appendChild(hr4); t4.appendChild(th4);
+    const tb4 = el("tbody", {});
+    SP.forEach((row, ri) => {
+      const tr = el("tr", { style: { background: ri % 2 === 0 ? "var(--surface-2)" : "" } });
+      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "600" } }, isAr ? row[1] : row[0]));
+      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "700", whiteSpace: "nowrap" } }, row[2]));
+      tr.appendChild(el("td", { style: { ...tdStyle, color: "var(--ink-dim)" } }, isAr ? row[4] : row[3]));
+      tb4.appendChild(tr);
+    });
+    t4.appendChild(tb4);
+    cheatBody.appendChild(t4);
+  }
 
   function buildRefGuide() {
     refBody.innerHTML = "";
@@ -21225,40 +21352,7 @@ routes.handbook = function (u) {
     });
     t2.appendChild(tbody2);
     refBody.appendChild(t2);
-
-    // ── Milk Quantity Cheat-Sheet (computed live from the recipes) ──
-    refBody.appendChild(el("div", { style: { fontWeight: "700", fontSize: "13px", margin: "20px 0 4px", color: "var(--ink)" } },
-      isAr ? "ملخص كميات الحليب لكل فئة" : "Milk Quantity Cheat-Sheet"));
-    refBody.appendChild(el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "10px", lineHeight: "1.5" } },
-      isAr ? "الكمية نفسها لكل أنواع الحليب الخمسة: كامل الدسم، خالي الدسم، شوفان، لوز، جوز الهند. (من ملف الوصفات ver3)"
-           : "Same amount whichever milk you use — full cream, skimmed, oat, almond or coconut. (From the ver3 recipe sheet.)"));
-    // Source: "Coffee Beats Menu Analysis ver3.xlsx" → Receipe tab (milk ml per serving, same for all 5 milks).
-    const MILK_SUMMARY = [
-      ["Small drinks", "مشروبات صغيرة", "100 ml", "Macchiato · Cortado · Double O · ElAlamy · French Coffee", "ماكياتو · كورتادو · دبل أو · العلمي · فرنش كوفي"],
-      ["Hot — classics", "ساخن — كلاسيك", "150 / 180 / 230 ml", "Flat White 150 · Cappuccino 180 · Latte 230", "فلات وايت 150 · كابتشينو 180 · لاتيه 230"],
-      ["Hot flavoured lattes", "لاتيه بنكهات ساخن", "200 ml", "Salted Caramel · Mocha · White Mocha · Spanish · Director · Producer", "سولتد كراميل · موكا · وايت موكا · سبانيش · دايركتور · بروديوسر"],
-      ["Hot chocolate", "شوكولاتة ساخنة", "180 ml", "Hot Choco · Choco Mallow · Spicy Choco · Mint to Be (Berry Hot 250)", "هوت شوكو · شوكو مالو · سبايسي · مينت تو بي (بيري هوت 250)"],
-      ["Hot matcha", "ماتشا ساخن", "250 / 200 ml", "Matcha Latte 250 · flavoured matcha (Salted Caramel, White, Spanish, Dancer) 200", "ماتشا لاتيه 250 · ماتشا بنكهات ودانسر 200"],
-      ["Iced coffee", "قهوة مثلجة", "190 / 160 ml", "Ice Latte 190 · Ice flavoured lattes (Salted Caramel, Spanish, Mocha, White Mocha, Director) 160", "آيس لاتيه 190 · آيس بنكهات 160"],
-      ["Iced matcha", "ماتشا مثلج", "200 / 170 ml", "Ice Matcha Latte 200 · flavoured ice matcha (incl. Ice Dancer) 170 · Berry Matching (ice) 200", "آيس ماتشا 200 · آيس ماتشا بنكهات وآيس دانسر 170 · بيري ماتشينج 200"],
-      ["Blended coffee", "بلندد", "100 / 90 ml", "Classic Blended 100 · Mocha, Salted Caramel, White Mocha, Spanish, Director, Diva 90", "كلاسيك 100 · الباقي 90"],
-      ["Blended matcha", "بلندد ماتشا", "160 / 150 ml", "Blended Matcha 160 · flavoured blended matcha, Dancer & Berry Blended 150", "بلندد ماتشا 160 · بنكهات ودانسر وبيري 150"],
-      ["Extra milk add-on", "حليب إضافي", "120 ml", "Any milk (full cream, skimmed, oat, almond, coconut)", "أي نوع حليب"],
-    ];
-    const t3 = el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12px" } });
-    const hr3 = el("tr", {});
-    (isAr ? ["الفئة", "الحليب", "المشروبات"] : ["Category", "Milk", "Drinks"]).forEach(h => hr3.appendChild(el("th", { style: thStyle }, h)));
-    const th3 = el("thead", {}); th3.appendChild(hr3); t3.appendChild(th3);
-    const tb3 = el("tbody", {});
-    MILK_SUMMARY.forEach((row, ri) => {
-      const tr = el("tr", { style: { background: ri % 2 === 0 ? "var(--surface-2)" : "" } });
-      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "600" } }, isAr ? row[1] : row[0]));
-      tr.appendChild(el("td", { style: { ...tdStyle, fontWeight: "700", whiteSpace: "nowrap" } }, row[2]));
-      tr.appendChild(el("td", { style: { ...tdStyle, color: "var(--ink-dim)" } }, isAr ? row[4] : row[3]));
-      tb3.appendChild(tr);
-    });
-    t3.appendChild(tb3);
-    refBody.appendChild(t3);
+    buildCheatSheet();
   }
 
   refGuide.appendChild(refHead);
