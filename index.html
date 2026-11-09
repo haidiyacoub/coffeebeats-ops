@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261109-872 -->
+<!-- CB_BUILD:20261109-878 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261109-872";
+  var BUILD = "20261109-878";
   (function() {
     function checkFresh() {
       try {
@@ -3566,6 +3566,8 @@ let _idleBanner = null;
 
 function startIdleTimer() {
   stopIdleTimer();
+  // Owner stays signed in — no inactivity auto-logout for the owner role.
+  if (state._auth && state._auth.role === "owner") return;
   // Show a 60-second warning banner before logging out
   _idleWarnTimer = setTimeout(() => {
     if (!state._auth) return;
