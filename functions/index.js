@@ -1,6 +1,6 @@
 const { onCall, HttpsError }     = require("firebase-functions/v2/https");
 const { onSchedule }             = require("firebase-functions/v2/scheduler");
-const { onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onDocumentUpdated, onDocumentWritten, onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret }           = require("firebase-functions/params");
 const admin      = require("firebase-admin");
 const bcrypt     = require("bcryptjs");
@@ -11,6 +11,11 @@ const nodemailer = require("nodemailer");
 const GMAIL_USER = defineSecret("GMAIL_USER");   // your Gmail address
 const GMAIL_PASS = defineSecret("GMAIL_PASS");   // Gmail app password (16-char)
 const NOTIFY_TO  = defineSecret("NOTIFY_TO");    // recipient email (can be same as GMAIL_USER)
+
+// Counterpoint write-enabled API key (set via: firebase functions:secrets:set COUNTERPOINT_API_KEY).
+// Same host the counterpoint-worker uses — not secret itself, just the base URL.
+const COUNTERPOINT_API_KEY  = defineSecret("COUNTERPOINT_API_KEY");
+const COUNTERPOINT_BASE     = "https://counterpoint-api.fly.dev/v1";
 
 // Symmetric key used to store staff PINs in a form the owner can recover
 // (set via: firebase functions:secrets:set PIN_ENC_KEY). Login itself still
@@ -24,6 +29,53 @@ admin.initializeApp();
 function getDb()   { return admin.firestore(); }
 function getAuth() { return admin.auth(); }
 
+
+// ─── syncSignupToCounterpoint ──────────────────────────────────────────────────
+// Fires whenever the website writes a new doc to email_subscribers (the "Beat With
+// Us" form — coffeebeats.art writes directly via the client SDK, Firestore rules
+// allow create-only). Form collects name + phone (required) and email (optional).
+// Pushes the signup into Counterpoint as a customer so loyalty sign-ups from the
+// site land in the same place as till customers.
+//
+// NOTE: Counterpoint's customer schema isn't documented anywhere in this repo. The
+// API was probed read-only (GET /customers, and a POST with an empty body) to learn
+// that "name" is a required field; "email" and "phone" below are the conventional
+// REST names, not confirmed against real Counterpoint docs. After deploying, do one
+// real test signup on the site and check https://counterpoint.pragmatech.work/customers
+// — if the record is missing/mismapped, adjust the field names in `payload` below.
+exports.syncSignupToCounterpoint = onDocumentCreated(
+  { document: "email_subscribers/{id}", secrets: [COUNTERPOINT_API_KEY] },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() || {};
+    if (!data.phone && !data.email) return;
+
+    const payload = { name: data.name || data.phone || data.email };
+    if (data.phone) payload.phone = data.phone;
+    if (data.email) payload.email = data.email;
+
+    try {
+      const res = await fetch(`${COUNTERPOINT_BASE}/customers`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${COUNTERPOINT_API_KEY.value()}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(`Counterpoint ${res.status}: ${JSON.stringify(body).slice(0, 300)}`);
+
+      await snap.ref.update({
+        counterpoint_customer_id: body.id ?? null,
+        counterpoint_synced_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log("Signup synced to Counterpoint", { id: event.params.id, counterpoint_id: body.id ?? null });
+    } catch (e) {
+      console.error("Counterpoint signup sync failed", { id: event.params.id, error: String(e.message || e) });
+      await getDb().collection("system_flags").doc(`cp_signup_fail_${event.params.id}`)
+        .set({ error: String(e.message || e), phone: data.phone || null, email: data.email || null, at: new Date().toISOString() });
+    }
+  }
+);
 
 // ─── verifyPin ────────────────────────────────────────────────────────────────
 exports.verifyPin = onCall(async (request) => {
