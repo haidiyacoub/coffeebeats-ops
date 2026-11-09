@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261108-862 -->
+<!-- CB_BUILD:20261109-848 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261108-862";
+  var BUILD = "20261109-848";
   (function() {
     function checkFresh() {
       try {
@@ -20889,6 +20889,46 @@ const HB_AR_STEPS_ADD = {
 };
 Object.entries(HB_AR_NAMES_ADD).forEach(([k, v]) => { HB_AR.names[k.trim().toLowerCase()] = v; });
 Object.assign(HB_AR.steps, HB_AR_STEPS_ADD);
+
+// Arabic additions (9 Nov 2026): unified milk recipes, matcha 40 ml base, Mint to Be, new ice drinks.
+// Arabic view must have no English words except product names.
+Object.assign(HB_AR.names, {
+  "the director (ice)": "ذا دايركتور (آيس)",
+  "the dancer (ice)": "ذا دانسر (آيس)",
+  "the artist (ice)": "ذا آرتيست (آيس)",
+});
+Object.assign(HB_AR.ings, {
+  "steamed whole milk: steam 100 ml, pour 55 ml (100 ml is the minimum to foam properly; cost uses 100 ml)":
+    "حليب كامل مبخّر: بخّر 100 مل واسكب 55 مل (100 مل هي أقل كمية تتكوّن فيها الرغوة جيدًا، والتكلفة محسوبة على 100 مل)",
+  "steamed milk: steam 100 ml, spoon 25 ml of foam on top (100 ml is the minimum to foam properly; cost uses 100 ml)":
+    "حليب مبخّر: بخّر 100 مل وضع 25 مل من الرغوة بالملعقة على الوجه (100 مل هي أقل كمية تتكوّن فيها الرغوة جيدًا، والتكلفة محسوبة على 100 مل)",
+  "matcha powder: 3 g (whisk with a little hot water into a 40 ml base; no extra water)":
+    "بودرة ماتشا: 3 جم (تُخفق مع قليل من الماء الساخن لتصبح قاعدة 40 مل، بدون أي ماء إضافي)",
+  "mint water: 30 ml (mint boiled in water)": "ماء النعناع: 30 مل (نعناع مغلي في الماء)",
+  "ice: 135 g in the server": "ثلج: 135 جم في الإبريق",
+});
+Object.assign(HB_AR.notes, {
+  "Coffee Type 3 · V60 Pour-over · 92°C · brewed over ice": "قهوة نوع 3 · تقطير V60 · 92°م · تُحضّر فوق الثلج",
+});
+Object.assign(HB_AR.steps, {
+  "Combine matcha, a little hot water (40 ml base), honey. Whisk until smooth paste.": "اخلط الماتشا مع قليل من الماء الساخن (قاعدة 40 مل) والعسل. اخفق حتى تصبح عجينة ناعمة.",
+  "Combine matcha, a little hot water (40 ml base), salted sauce. Whisk smooth.": "اخلط الماتشا مع قليل من الماء الساخن (قاعدة 40 مل) وصوص السولتد كراميل. اخفق حتى يصبح ناعمًا.",
+  "Combine matcha, a little hot water (40 ml base), condensed milk. Whisk smooth.": "اخلط الماتشا مع قليل من الماء الساخن (قاعدة 40 مل) والحليب المكثف. اخفق حتى يصبح ناعمًا.",
+  "Combine matcha, a little hot water (40 ml base), white chocolate. Whisk smooth.": "اخلط الماتشا مع قليل من الماء الساخن (قاعدة 40 مل) والشوكولاتة البيضاء. اخفق حتى يصبح ناعمًا.",
+  "Combine matcha, a little hot water (40 ml base), honey. Whisk smooth.": "اخلط الماتشا مع قليل من الماء الساخن (قاعدة 40 مل) والعسل. اخفق حتى يصبح ناعمًا.",
+  "Combine matcha, a little hot water (40 ml base) and vanilla syrup. Whisk smooth.": "اخلط الماتشا مع قليل من الماء الساخن (قاعدة 40 مل) وسيروب الفانيليا. اخفق حتى يصبح ناعمًا.",
+  "Dissolve matcha in a little hot water (40 ml base).": "ذوّب الماتشا في قليل من الماء الساخن (قاعدة 40 مل).",
+  "Boil the mint in water; keep 30 ml of the mint water.": "اغلِ النعناع في الماء واحتفظ بـ 30 مل من ماء النعناع.",
+  "Steam 180 ml milk until hot.": "بخّر 180 مل حليب حتى يسخن.",
+  "Add chocolate powder and the mint water, whisk until dissolved.": "أضف بودرة الشوكولاتة وماء النعناع، واخفق حتى تذوب.",
+  "Extract espresso, mix with sea salt vanilla sauce.": "استخلص الإسبريسو واخلطه مع صوص الفانيليا بملح البحر.",
+  "Whisk matcha with a little hot water (40 ml base) and the sea salt vanilla sauce until smooth.": "اخفق الماتشا مع قليل من الماء الساخن (قاعدة 40 مل) وصوص الفانيليا بملح البحر حتى يصبح ناعمًا.",
+  "Put 135 g ice in the server under the V60.": "ضع 135 جم ثلج في الإبريق تحت الـ V60.",
+  "Rinse paper filter, discard rinse water.": "اشطف الفلتر الورقي وتخلّص من ماء الشطف.",
+  "Bloom with 30 g water, wait 30 sec.": "مرحلة التفتّح: اسكب 30 جم ماء وانتظر 30 ثانية.",
+  "Pour the rest of the 135 ml slowly over ~1 min 30 sec.": "اسكب باقي الـ 135 مل ببطء على مدى دقيقة و30 ثانية تقريبًا.",
+  "Swirl to chill, pour over fresh ice. Serve with lid.": "حرّك الإبريق بشكل دائري ليبرد، ثم اسكبه على ثلج جديد. قدّمه بغطاء.",
+});
 
 function hbArValue(v) {
   return String(v)
