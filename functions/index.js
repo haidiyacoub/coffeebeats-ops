@@ -788,8 +788,7 @@ async function _runComplianceCheck({ checkCloses }) {
     if (!roster.some(r => branchOf(r) === b))
       problems.push({ key: `roster:${sunday}:${b}`, text: `SCHEDULE NOT UPDATED — ${_cap(b)} has no roster for the week starting ${sunday}` });
     if (closedToday.has(b)) continue;
-    if (!stamps.some(s => branchOf(s) === b))
-      problems.push({ key: `stamp:${b}`, text: `NO SIGN-IN STAMP — ${_cap(b)} has no sign-in stamp today` });
+    // Sign-in stamps retired (attendance is monitored from Counterpoint's Time clock) — no stamp check.
     if (checkCloses && !closes.some(c => branchOf(c) === b))
       problems.push({ key: `close:${b}`, text: `NO SHIFT CLOSE — ${_cap(b)} has no shift close today` });
     if (checkCloses && !wastes.some(w => branchOf(w) === b))

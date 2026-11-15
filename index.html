@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261109-071 -->
+<!-- CB_BUILD:20261115-233 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261109-071";
+  var BUILD = "20261115-233";
   (function() {
     function checkFresh() {
       try {
@@ -3678,7 +3678,10 @@ function isMobileDevice() {
 // stock, so ops stock = last count + purchases − waste − sales since that count.
 const _cp = { sales: null, maadiId: null, locIds: {}, at: 0, loading: null, ver: 0, recipes: null, catalog: null, catalogStarted: false, catalogLoading: null };
 // Counterpoint ingredient name → ops inventory item name, where the two systems call the same thing differently
-const CP_ING_ALIAS = { chocolatesauce: "Dark Chocolate Sauce" };
+// Coffee type 1 = Sunrise Coffee, coffee type 2 = Core Coffee (Counterpoint may use either naming).
+const CP_ING_ALIAS = { chocolatesauce: "Dark Chocolate Sauce",
+  sunrisecoffee: "Coffee type1", coffeetype1sunrisecoffee: "Coffee type1", coffeetype1: "Coffee type1",
+  corecoffee: "coffee type2", coffeetype2corecoffee: "coffee type2", coffeetype2: "coffee type2" };
 const VAT_RATE = 1.14;   // Counterpoint prices are ex-VAT; the ops menu is VAT-inclusive
 let _cpUsageMemo = null;
 const _cpNrm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -7994,6 +7997,7 @@ routes.items_list = function (u) {
 
   const wrap = el("div", {});
   wrap.appendChild(header(T("Inventory Items","أصناف المخزون"), T("Add, edit or remove items tracked in stock.","إضافة أو تعديل أو حذف الأصناف المتابعة في المخزون.")));
+  wrap.appendChild(el("div", { class: "muted", style: { fontSize: "12px", marginBottom: "10px" } }, "☕ " + T("Coffee type 1 = Sunrise Coffee · Coffee type 2 = Core Coffee","قهوة نوع 1 = صن رايز كوفي · قهوة نوع 2 = كور كوفي")));
 
   if (canEdit) {
     const addBtn = el("button", { class: "btn secondary", style: { marginBottom: "12px" } }, "➕ Add item");
@@ -8425,15 +8429,37 @@ routes.purchase_new = function (u) {
   }
   draw();
 
+  function showSelectItemWarning() {
+    const bullet = (t) => el("li", { style: { marginBottom: "10px" } }, t);
+    openSheet(el("div", { style: { textAlign: "center", padding: "10px 4px" } }, [
+      el("div", { style: { fontSize: "56px" } }, "⚠️"),
+      el("h2", { style: { fontSize: "26px", margin: "8px 0 14px" } }, T("Select the item from the dropdown list","اختر الصنف من القائمة المنسدلة")),
+      el("div", { style: { fontSize: "18px", lineHeight: "1.5", textAlign: T("left","right") } }, [
+        el("p", {}, T("This purchase can't be saved until every inventory line has an item chosen from the dropdown list. This is how the stock count goes up automatically.",
+          "لا يمكن حفظ هذا المشترى قبل اختيار صنف من القائمة المنسدلة لكل بند مخزون. بهذه الطريقة يزيد رصيد المخزون تلقائياً.")),
+        el("ul", { style: { paddingInlineStart: "22px" } }, [
+          bullet(T("🧺 Bought coffee in bulk? Make a SEPARATE purchase entry for each coffee type (e.g. one entry for Sunrise, another for each other blend).",
+            "🧺 اشتريت قهوة بالجملة؟ سجّل مشترى منفصلاً لكل نوع قهوة (مثلاً مشترى لـ Sunrise ومشترى آخر لكل خلطة أخرى).")),
+          bullet(T("🚫 Can't find the item in the dropdown? Don't enter it another way — report it to the owner so it can be added.",
+            "🚫 لا تجد الصنف في القائمة؟ لا تسجله بطريقة أخرى — أبلغ المالك ليتم إضافته.")),
+        ]),
+      ]),
+    ]));
+  }
+
   async function submit() {
     if (!supplier) return toast(T("Enter supplier name","أدخل اسم المورد"), "error");
     if (no_receipt && !no_receipt_reason.trim()) return toast(T("Enter a reason for submitting without a receipt","أدخل سبب الإرسال بدون فاتورة"), "error");
     if (branch === "both" && lines.some(l => l.kind === "inventory")) {
       return toast(T("Both-branches purchases can only have 'Other' (shared-cost) lines.","مشتريات الفرعين معاً تقبل بنود 'أخرى' (تكلفة مشتركة) فقط."), "error");
     }
+    // Mandatory inventory item: every purchase (except shared both-branches costs) must pick the item from the dropdown.
+    if (branch !== "both" && (!lines.some(l => l.kind === "inventory") || lines.some(l => l.kind === "inventory" && !l.inv_item_id))) {
+      return showSelectItemWarning();
+    }
     for (const ln of lines) {
       if (ln.kind === "inventory") {
-        if (!ln.inv_item_id) return toast(T("Pick an inventory item for every inventory line","اختر صنف مخزون لكل بند مخزون"), "error");
+        if (!ln.inv_item_id) return showSelectItemWarning();
         if (!ln.purchase_qty) return toast(T("Enter a quantity for every inventory line","أدخل الكمية لكل بند مخزون"), "error");
         if (!ln.pack_size)    return toast(T("Enter the pack size (e.g. ml per bottle) for every inventory line","أدخل حجم العبوة (مثال: مل لكل زجاجة) لكل بند مخزون"), "error");
       } else {
@@ -8559,6 +8585,14 @@ routes.purchase_new = function (u) {
       pushPurchaseFor(branch, outLines, total, null);
     }
     saveState();
+    // Tell the user what stock each inventory line just added to (expected = last count + purchases since).
+    try {
+      const invLines = outLines.filter(l => l.kind === "inventory" && l.inv_item_id && l.qty_canonical);
+      if (invLines.length && branch !== "both") {
+        const st = computeStock(branch);
+        toast(invLines.map(l => `${l.item_name}: +${l.qty_canonical} ${l.unit} → ${Math.round((st[l.inv_item_id] || 0) * 100) / 100} ${l.unit}`).join(" · "));
+      }
+    } catch (e) {}
     const rpNames = receiptPhotoField.getBlobs().map(f => f.name);
     if (rpNames.length) {
       showPhotoConfirm({
@@ -8625,6 +8659,44 @@ routes.purchase_list = function (u) {
   const countEl = el("div", { class: "muted small", style: { marginBottom: "8px" } });
   wrap.appendChild(el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "6px" } }, [searchIn, monthIn, clearBtn]));
   wrap.appendChild(countEl);
+  // Monthly totals: each month in its own card (sum of receipt totals, count, per-branch split)
+  const monthlyBtn = el("button", { class: "btn secondary", style: { marginBottom: "10px" } }, T("📅 Monthly totals","📅 إجمالي كل شهر"));
+  const monthlyPanel = el("div", { style: { display: "none", marginBottom: "12px" } });
+  monthlyBtn.addEventListener("click", () => {
+    const open = monthlyPanel.style.display === "none";
+    monthlyPanel.style.display = open ? "block" : "none";
+    if (!open) return;
+    monthlyPanel.innerHTML = "";
+    const byMonth = {};
+    for (const p of visible) {
+      if (!notTest(p)) continue;
+      const m = (p.date || (p.at||"").slice(0,10)).slice(0,7);
+      if (!m) continue;
+      const b = byMonth[m] = byMonth[m] || { total: 0, n: 0, br: {} };
+      b.total += p.total || 0; b.n++;
+      const bk = p.branch || "—"; b.br[bk] = (b.br[bk] || 0) + (p.total || 0);
+    }
+    const months = Object.keys(byMonth).sort().reverse();
+    if (!months.length) { monthlyPanel.appendChild(el("div", { class: "muted" }, T("No purchases yet.","لا توجد مشتريات بعد."))); return; }
+    const grand = months.reduce((a, m) => a + byMonth[m].total, 0);
+    const grandN = months.reduce((a, m) => a + byMonth[m].n, 0);
+    monthlyPanel.appendChild(el("div", { class: "card", style: { marginBottom: "10px", borderColor: "var(--accent)" } }, [
+      el("div", { class: "title" }, T(`Total spent on purchases — ${money(grand)}`, `إجمالي المشتريات — ${money(grand)}`)),
+      el("div", { class: "sub" }, T(`${grandN} receipt(s) across ${months.length} month(s)`, `${grandN} فاتورة على ${months.length} شهر`)),
+    ]));
+    for (const m of months) {
+      const b = byMonth[m];
+      const label = new Date(m + "-01T12:00:00").toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      monthlyPanel.appendChild(el("div", { class: "card", style: { marginBottom: "8px", cursor: "pointer" },
+        onClick: () => { monthIn.value = m; searchIn.value = ""; draw(); window.scrollTo({ top: list.offsetTop - 80, behavior: "smooth" }); } }, [
+        el("div", { class: "title" }, `${label} — ${money(b.total)}`),
+        el("div", { class: "sub" }, T(`${b.n} receipt(s)`, `${b.n} فاتورة`) + " · " +
+          Object.entries(b.br).map(([k, v]) => `${k}: ${money(v)}`).join(" · ")),
+      ]));
+    }
+  });
+  wrap.appendChild(monthlyBtn);
+  wrap.appendChild(monthlyPanel);
   const purchaseText = (p) => [p.supplier, p.branch, p.note, p.paid_by, p.by_name,
     ...(p.lines || []).map(l => [l.item_name, l.description, l.note].filter(Boolean).join(" "))
   ].filter(Boolean).join(" ").toLowerCase();
@@ -21275,8 +21347,8 @@ routes.handbook = function (u) {
     const sec1Title = el("div", { style: { fontWeight: "700", fontSize: "13px", marginBottom: "8px", color: "var(--ink)" } },
       isAr ? "مواصفات استخلاص الإسبريسو" : "Espresso Extraction Profiles");
     const sec1Sub = el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "10px" } },
-      isAr ? "جميع المشروبات المعتمدة على الإسبريسو في كوفي بيتس تستخدم أحد ملفين للاستخلاص. ارجع دائمًا للوصفة للتأكد من النوع."
-           : "All espresso-based drinks at Coffee Beats use one of two extraction profiles. Always refer to the recipe for which type to use.");
+      isAr ? "جميع المشروبات المعتمدة على الإسبريسو في كوفي بيتس تستخدم أحد ملفين للاستخلاص. ارجع دائمًا للوصفة للتأكد من النوع. نوع 1 = صن رايز كوفي · نوع 2 = كور كوفي."
+           : "All espresso-based drinks at Coffee Beats use one of two extraction profiles. Always refer to the recipe for which type to use. Coffee Type 1 = Sunrise Coffee · Coffee Type 2 = Core Coffee.");
     refBody.appendChild(sec1Title);
     refBody.appendChild(sec1Sub);
 
@@ -21284,8 +21356,8 @@ routes.handbook = function (u) {
     const tdStyle = { padding: "7px 10px", fontSize: "12px", verticalAlign: "top", borderBottom: "1px solid var(--border)" };
 
     const espHeaders = isAr
-      ? ["المعامل", "نوع 1", "نوع 2", "نوع 3 (V60)", "كورتادو", "ملاحظات"]
-      : ["Parameter", "Coffee Type 1", "Coffee Type 2", "Coffee Type 3 (V60)", "Cortado", "Notes"];
+      ? ["المعامل", "نوع 1 (صن رايز كوفي)", "نوع 2 (كور كوفي)", "نوع 3 (V60)", "كورتادو", "ملاحظات"]
+      : ["Parameter", "Coffee Type 1 (Sunrise Coffee)", "Coffee Type 2 (Core Coffee)", "Coffee Type 3 (V60)", "Cortado", "Notes"];
 
     const espRows = isAr ? [
       ["الجرعة", "18 غ", "18 غ", "18 غ", "18 غ (نوع 1)\nنوع 2 — فريق الكورتادو", "استخدم دائمًا ميزان دقيق\nزن الناتج\nadjust grind if off"],
@@ -21498,7 +21570,7 @@ routes.handbook = function (u) {
 
         // ── Coffee notes banner (optional) ──
         if (recipe.coffee_notes) {
-          const banner = el("div", { style: { background: "#f5e6d3", padding: "7px 14px", fontSize: "12px", color: "#3b2314", borderBottom: "1px solid var(--border)", fontStyle: "italic" } }, "☕ " + recipe.coffee_notes);
+          const banner = el("div", { style: { background: "#f5e6d3", padding: "7px 14px", fontSize: "12px", color: "#3b2314", borderBottom: "1px solid var(--border)", fontStyle: "italic" } }, "☕ " + recipe.coffee_notes + (/Coffee Type [12]\b|نوع [12]/.test(recipe.coffee_notes) ? (lang === "ar" ? "  (نوع 1 = صن رايز كوفي · نوع 2 = كور كوفي)" : "  (Type 1 = Sunrise Coffee · Type 2 = Core Coffee)") : ""));
           card.appendChild(banner);
         }
 
