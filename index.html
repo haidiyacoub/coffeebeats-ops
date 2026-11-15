@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261115-268 -->
+<!-- CB_BUILD:20261115-755 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261115-268";
+  var BUILD = "20261115-755";
   (function() {
     function checkFresh() {
       try {
@@ -11379,7 +11379,7 @@ function renderMaintenanceCard(month, redraw, branches) {
           ((o.month || (o.date||"").slice(0,7)) === month));
         const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
         const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
-        cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
+        cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, (br === "maadi" ? "🏠 " : "🏢 ") + branchLabel(br)));
         if (logged.length) {
           cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--ok)", fontSize:"14px" } }, `✓ ${money(total)}`));
           for (const o of logged) {
@@ -11419,7 +11419,7 @@ function renderMaintenanceCard(month, redraw, branches) {
         ((o.month || (o.date||"").slice(0,7)) === month));
       const total = logged.reduce((s,o) => s + (Number(o.amount)||0), 0);
       const cell = el("div", { style:{ border:"1px solid var(--border)", borderRadius:"8px", padding:"8px" } });
-      cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"));
+      cell.appendChild(el("div", { class:"muted small", style:{ fontWeight:"700", marginBottom:"4px" } }, (br === "maadi" ? "🏠 " : "🏢 ") + branchLabel(br)));
       if (logged.length) {
         cell.appendChild(el("div", { style:{ fontWeight:"700", color:"var(--warn)", fontSize:"14px" } }, `✓ ${money(total)}`));
         for (const o of logged) {
@@ -11449,7 +11449,7 @@ function renderMaintenanceCard(month, redraw, branches) {
   function logEmergencyMaintenance(br) {
     const today = new Date().toISOString().slice(0,10);
 
-    const body = el("div", {}, [ el("h2", {}, `🚨 Emergency maintenance — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
+    const body = el("div", {}, [ el("h2", {}, `🚨 Emergency maintenance — ${(br === "maadi" ? "🏠 " : "🏢 ") + branchLabel(br)}`) ]);
     body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `Unscheduled breakdown or repair · ${month}`));
 
     body.appendChild(el("label", {}, "What broke / what was fixed (required)"));
@@ -11532,7 +11532,7 @@ function renderMaintenanceCard(month, redraw, branches) {
     const eng = maintEngineer(planValue);
     const today = new Date().toISOString().slice(0,10);
 
-    const body = el("div", {}, [ el("h2", {}, `${plan.label} — ${br === "maadi" ? "🏠 Maadi" : "🏢 Zawya"}`) ]);
+    const body = el("div", {}, [ el("h2", {}, `${plan.label} — ${(br === "maadi" ? "🏠 " : "🏢 ") + branchLabel(br)}`) ]);
     body.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } }, `${plan.desc} · ${month}`));
 
     // Engineer
@@ -12478,7 +12478,7 @@ routes.overheads = function (u) {
   function drawBranchPanel(br) {
     const panel = el("div", { class:"card" });
     panel.appendChild(el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", marginBottom:"10px", fontWeight:"700" } },
-      (br === "maadi" ? "🏠 Maadi" : "🏢 Zawya") + ` · ${month}`));
+      (br === "maadi" ? "🏠 " : "🏢 ") + branchLabel(br) + ` · ${month}`));
 
     let panelPaid = 0, panelUnpaid = 0;
 
