@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261115-233 -->
+<!-- CB_BUILD:20261115-268 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261115-233";
+  var BUILD = "20261115-268";
   (function() {
     function checkFresh() {
       try {
@@ -8438,8 +8438,8 @@ routes.purchase_new = function (u) {
         el("p", {}, T("This purchase can't be saved until every inventory line has an item chosen from the dropdown list. This is how the stock count goes up automatically.",
           "لا يمكن حفظ هذا المشترى قبل اختيار صنف من القائمة المنسدلة لكل بند مخزون. بهذه الطريقة يزيد رصيد المخزون تلقائياً.")),
         el("ul", { style: { paddingInlineStart: "22px" } }, [
-          bullet(T("🧺 Bought coffee in bulk? Make a SEPARATE purchase entry for each coffee type (e.g. one entry for Sunrise, another for each other blend).",
-            "🧺 اشتريت قهوة بالجملة؟ سجّل مشترى منفصلاً لكل نوع قهوة (مثلاً مشترى لـ Sunrise ومشترى آخر لكل خلطة أخرى).")),
+          bullet(T("🧺 Bought different coffee types in one purchase? Make a separate purchase item for each coffee type, and upload the same receipt each time.",
+            "🧺 اشتريت أنواعاً مختلفة من القهوة في عملية شراء واحدة؟ سجّل بنداً منفصلاً لكل نوع قهوة، وارفع نفس الفاتورة في كل مرة.")),
           bullet(T("🚫 Can't find the item in the dropdown? Don't enter it another way — report it to the owner so it can be added.",
             "🚫 لا تجد الصنف في القائمة؟ لا تسجله بطريقة أخرى — أبلغ المالك ليتم إضافته.")),
         ]),
@@ -21719,14 +21719,18 @@ routes.handbook = function (u) {
       content: [
         { type: "para", text: "Use the Record Purchase screen in the operations app every time supplies are received. All fields must be completed accurately." },
         { type: "subheader", text: "How to Record a Purchase" },
-        { type: "bullets", items: ["Open the Record Purchase screen.", "Select the item purchased from the ingredient list.", "Enter the total amount paid (in EGP) — enter the complete invoice total.", "Enter the quantity received.", "Tap the calendar icon to select the expiry date. Leave blank for non-perishables.", "Tap Yes if an electronic receipt was provided and upload the file; tap No otherwise.", "Add any notes about the purchase, then tap Submit."] },
+        { type: "bullets", items: ["Open the Record Purchase screen.", "Select the item purchased from the dropdown list — this is mandatory and the purchase cannot be saved without it. Choosing the item is what adds the quantity to the stock count on top of the current number.", "Bought different coffee types in one purchase? Make a separate purchase item for each coffee type and upload the same receipt each time.", "Item not in the dropdown? Do not record it another way — report it to the owner so it can be added.", "Enter the total amount paid (in EGP) — enter the complete invoice total.", "Enter the quantity received.", "Tap the calendar icon to select the expiry date. Leave blank for non-perishables.", "Tap Yes if an electronic receipt was provided and upload the file; tap No otherwise.", "Add any notes about the purchase, then tap Submit."] },
+        { type: "subheader", text: "Monthly Totals" },
+        { type: "para", text: "The Purchases list has a Monthly Totals button: it shows the total money spent on purchases, then each month on its own card with its receipt total, receipt count and branch split. Tap a month to see only that month's purchases." },
         { type: "subheader", text: "Monthly Receipt Report" },
         { type: "para", text: "At the end of each calendar month, the system automatically sends an email to coffeebeats@haidiyacoub.com with the monthly purchase receipt summary — items with receipts and the total without receipts." },
       ],
       ar_content: [
         { type: "para", text: "استخدم شاشة تسجيل المشتريات في تطبيق العمليات في كل مرة تستلم فيها مستلزمات. يجب استكمال جميع الحقول بدقة." },
         { type: "subheader", text: "كيفية تسجيل مشتريات" },
-        { type: "bullets", items: ["افتح شاشة تسجيل المشتريات.", "اختر المنتج المشترى من قائمة المكونات.", "أدخل المبلغ الإجمالي المدفوع (بالجنيه المصري) — أدخل إجمالي الفاتورة كاملاً.", "أدخل الكمية المستلمة.", "اضغط على أيقونة التقويم لاختيار تاريخ انتهاء الصلاحية. اتركه فارغاً للمنتجات غير القابلة للتلف.", "اضغط نعم إذا تم توفير إيصال إلكتروني وقم بتحميل الملف؛ اضغط لا في حال العكس.", "أضف أي ملاحظات حول الشراء، ثم اضغط تقديم."] },
+        { type: "bullets", items: ["افتح شاشة تسجيل المشتريات.", "اختر المنتج المشترى من القائمة المنسدلة — هذا إلزامي ولا يمكن حفظ المشترى بدونه. اختيار الصنف هو ما يضيف الكمية إلى رصيد المخزون فوق الرقم الحالي.", "اشتريت أنواعاً مختلفة من القهوة في عملية شراء واحدة؟ سجّل بنداً منفصلاً لكل نوع قهوة وارفع نفس الفاتورة في كل مرة.", "الصنف غير موجود في القائمة؟ لا تسجله بطريقة أخرى — أبلغ المالك ليتم إضافته.", "أدخل المبلغ الإجمالي المدفوع (بالجنيه المصري) — أدخل إجمالي الفاتورة كاملاً.", "أدخل الكمية المستلمة.", "اضغط على أيقونة التقويم لاختيار تاريخ انتهاء الصلاحية. اتركه فارغاً للمنتجات غير القابلة للتلف.", "اضغط نعم إذا تم توفير إيصال إلكتروني وقم بتحميل الملف؛ اضغط لا في حال العكس.", "أضف أي ملاحظات حول الشراء، ثم اضغط تقديم."] },
+        { type: "subheader", text: "إجمالي كل شهر" },
+        { type: "para", text: "في قائمة المشتريات زر إجمالي كل شهر: يعرض إجمالي المبلغ المصروف على المشتريات، ثم كل شهر في بطاقة منفصلة بإجمالي إيصالاته وعددها وتوزيعها على الفروع. اضغط على شهر لعرض مشتريات ذلك الشهر فقط." },
         { type: "subheader", text: "تقرير الإيصالات الشهري" },
         { type: "para", text: "في نهاية كل شهر ميلادي، يرسل النظام تلقائياً بريداً إلكترونياً إلى coffeebeats@haidiyacoub.com بملخص إيصالات المشتريات الشهرية — العناصر مع الإيصالات والإجمالي بدون إيصالات." },
       ]
@@ -23448,22 +23452,24 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>Record Purchase</strong> whenever a delivery arrives.",
         "Select <strong>branch</strong>, <strong>supplier</strong>, and how it was <strong>paid</strong>: Petty Cash, Owner's Bank, Credit Card, or Unpaid/Credit.",
+        "<strong>Pick the item from the dropdown — mandatory.</strong> Saving is blocked (with a big warning) until every inventory line has an item selected. Bought different coffee types in one purchase? Make a <strong>separate purchase item for each coffee type</strong> and upload the same receipt each time. Item not in the dropdown? Report it to the owner — don't record it another way.",
         "Add each item bought: purchase unit (e.g. bottle, carton), pack size (how many inventory units are in one purchase unit — e.g. 850 ml per bottle), quantity, and unit price. The app converts this automatically into inventory units and cost per unit, and remembers your last conversion for that item next time.",
         "For non-inventory costs (delivery fee, packaging, card charges) add an <strong>Other</strong> line with just a cost — it won't touch stock.",
         "<strong>Both branches:</strong> for a shared cost like marketing or an agency retainer, pick the <strong>Both</strong> tab. Enter one amount and a Zawya/Maadi split (default 50/50). It saves as two linked purchases — one per branch — so each branch's P&L carries its share and each float/ledger is charged its part. Only Other lines are allowed here. Deleting one half offers to delete both.",
         "Attach a photo of the receipt.",
         "Tap <strong>Save</strong>. Two things happen automatically: every item line adds to that branch's stock, and the money moves out of wherever you said it came from — Petty Cash balance drops by the total, or a matching negative entry appears in the Bank Ledger (bank/credit card). Unpaid purchases only affect stock, not any ledger.",
-        "The purchase list shows your full history — tap any purchase to see the receipt and line items.",
+        "The purchase list shows your full history — tap any purchase to see the receipt and line items. <strong>📅 Monthly totals</strong> shows total money spent plus a card per month (receipt total, count, branch split); tap a month to filter to it.",
       ],
       ar_steps: [
         "اضغط على <strong>تسجيل مشترى</strong> عند وصول أي توريد.",
         "اختر <strong>الفرع</strong> و<strong>المورد</strong> وطريقة <strong>الدفع</strong>: نثرية، بنك المالك، بطاقة ائتمان، أو آجل/دون دفع.",
+        "<strong>اختر الصنف من القائمة المنسدلة — إلزامي.</strong> يُمنع الحفظ (مع تحذير كبير) حتى يُختار صنف لكل بند مخزون. اشتريت أنواعاً مختلفة من القهوة في عملية شراء واحدة؟ سجّل <strong>بنداً منفصلاً لكل نوع قهوة</strong> وارفع نفس الفاتورة في كل مرة. الصنف غير موجود؟ أبلغ المالك — لا تسجله بطريقة أخرى.",
         "أضف كل صنف تم شراؤه: وحدة الشراء (مثل زجاجة، كرتونة)، حجم العبوة (كم وحدة مخزون في وحدة الشراء الواحدة — مثلاً 850 مل لكل زجاجة)، الكمية، وسعر الوحدة. يحوّل التطبيق هذا تلقائياً إلى وحدات المخزون وتكلفة الوحدة، ويتذكر آخر تحويل استخدمته لهذا الصنف.",
         "للتكاليف غير المخزونية (نقل، تغليف، رسوم بطاقة) أضف بنداً <strong>أخرى</strong> بتكلفة فقط — لن يؤثر على المخزون.",
         "<strong>الفرعان معاً:</strong> لتكلفة مشتركة مثل التسويق أو وكالة، اختر تبويب <strong>Both</strong>. أدخل مبلغاً واحداً ونسبة تقسيم بين زاوية والمعادي (افتراضياً 50/50). يُحفظ كمشتريين مرتبطين — واحد لكل فرع — بحيث يتحمّل كل فرع نصيبه في الأرباح والخسائر وتُخصم حصته من العهدة/سجل البنك. يُسمح ببنود أخرى فقط. حذف أحد النصفين يعرض حذف كليهما.",
         "أرفق صورة الفاتورة.",
         "اضغط <strong>حفظ</strong>. يحدث أمران تلقائياً: كل بند صنف يُضاف لمخزون الفرع، والمبلغ يُخصم من مصدر الدفع الذي حددته — رصيد النثرية ينقص بالإجمالي، أو يظهر قيد سالب مطابق في سجل البنك (بنك/بطاقة). المشتريات الآجلة تؤثر على المخزون فقط دون أي قيد مالي.",
-        "قائمة المشتريات تعرض السجل الكامل — اضغط على أي مشترى لعرض الفاتورة والبنود.",
+        "قائمة المشتريات تعرض السجل الكامل — اضغط على أي مشترى لعرض الفاتورة والبنود. زر <strong>📅 إجمالي كل شهر</strong> يعرض إجمالي المصروف وبطاقة لكل شهر (إجمالي الإيصالات والعدد والتوزيع على الفروع)؛ اضغط على شهر لتصفية القائمة.",
       ],
     },
     {
