@@ -152,6 +152,7 @@ async function fetchSales(env, since) {
 // since the last complete sync, with an hour of overlap so nothing at the boundary is missed.
 async function pullAll(env, full) {
   const docs = [];
+  let recipeCount = 0;
   const last = full ? null : await fsGetDoc(env, 'counterpoint_log', 'last_sync').catch(() => null);
   const since = last && last.at ? new Date(Date.parse(last.at) - 3600e3).toISOString() : null;
   const [salesRes, products, locations] = await Promise.all([
@@ -173,13 +174,24 @@ async function pullAll(env, full) {
   listOf(products).forEach((p) => docs.push(productDoc(p)));
   const locs = listOf(locations);
   locs.forEach((l) => docs.push({ col: 'counterpoint_locations', id: String(l.id), data: l }));
+  // Counterpoint only returns each product's recipe (`recipeNeeds`, `makeable`) when /inventory is called WITHOUT
+  // locationId (the default-outlet view); with locationId the rows come back bare. Recipes are per product, so fetch
+  // them once that way and attach them to every outlet's stock rows. Failure here must not stop the stock pull.
+  const recipeBySku = new Map();
+  try {
+    listOf(await cp(env, '/inventory')).forEach((r) => {
+      if (r.sku && Array.isArray(r.recipeNeeds)) recipeBySku.set(r.sku, { recipeNeeds: r.recipeNeeds, makeable: r.makeable ?? null });
+    });
+  } catch (e) { /* keep going: stock docs are merged below, so recipes saved earlier stay */ }
   for (const l of locs) {
     const inv = listOf(await cp(env, `/inventory?locationId=${l.id}`));
-    inv.forEach((r) => docs.push({ col: 'counterpoint_stock', id: `${l.id}_${r.sku || r.productId || r.id}`, data: { ...r, locationId: l.id } }));
+    // merge: true so a run where the recipe call failed never wipes recipes already stored on the doc
+    inv.forEach((r) => docs.push({ col: 'counterpoint_stock', id: `${l.id}_${r.sku || r.productId || r.id}`, data: { ...r, ...(recipeBySku.get(r.sku) || {}), locationId: l.id }, merge: true }));
   }
+  recipeCount = recipeBySku.size;
   await fsWrite(env, docs);
   // only move the "since" bookmark when every page was read, otherwise the next run re-reads from the old one
-  const log = { counts: docs.length, sales_seen: saleList.length, sales_truncated: salesRes.truncated };
+  const log = { counts: docs.length, recipes: recipeCount, sales_seen: saleList.length, sales_truncated: salesRes.truncated };
   if (!salesRes.truncated) log.at = new Date().toISOString();
   await fsWrite(env, [{ col: 'counterpoint_log', id: 'last_sync', data: log, merge: true }]);
   return docs.length;
