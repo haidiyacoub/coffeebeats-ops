@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261116-048 -->
+<!-- CB_BUILD:20261116-116 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261116-048";
+  var BUILD = "20261116-116";
   (function() {
     function checkFresh() {
       try {
@@ -10014,9 +10014,12 @@ routes.salaries = function (u) {
     dueCard.appendChild(dueHead);
     let grandDue = 0;
     for (const p of staff) {
+      // Archived barista already paid for this month → drop from the list and the grand total
+      if (!p.active && paidPayoutFor(p.id, month)) continue;
       const fullSalary = getSalaryForMonth(p.id, month);
       const hireCalc   = hireProratedSalary(p.id, month, fullSalary);
-      const salary     = hireCalc.prorated ? hireCalc.amount : fullSalary;
+      const exitCalc   = !p.active ? exitProratedSalary(p.id, month, fullSalary) : null;
+      const salary     = exitCalc ? exitCalc.amount : (hireCalc.prorated ? hireCalc.amount : fullSalary);
       const penRows = state.penalties.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month);
       const lateRows = penRows.filter(x => x.auto_late || x.reason === "late");
       const lateSum = lateRows.reduce((s,r)=>s+(Number(r.amount)||0),0);
@@ -10025,7 +10028,7 @@ routes.salaries = function (u) {
                                         .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const sickSum = (state.sick_leave_deductions || []).filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
                                         .reduce((s,r)=>s+(Number(r.amount)||0),0);
-      const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month)
+      const otSum   = state.overtime_logs.filter(x => x.user_id === p.id && (x.month || (x.date||"").slice(0,7)) === month && !(exitCalc && x.kind === "end_of_service_days"))
                                          .reduce((s,r)=>s+(Number(r.amount)||0),0);
       const annualOver  = annualLeaveOverage(p.id, month, salary);
       const annualSum   = annualOver.amount;
@@ -10036,7 +10039,7 @@ routes.salaries = function (u) {
       dueCard.appendChild(el("div", { class: "kv", style: Object.assign({ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "12px 14px", marginBottom: "10px", alignItems: "flex-start", boxShadow: "0 1px 3px rgba(0,0,0,.05)" }, p.active ? {} : { opacity: ".6", fontStyle: "italic" }) }, [
         el("div", { class: "k" }, [
           el("div", { style: { fontSize: "15px", fontWeight: "700" } }, p.name + (p.active ? "" : " (archived)")),
-          el("div", { class: "muted small", style: { marginTop: "2px", lineHeight: "1.5" } }, `Salary ${money(salary)}${hireCalc.prorated ? ` (joined ${hireCalc.hire}: ${hireCalc.days}/30 days of ${money(fullSalary)})` : ""}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free${annualOver.noShowDays ? `, ${annualOver.noShowDays} off-roster = no-show ×3` : ""})` : ""}`),
+          el("div", { class: "muted small", style: { marginTop: "2px", lineHeight: "1.5" } }, `Salary ${money(salary)}${exitCalc ? ` (left ${exitCalc.left}: ${exitCalc.days}/30 days of ${money(fullSalary)})` : ""}${!exitCalc && hireCalc.prorated ? ` (joined ${hireCalc.hire}: ${hireCalc.days}/30 days of ${money(fullSalary)})` : ""}${incentivePart} + OT ${money(Math.round(otSum*100)/100)} − Late penalties ${money(lateSum)}${lateRows.length ? ` (${lateRows.length})` : ""} − Other penalties ${money(penSum)} − Loans ${money(loanSum)}${sickSum > 0 ? ` − Sick leaves ${money(sickSum)}` : ""}${annualSum > 0 ? ` − Annual leave overage ${money(annualSum)} (${annualOver.excessDays}d beyond ${annualOver.freeDays} free${annualOver.noShowDays ? `, ${annualOver.noShowDays} off-roster = no-show ×3` : ""})` : ""}`),
           ...(penRows.length ? [el("div", { class: "muted small", style: { marginTop: "4px", fontStyle: "italic", lineHeight: "1.5" } },
             "* " + T("Penalty reasons","أسباب الخصم") + ": " + penRows.slice().sort((a, b) => (a.date || a.at || "").localeCompare(b.date || b.at || "")).map(penaltyReasonText).join(" · "))] : []),
         ]),
@@ -11797,6 +11800,38 @@ function hireProratedSalary(uid, month, flat) {
   const carryRate = getSalaryForMonth(uid, `${pY}-${pad(pM)}`);
   const amount = Math.round((carryDays * carryRate + mainDays * flat) / 30 * 100) / 100;
   return { prorated: true, amount, days: carryDays + mainDays, hire };
+}
+
+// Leaver inside the 25-to-25 cycle of `month`: paid only from cycle start (26th of prev month,
+// or hire date if later) up to the last working day, 1/30 of salary per day (each part at its
+// own calendar month's rate). e.g. left 8 Nov → 26–30 Oct (5) + 1–8 Nov (8) = 13/30.
+// Left after the cycle closed (26th+) → not prorated. Returns null when no exit date applies.
+function exitProratedSalary(uid, month, flat) {
+  const hist  = ((state.barista_dates || {})[uid] || []);
+  const lefts = hist.filter(e => e.type === "left" && e.date).map(e => e.date).sort();
+  const left  = lefts.length ? lefts[lefts.length - 1] : null;
+  if (!left) return null;
+  const joins = hist.filter(e => e.type === "joined" && e.date).map(e => e.date).sort();
+  const hire  = joins.length ? joins[joins.length - 1] : null;
+  if (hire && left < hire) return null; // stale exit from an earlier tenure
+  const [y, m] = month.split("-").map(Number);
+  const pY = m === 1 ? y - 1 : y, pM = m === 1 ? 12 : m - 1;
+  const pad = n => String(n).padStart(2, "0");
+  const carryStart = `${pY}-${pad(pM)}-26`;
+  const carryEnd   = `${pY}-${pad(pM)}-${pad(Math.min(30, new Date(pY, pM, 0).getDate()))}`;
+  const mainStart  = `${month}-01`, mainEnd = `${month}-25`;
+  if (left > mainEnd) return null;            // worked the whole cycle
+  const dayCount = (a, b) => {
+    if (b < a) return 0;
+    const t = s => { const [yy, mm, dd] = s.split("-").map(Number); return Date.UTC(yy, mm - 1, dd); };
+    return Math.round((t(b) - t(a)) / 86400000) + 1;
+  };
+  const from = hire && hire > carryStart ? hire : carryStart;
+  const carryDays = dayCount(from, left < carryEnd ? left : carryEnd);
+  const mainDays  = dayCount(from > mainStart ? from : mainStart, left < mainEnd ? left : mainEnd);
+  const carryRate = getSalaryForMonth(uid, `${pY}-${pad(pM)}`);
+  const amount = Math.round((carryDays * carryRate + mainDays * flat) / 30 * 100) / 100;
+  return { amount, days: carryDays + mainDays, left };
 }
 
 // ── Per-barista salary → branch allocation ───────────────────────────────
