@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261116-982 -->
+<!-- CB_BUILD:20261116-006 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261116-982";
+  var BUILD = "20261116-006";
   (function() {
     function checkFresh() {
       try {
@@ -13485,7 +13485,7 @@ routes.counterpoint = function (u) {
 routes.counterpoint_stock = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Ops vs Counterpoint stock",
-    "Each branch's stock as ops counts it, next to what that branch's till says it has. Read-only: nothing is changed."));
+    "Each branch's stock as ops counts it, next to what that branch's till says it has. Nothing is changed here; the owner can copy a count list to enter in Counterpoint."));
   // Maadi and Ox (the new branch opening 25 Nov 2026, replacing Zawya which closes 24 Nov). Owner/accountant only page, so both are always offered.
   let branch = "maadi";
   const BR = [["maadi", "🏠 Maadi"], ["ox", "🆕 Ox"]];
@@ -13580,28 +13580,16 @@ routes.counterpoint_stock = function (u) {
     ]));
 
     if (u.role === "owner") {
-      const push = el("button", { class: "btn", style: { marginBottom: "12px" }, onClick: async () => {
-        const items = matched.filter(r => r.sku && !r.unitDiff && r.diff).map(r => ({ sku: r.sku, onHand: r.ops }));
-        if (!items.length) return toast("Nothing to push: Counterpoint already matches ops");
-        push.disabled = true; push.textContent = "Checking…";
-        try {
-          const tok = await firebase.auth().currentUser.getIdToken();
-          const call = async (dryRun) => {
-            const res = await fetch(COUNTERPOINT_WORKER + "/push", { method: "POST", headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
-              body: JSON.stringify({ type: "stock", payload: { locationId: locId, items, dryRun } }) });
-            const j = await res.json(); if (!res.ok) throw new Error(j.error || res.status); return j;
-          };
-          const plan = await call(true);
-          if (!plan.changes) toast("Nothing to change in Counterpoint");
-          else if (confirm(`Set ${plan.changes} item(s) in Counterpoint (${branch === "ox" ? "Ox" : "Maadi"}) to the ops stock figure? This changes the till's stock.`)) {
-            const r = await call(false);
-            toast(r.failed && r.failed.length ? `Pushed ${r.pushed}, ${r.failed.length} failed: ${r.failed[0].error}` : `Pushed ${r.pushed} item(s) to Counterpoint`);
-            load();
-          }
-        } catch (e) { toast("Push failed: " + (e.message || e)); }
-        push.disabled = false; push.textContent = "⬆ Push ops stock to Counterpoint";
-      } }, "⬆ Push ops stock to Counterpoint");
-      body.appendChild(push);
+      // Counterpoint's API can't write stock (no inventory:write scope), so hand over a count list instead:
+      // sku, name, ops quantity for every matched item that differs. It is typed into Counterpoint's "Count stock" screen.
+      body.appendChild(el("button", { class: "btn", style: { marginBottom: "12px" }, onClick: async () => {
+        const list = matched.filter(r => r.sku && !r.unitDiff && r.diff);
+        if (!list.length) return toast("Nothing to copy: Counterpoint already matches ops");
+        const txt = `${branch === "ox" ? "OX" : "Maadi"} count list (sku, name, ops qty, unit)\n` +
+          list.map(r => [r.sku, r.name, r2(r.ops), r.opsUnit || ""].join("\t")).join("\n");
+        try { await navigator.clipboard.writeText(txt); toast(`Copied ${list.length} item(s). Paste them to Claude to enter in Counterpoint's Count stock.`); }
+        catch (e) { prompt("Copy this count list:", txt); }
+      } }, "📋 Copy count list for Counterpoint"));
     }
 
     const search = el("input", { type: "search", placeholder: "Filter items…", value: q, style: { flex: "1 1 160px" } });
