@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261115-755 -->
+<!-- CB_BUILD:20261116-982 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261115-755";
+  var BUILD = "20261116-982";
   (function() {
     function checkFresh() {
       try {
@@ -4871,13 +4871,14 @@ function _dropPaymentLedgerRows(id) {
 function _paymentRowsReimbursed(id) {
   return (state.owner_account || []).some(x => x.ref === id && x.reimbursed);
 }
-function changePurchasePaidBy(p, newPaid) {
-  if (!p || !newPaid || p.paid_by === newPaid) return true;
+function changePurchasePaidBy(p, newPaid, force) {
+  if (!p || !newPaid || (!force && p.paid_by === newPaid)) return true;
   if (_paymentRowsReimbursed(p.id)) { toast(T("Already reimbursed to you — can't change how it was paid","تم سدادها لك بالفعل — لا يمكن تغيير طريقة الدفع"), "error"); return false; }
   const s = stamp(), total = Number(p.total) || 0, supplier = p.supplier || "—";
   const suffix = p.split_group ? ` (${p.branch} ${p.split_pct}% of shared cost)` : "";
   _dropPaymentLedgerRows(p.id);
-  p.paid_by = newPaid; p.paid_by_edited_at = s.at; p.paid_by_edited_by = s.by_name;
+  if (!force) { p.paid_by_edited_at = s.at; p.paid_by_edited_by = s.by_name; }
+  p.paid_by = newPaid;
   const test = isTestMode() ? { is_test: true } : {};
   if (newPaid === "petty_cash") {
     state.petty_cash.push({ id: uuid(), branch: p.branch, date: p.date, type: "purchase", amount: -total,
@@ -4892,6 +4893,53 @@ function changePurchasePaidBy(p, newPaid) {
     recordPersonalPayment({ amount: total, date: p.date, source: "purchase", ref: p.id, branch: p.branch, label: `Purchase — ${supplier}${suffix}` }, s);
   }
   return true;
+}
+// Fix a wrongly-typed receipt price on an existing purchase. Each line's total is editable;
+// inventory lines re-derive unit price / unit cost, the purchase total updates, and the
+// linked petty-cash / bank / personal-funds row is re-posted at the new amount.
+// Allowed: owner, accountant, or the person who logged it within 24h. Old values are kept in price_edits.
+function canEditPurchasePrice(p, u) {
+  if (!u || !p) return false;
+  if (u.role === "owner" || u.role === "accountant") return true;
+  return p.by === u.id && (Date.now() - new Date(p.at).getTime()) < 24 * 3600 * 1000;
+}
+function editPurchasePrice(p, onDone) {
+  const lines = p.lines || [];
+  const fields = lines.map((l, i) => ({
+    key: "l" + i, type: "number",
+    label: (l.kind === "other" ? (l.description || T("Other","أخرى")) : (l.item_name || "—")) + T(" — receipt amount (EGP)", " — مبلغ الفاتورة (جنيه)"),
+    value: Number(l.line_total || l.amount || 0),
+  }));
+  openPrompt({
+    title: T(`Fix receipt price — ${p.supplier || ""}`, `تصحيح سعر الفاتورة — ${p.supplier || ""}`),
+    fields,
+    onSubmit: (vals) => {
+      const newTotals = lines.map((l, i) => Number(vals["l" + i]));
+      if (newTotals.some(v => !isFinite(v) || v < 0)) { toast(T("Enter valid amounts","أدخل مبالغ صحيحة"), "error"); return false; }
+      const oldTotal = Number(p.total) || 0;
+      const newTotal = newTotals.reduce((a, b) => a + b, 0);
+      if (Math.abs(newTotal - oldTotal) < 0.005) return;
+      if (_paymentRowsReimbursed(p.id)) { toast(T("Already reimbursed to you — can't change the amount","تم سدادها لك بالفعل — لا يمكن تغيير المبلغ"), "error"); return false; }
+      const s = stamp();
+      p.price_edits = (p.price_edits || []).concat([{ at: s.at, by: s.by_name, old_total: oldTotal, new_total: newTotal }]);
+      lines.forEach((l, i) => {
+        const v = newTotals[i];
+        l.line_total = v;
+        if (l.kind === "other") l.amount = v;
+        else {
+          const pq = Number(l.purchase_qty) || 0, cq = Number(l.qty_canonical) || 0;
+          l.unit_price = pq ? v / pq : 0;
+          l.unit_cost = cq ? v / cq : 0;
+        }
+      });
+      p.total = newTotal;
+      p.last_edited_at = s.at; p.last_edited_by = s.by; p.last_edited_by_name = s.by_name;
+      if (p.paid_by) changePurchasePaidBy(p, p.paid_by, true);
+      saveState();
+      toast(T(`Receipt price updated: ${money(oldTotal)} → ${money(newTotal)}`, `تم تحديث سعر الفاتورة: ${money(oldTotal)} ← ${money(newTotal)}`));
+      if (onDone) onDone();
+    }
+  });
 }
 function changeOverheadPaidFrom(o, newFrom) {
   if (!o || (o.paid_from || "") === (newFrom || "")) return true;
@@ -8725,8 +8773,18 @@ routes.purchase_list = function (u) {
       ]),
       el("span", { class: "pill" }, p.paid_by.replace("_"," ")),
     ];
+    if (u.role !== "owner" && canEditPurchasePrice(p, u)) {
+      rowChildren.push(el("button", {
+        class: "btn ghost", style: { marginLeft: "6px" }, title: T("Fix receipt price","تصحيح سعر الفاتورة"),
+        onClick: (e) => { e.stopPropagation(); editPurchasePrice(p, () => render()); }
+      }, "💲"));
+    }
     if (u.role === "owner") {
       const actions = el("div", { style: { display: "flex", gap: "4px", alignItems: "center" } });
+      actions.appendChild(el("button", {
+        class: "btn ghost", style: { marginLeft: "6px" }, title: T("Fix receipt price","تصحيح سعر الفاتورة"),
+        onClick: (e) => { e.stopPropagation(); editPurchasePrice(p, () => render()); }
+      }, "💲"));
       actions.appendChild(el("button", {
         class: "btn ghost", style: { marginLeft: "6px" }, title: T("Edit","تعديل"),
         onClick: (e) => {
@@ -8952,6 +9010,8 @@ async function showPurchase(p) {
             el("div", { class: "muted small" }, T(`Reason: ${p.no_receipt_reason || "—"}`, `السبب: ${p.no_receipt_reason || "—"}`)),
           ])
         : el("div", { class: "muted" }, T("No receipt photo attached.","لا توجد صورة فاتورة مرفقة.")),
+    (p.price_edits && p.price_edits.length) ? el("div", { class: "sub", style: { color: "var(--warn)" } },
+      T(`✎ Price corrected: ${p.price_edits.map(e => `${money(e.old_total)} → ${money(e.new_total)} by ${e.by}`).join("; ")}`, `✎ تم تصحيح السعر: ${p.price_edits.map(e => `${money(e.old_total)} ← ${money(e.new_total)} بواسطة ${e.by}`).join("؛ ")}`)) : null,
     el("div", { class: "sub muted" }, T(`Entered by ${p.by_name} at ${fmtDate(p.at)} (device ${p.device?.slice(0,8)||"—"})`, `أدخله ${p.by_name} في ${fmtDate(p.at)} (جهاز ${p.device?.slice(0,8)||"—"})`)),
   ]));
 }
@@ -13437,7 +13497,7 @@ routes.counterpoint_stock = function (u) {
 
   const body = el("div", {}, [el("div", { class: "card muted" }, "Loading Counterpoint stock…")]);
   let diffOnly = true, q = "";
-  let data = null;
+  let data = null, locId = null;
 
   const nrm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const unitKey = (x) => { const k = nrm(x); return (k === "unit" || k === "pc" || k === "pcs") ? "pc" : (k === "gr" ? "g" : k); };
@@ -13519,6 +13579,31 @@ routes.counterpoint_stock = function (u) {
       ]),
     ]));
 
+    if (u.role === "owner") {
+      const push = el("button", { class: "btn", style: { marginBottom: "12px" }, onClick: async () => {
+        const items = matched.filter(r => r.sku && !r.unitDiff && r.diff).map(r => ({ sku: r.sku, onHand: r.ops }));
+        if (!items.length) return toast("Nothing to push: Counterpoint already matches ops");
+        push.disabled = true; push.textContent = "Checking…";
+        try {
+          const tok = await firebase.auth().currentUser.getIdToken();
+          const call = async (dryRun) => {
+            const res = await fetch(COUNTERPOINT_WORKER + "/push", { method: "POST", headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+              body: JSON.stringify({ type: "stock", payload: { locationId: locId, items, dryRun } }) });
+            const j = await res.json(); if (!res.ok) throw new Error(j.error || res.status); return j;
+          };
+          const plan = await call(true);
+          if (!plan.changes) toast("Nothing to change in Counterpoint");
+          else if (confirm(`Set ${plan.changes} item(s) in Counterpoint (${branch === "ox" ? "Ox" : "Maadi"}) to the ops stock figure? This changes the till's stock.`)) {
+            const r = await call(false);
+            toast(r.failed && r.failed.length ? `Pushed ${r.pushed}, ${r.failed.length} failed: ${r.failed[0].error}` : `Pushed ${r.pushed} item(s) to Counterpoint`);
+            load();
+          }
+        } catch (e) { toast("Push failed: " + (e.message || e)); }
+        push.disabled = false; push.textContent = "⬆ Push ops stock to Counterpoint";
+      } }, "⬆ Push ops stock to Counterpoint");
+      body.appendChild(push);
+    }
+
     const search = el("input", { type: "search", placeholder: "Filter items…", value: q, style: { flex: "1 1 160px" } });
     search.addEventListener("input", () => { q = search.value; drawRows(); });
     const tog = (label, on) => el("button", { class: "btn" + (diffOnly === on ? "" : " ghost"), style: { padding: "6px 12px", fontSize: "13px", width: "auto" },
@@ -13597,8 +13682,9 @@ routes.counterpoint_stock = function (u) {
         if (!r) return { name: i.name, id: i.id, miss: true };
         const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
         const unitDiff = unitKey(i.unit) !== unitKey(r.unit);
-        return { name: i.name, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001 };
+        return { name: i.name, sku: r.sku, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001 };
       });
+      locId = maadiId;
       const used = new Set(state.items.filter(i => i.active !== false).map(i => {
         const r = (i.cp_sku && cpBySku.get(i.cp_sku)) || cpByName.get(nrm(i.name)); return r && r.sku; }).filter(Boolean));
       data = { rows, missing: rows.filter(r => r.miss), cpFree: cpRows.filter(r => !used.has(r.sku)).sort((a, b) => String(a.name).localeCompare(String(b.name))) };
@@ -21722,6 +21808,7 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Open the Record Purchase screen.", "Select the item purchased from the dropdown list — this is mandatory and the purchase cannot be saved without it. Choosing the item is what adds the quantity to the stock count on top of the current number.", "Bought different coffee types in one purchase? Make a separate purchase item for each coffee type and upload the same receipt each time.", "Item not in the dropdown? Do not record it another way — report it to the owner so it can be added.", "Enter the total amount paid (in EGP) — enter the complete invoice total.", "Enter the quantity received.", "Tap the calendar icon to select the expiry date. Leave blank for non-perishables.", "Tap Yes if an electronic receipt was provided and upload the file; tap No otherwise.", "Add any notes about the purchase, then tap Submit."] },
         { type: "subheader", text: "Monthly Totals" },
         { type: "para", text: "The Purchases list has a Monthly Totals button: it shows the total money spent on purchases, then each month on its own card with its receipt total, receipt count and branch split. Tap a month to see only that month's purchases." },
+        { type: "para", text: "Typed the receipt price wrong? Tap the 💲 button on the purchase row, correct the amount and save. The total and the linked petty cash / bank entry update automatically, and the correction is recorded. Baristas can do this within 24 hours of logging; after that the owner or accountant does it." },
         { type: "subheader", text: "Monthly Receipt Report" },
         { type: "para", text: "At the end of each calendar month, the system automatically sends an email to coffeebeats@haidiyacoub.com with the monthly purchase receipt summary — items with receipts and the total without receipts." },
       ],
@@ -23459,6 +23546,7 @@ routes.app_guide = function (u) {
         "Attach a photo of the receipt.",
         "Tap <strong>Save</strong>. Two things happen automatically: every item line adds to that branch's stock, and the money moves out of wherever you said it came from — Petty Cash balance drops by the total, or a matching negative entry appears in the Bank Ledger (bank/credit card). Unpaid purchases only affect stock, not any ledger.",
         "The purchase list shows your full history — tap any purchase to see the receipt and line items. <strong>📅 Monthly totals</strong> shows total money spent plus a card per month (receipt total, count, branch split); tap a month to filter to it.",
+        "<strong>Typed the receipt price wrong?</strong> Tap the 💲 button on the purchase row, correct the amount and save. The total and the petty cash / bank entry update automatically and the correction is recorded on the purchase. You can do this within 24 hours of logging it; after that ask the owner or accountant.",
       ],
       ar_steps: [
         "اضغط على <strong>تسجيل مشترى</strong> عند وصول أي توريد.",

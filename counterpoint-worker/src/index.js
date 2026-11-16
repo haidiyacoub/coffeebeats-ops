@@ -244,7 +244,28 @@ export default {
         // /push  { type: 'product'|'customer'|'sale', payload: {...} }
         if (user.role !== 'owner') return json({ error: 'only the owner can write to Counterpoint' }, 403);
         const { type, payload } = await req.json();
-        const path = { product: '/products', customer: '/customers', sale: '/sales' }[type];
+        if (type === 'stock') {
+          // payload { locationId, items: [{sku, onHand}], dryRun }: set Counterpoint on-hand to the ops figure.
+          // Sends the difference to the stock-adjust endpoint (env.CP_STOCK_PATH, default /inventory/adjust).
+          // UNVERIFIED against Counterpoint's docs: use dryRun first; needs a write-enabled COUNTERPOINT_API_KEY.
+          const cur = new Map(listOf(await cp(env, `/inventory?locationId=${payload.locationId}`)).map((r) => [r.sku, Number(r.onHand) || 0]));
+          const plan = (payload.items || []).filter((i) => cur.has(i.sku) && Math.abs(Number(i.onHand) - cur.get(i.sku)) > 0.001)
+            .map((i) => ({ sku: i.sku, from: cur.get(i.sku), to: Number(i.onHand), delta: Number(i.onHand) - cur.get(i.sku) }));
+          if (payload.dryRun) return json({ ok: true, dryRun: true, changes: plan.length, plan });
+          const done = [], failed = [];
+          for (const c of plan) {
+            try {
+              await cp(env, env.CP_STOCK_PATH || '/inventory/adjust', { method: 'POST', body: JSON.stringify({ locationId: payload.locationId, sku: c.sku, delta: c.delta, reason: 'Ops stock sync' }) });
+              done.push(c);
+            } catch (e) { failed.push({ ...c, error: String(e.message || e).slice(0, 160) }); if (failed.length >= 3 && !done.length) break; }
+          }
+          await fsWrite(env, [
+            ...done.map((c) => ({ col: 'counterpoint_stock', id: `${payload.locationId}_${c.sku}`, data: { onHand: c.to }, merge: true })),
+            { col: 'counterpoint_log', id: `stockpush_${Date.now()}`, data: { type, by: user.email || user.user_id, pushed: done.length, failed: failed.length } },
+          ]);
+          return json({ ok: failed.length === 0, pushed: done.length, failed });
+        }
+        const path ={ product: '/products', customer: '/customers', sale: '/sales' }[type];
         if (!path) return json({ error: 'unknown type' }, 400);
         const result = await cp(env, path, { method: 'POST', body: JSON.stringify(payload) });
         await fsWrite(env, [{ col: 'counterpoint_log', id: `push_${Date.now()}`, data: { type, by: user.email || user.user_id, result } }]);
