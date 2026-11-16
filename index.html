@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261116-116 -->
+<!-- CB_BUILD:20261116-118 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261116-116";
+  var BUILD = "20261116-118";
   (function() {
     function checkFresh() {
       try {
@@ -1422,6 +1422,13 @@ function migrateState(s) {
       r.month = payMonth(r.date);
     });
     s._pen_paycycle_migrated = true;
+  }
+  // One-time (2026-11-16): owner asked to drop Khaled's end-of-service 5 days and his 11-04 late
+  // penalty (900). Exit pay is now prorated to the last working day instead (exitProratedSalary).
+  if (!s._khaled_eos_pen_removed) {
+    s.overtime_logs = (s.overtime_logs || []).filter(r => !(r.kind === "end_of_service_days" && /khaled/i.test(r.barista || "")));
+    s.penalties = (s.penalties || []).filter(r => !(/khaled/i.test(r.barista || "") && r.date === "2026-11-04" && r.auto_late && Number(r.amount) === 900));
+    s._khaled_eos_pen_removed = true;
   }
   if (!s._double_shift_5x15_migrated) {
     s.overtime_logs.forEach(r => {
@@ -11744,6 +11751,7 @@ function fmtYearMonth(y, m) {
 // One entry per barista per exit month. Also backfills exits dated on/after 2026-09-29
 // (from renderTeam) so a deactivation made before this rule existed still gets paid.
 function ensureEndOfServiceDays(uid, name, date) {
+  return false; // retired 2026-11-16: leavers are paid prorated to their last working day instead
   if (!uid || !date) return false;
   const month = date.slice(0, 7);
   const sal = getSalaryForMonth(uid, month);
