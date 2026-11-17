@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261117-516 -->
+<!-- CB_BUILD:20261117-666 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261117-516";
+  var BUILD = "20261117-666";
   (function() {
     function checkFresh() {
       try {
@@ -1360,6 +1360,21 @@ function migrateState(s) {
       if (q != null && Number(r.qty_per_serving) !== q) { r.qty_per_serving = q; r.last_edited_at = stamp; }
     });
     s._sauce_powder_nov9_migrated = true;
+  }
+
+  // One-time migration: Halo Sea Salt Chips (2026-11-17) — add to the menu (35 / cost 15) and make sure the
+  // inventory item exists + is active so it shows in the purchase-log picker.
+  if (!s._halo_sea_salt_nov17_migrated) {
+    const stamp = new Date().toISOString();
+    if (!Array.isArray(s.menu)) s.menu = [];
+    if (!s.menu.some(r => /halo.*sea.?salt/i.test(String((r && r.name) || "")))) {
+      s.menu.push({ name: "Halo Sea Salt Chips", price_egp: 35, cost_egp: 15, category: "Snacks", id: "menu_halo_sea_salt", branches: ["maadi", "zawya"], last_edited_at: stamp });
+    }
+    if (!Array.isArray(s.items)) s.items = [];
+    const invIt = s.items.find(i => /halo.*chips.*sea.?salt|halo.*sea.?salt/i.test(String((i && i.name) || "")));
+    if (invIt) { if (invIt.active === false) { invIt.active = true; invIt.last_edited_at = stamp; } }
+    else s.items.push({ id: "inv_halo_sea_salt", name: "Halo Chips Sea Salt", unit: "unit", category: "halo-snacks", active: true, last_edited_at: stamp });
+    s._halo_sea_salt_nov17_migrated = true;
   }
 
   // Ensure new collections exist
