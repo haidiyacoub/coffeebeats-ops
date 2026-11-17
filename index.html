@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261116-118 -->
+<!-- CB_BUILD:20261117-449 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261116-118";
+  var BUILD = "20261117-449";
   (function() {
     function checkFresh() {
       try {
@@ -1224,6 +1224,7 @@ const _MIGRATION_STAMP = "2026-11-01T00:00:00.000Z";
 function migrateState(s) {
   // Ensure users array exists (will be overwritten by staffDir.load() at runtime)
   s.users = s.users || [];
+  s.stock_adjustments = s.stock_adjustments || [];   // manual "match ops to Counterpoint" corrections
 
   // One-time migration: rename "Signature Coffee" category → "Signature Drinks" in all recipes.
   if (!s._migration_signature_drinks) {
@@ -1881,7 +1882,7 @@ const STATE_CHUNKS = {
   menu_data:     ["menu"],
   users_items:   ["items", "purchase_units", "inventory_alerts", "suppliers"],
   recipes:       ["handbook_recipes"],   // split out — can be large with BOM data
-  waste:         ["waste", "deleted_waste"],
+  waste:         ["waste", "deleted_waste", "stock_adjustments"],
   purchases:     ["purchases", "petty_cash", "bank_ledger", "owner_account", "deleted_purchases", "maadi_cash_log", "zawya_cash_received"],
   shifts:        ["shifts"],
   // NOTE: snapshots, shift_closes, cleaning_logs and signin_stamps are NO LONGER
@@ -3886,6 +3887,11 @@ function computeStock(branch) {
     if (w.inv_item_id && stock[w.inv_item_id] != null) {
       stock[w.inv_item_id] -= Number(w.qty_canonical) || 0;
     }
+  }
+  // manual corrections (Ops vs Counterpoint page) recorded after the count
+  for (const a of (state.stock_adjustments || [])) {
+    if (a.branch !== branch || (a.at || "") <= tsAfter) continue;
+    if (stock[a.item_id] != null) stock[a.item_id] += Number(a.delta) || 0;
   }
   // Maadi: subtract what Counterpoint sold since that count (via recipes)
   if (_cp.sales && _cp.sales.length && (branch === "maadi" || (_cp.locIds && _cp.locIds[branch]))) {
@@ -13544,7 +13550,7 @@ routes.counterpoint = function (u) {
 routes.counterpoint_stock = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Ops vs Counterpoint stock",
-    "Each branch's stock as ops counts it, next to what that branch's till says it has. Nothing is changed here; the owner can copy a count list to enter in Counterpoint."));
+    "Each branch's stock as ops counts it, next to what that branch's till says it has. Differences can be matched manually here (ops is corrected, Counterpoint is not touched); the owner can also copy a count list to enter in Counterpoint."));
   // Maadi and Ox (the new branch opening 25 Nov 2026, replacing Zawya which closes 24 Nov). Owner/accountant only page, so both are always offered.
   let branch = "maadi";
   const BR = [["maadi", "🏠 Maadi"], ["ox", "🆕 Ox"]];
@@ -13566,12 +13572,13 @@ routes.counterpoint_stock = function (u) {
     return `${r2(n).toLocaleString("en-US")} ${unitLabel(unit)}`.trim();   // always g / ml, never kg / L
   };
 
-  const COLS = "minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)";
+  const COLS = "minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)";
+  const egp = (n) => Math.round(n).toLocaleString("en-US");
   const cell = (txt, extra) => el("div", { style: Object.assign({ minWidth: 0 }, extra || {}) }, txt);
   const headRow = el("div", { style: { display: "grid", gridTemplateColumns: COLS, gap: "8px", padding: "8px 12px",
     fontSize: "11px", fontWeight: "700", letterSpacing: ".04em", textTransform: "uppercase", color: "var(--ink-dim)",
     borderBottom: "1px solid var(--border)" } }, [
-    cell("Item"), cell("Ops", { textAlign: "right" }), cell("Counterpoint", { textAlign: "right" }), cell("Difference", { textAlign: "right" }),
+    cell("Item"), cell("Ops", { textAlign: "right" }), cell("Counterpoint", { textAlign: "right" }), cell("Difference", { textAlign: "right" }), cell("Value at cost", { textAlign: "right" }),
   ]);
 
   function pill(r) {
@@ -13599,6 +13606,10 @@ routes.counterpoint_stock = function (u) {
     }
     const matched = rows.filter(r => !r.miss);
     const bad = matched.filter(r => r.diff || r.unitDiff);
+    const pos = (n) => Math.max(0, Number(n) || 0);   // a negative count is a data error, not negative value
+    const valOps = matched.reduce((t, r) => t + pos(r.ops) * r.cost, 0);
+    const valCp = matched.reduce((t, r) => t + pos(r.cp) * r.cost, 0);
+    const noCost = matched.filter(r => !r.cost && (pos(r.ops) > 0 || pos(r.cp) > 0));
 
     const stat = (n, label, color) => el("div", { style: { flex: "1 1 90px", minWidth: "90px" } }, [
       el("div", { style: { fontSize: "24px", fontWeight: "700", color: color || "var(--ink)", lineHeight: "1.1" } }, String(n)),
@@ -13611,7 +13622,18 @@ routes.counterpoint_stock = function (u) {
         stat(bad.length, "differ", bad.length ? "var(--bad)" : "var(--ok)"),
         stat(missing.length, "not in Counterpoint", "var(--ink-dim)"),
       ]),
-    ]));
+      // Stock value at cost = quantity × Counterpoint's cost per unit. Counterpoint's own "Value at retail" is 0 for
+      // ingredients (they have no selling price), so this is the number that actually means something for them.
+      el("div", { style: { display: "flex", gap: "14px", flexWrap: "wrap", marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border)" } }, [
+        stat(egp(valOps) + " LE", "stock value at cost (ops count)"),
+        stat(egp(valCp) + " LE", "stock value at cost (Counterpoint)", "var(--ink-dim)"),
+        stat(noCost.length, "in stock with no cost in Counterpoint", noCost.length ? "var(--warn)" : "var(--ok)"),
+      ]),
+      noCost.length ? el("details", { style: { marginTop: "6px" } }, [
+        el("summary", { class: "muted small", style: { cursor: "pointer" } }, "Which items have no cost?"),
+        el("div", { class: "small", style: { marginTop: "4px", lineHeight: "1.7" } }, noCost.map(r => r.name).join(" · ")),
+      ]) : null,
+    ].filter(Boolean)));
 
     const cpu = cpSalesUsage(lastSnapshotTs() || "", branch);
     const unm = Object.entries(cpu.unmatched).filter(([, n]) => n).sort((a, b) => b[1] - a[1]);
@@ -13638,6 +13660,22 @@ routes.counterpoint_stock = function (u) {
       ]),
     ]));
 
+    const canAdj = u.role === "owner" || u.role === "accountant";
+    const adjust = (r, target) => {
+      const delta = r2(target - r.ops);
+      if (!delta) return false;
+      state.stock_adjustments = state.stock_adjustments || [];
+      state.stock_adjustments.push(Object.assign({ id: uuid(), branch, item_id: r.id, item_name: r.name, delta, from: r2(r.ops), to: r2(target),
+        unit: r.opsUnit || "", note: "Manual match vs Counterpoint" }, stamp()));
+      return true;
+    };
+    if (canAdj) {
+      const fixable = bad.filter(r => !r.unitDiff && r.id);
+      if (fixable.length) body.appendChild(el("button", { class: "btn ghost", style: { marginBottom: "12px", marginRight: "8px", width: "auto" }, onClick: () => {
+        if (!confirm(`Set ops stock equal to Counterpoint for all ${fixable.length} differing item(s)? Each is logged as a manual correction you can undo.`)) return;
+        fixable.forEach(r => adjust(r, r.cp)); saveState(); toast(`Matched ${fixable.length} item(s)`); load();
+      } }, `✋ Match all ${fixable.length} to Counterpoint`));
+    }
     if (u.role === "owner") {
       // Counterpoint's API can't write stock (no inventory:write scope), so hand over a count list instead:
       // sku, name, ops quantity for every matched item that differs. It is typed into Counterpoint's "Count stock" screen.
@@ -13676,8 +13714,26 @@ routes.counterpoint_stock = function (u) {
         cell(r.name, { fontWeight: "600", overflowWrap: "anywhere" }),
         cell(qty(r.ops, r.opsUnit), { textAlign: "right", fontVariantNumeric: "tabular-nums" }),
         cell(qty(r.cp, r.unit), { textAlign: "right", fontVariantNumeric: "tabular-nums", color: r.cp === 0 ? "var(--ink-faint)" : "inherit" }),
-        cell(pill(r), { textAlign: "right" }),
+        cell(canAdj && !r.unitDiff && r.id ? [pill(r), r.diff ? el("div", { style: { marginTop: "4px", display: "flex", gap: "4px", justifyContent: "flex-end", flexWrap: "wrap" } }, [
+          el("button", { class: "btn ghost", style: { width: "auto", padding: "2px 8px", fontSize: "12px" }, title: "Set ops stock equal to Counterpoint",
+            onClick: () => { adjust(r, r.cp); saveState(); toast(`${r.name}: ops set to ${qty(r.cp, r.unit)}`); load(); } }, "Match CP"),
+          el("button", { class: "btn ghost", style: { width: "auto", padding: "2px 8px", fontSize: "12px" }, title: "Enter the real quantity",
+            onClick: () => { const v = prompt(`Real quantity of ${r.name} (${unitLabel(r.opsUnit)}):`, String(r2(r.ops))); if (v === null) return;
+              const n = Number(String(v).replace(/,/g, "")); if (!isFinite(n) || v.trim() === "") return toast("Enter a number");
+              if (adjust(r, n)) { saveState(); toast(`${r.name}: ops set to ${qty(n, r.opsUnit)}`); load(); } } }, "Set…"),
+        ]) : null].filter(Boolean) : pill(r), { textAlign: "right" }),
+        cell(r.cost ? [egp(pos(r.ops) * r.cost) + " LE", el("div", { class: "muted small" }, `${egp(pos(r.cp) * r.cost)} in CP`)] : "no cost",
+          { textAlign: "right", fontVariantNumeric: "tabular-nums", color: r.cost ? "inherit" : "var(--warn)" }),
       ])));
+      const myAdj = (state.stock_adjustments || []).filter(a => a.branch === branch && a.at > (lastSnapshotTs() || "")).sort((a, b) => b.at.localeCompare(a.at));
+      if (myAdj.length) foot.appendChild(el("details", { style: { marginTop: "10px" } }, [
+        el("summary", { class: "muted small", style: { cursor: "pointer" } }, `${myAdj.length} manual correction(s) since the last count`),
+        ...myAdj.map(a => el("div", { class: "small", style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", marginTop: "6px" } }, [
+          el("div", { style: { flex: "1 1 220px" } }, `${a.item_name}: ${qty(a.from, a.unit)} → ${qty(a.to, a.unit)} · by ${a.by_name || "—"} · ${new Date(a.at).toLocaleString()}`),
+          canAdj ? el("button", { class: "btn ghost", style: { width: "auto", padding: "2px 8px", fontSize: "12px" }, onClick: () => {
+            state.stock_adjustments = state.stock_adjustments.filter(x => x.id !== a.id); saveState(); toast("Correction undone"); load(); } }, "Undo") : null,
+        ].filter(Boolean))),
+      ]));
       if (missing.length) foot.appendChild(el("details", { style: { marginTop: "10px" } }, [
         el("summary", { class: "muted small", style: { cursor: "pointer" } }, `${missing.length} ops items not found in Counterpoint`),
         el("div", { class: "muted small", style: { marginTop: "6px" } }, "Pick the matching Counterpoint item once; the link is saved, so a name change on either side can't break it again."),
@@ -13729,7 +13785,8 @@ routes.counterpoint_stock = function (u) {
         if (!r) return { name: i.name, id: i.id, miss: true };
         const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
         const unitDiff = unitKey(i.unit) !== unitKey(r.unit);
-        return { name: i.name, sku: r.sku, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001 };
+        const cost = Number(((_cp.catalog || {})[r.sku] || {}).cost) || 0;   // Counterpoint cost per stock unit (per g / ml / pc)
+        return { name: i.name, sku: r.sku, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001, cost };
       });
       locId = maadiId;
       const used = new Set(state.items.filter(i => i.active !== false).map(i => {
