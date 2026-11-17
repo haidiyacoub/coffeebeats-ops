@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261117-449 -->
+<!-- CB_BUILD:20261117-500 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261117-449";
+  var BUILD = "20261117-500";
   (function() {
     function checkFresh() {
       try {
@@ -13607,9 +13607,11 @@ routes.counterpoint_stock = function (u) {
     const matched = rows.filter(r => !r.miss);
     const bad = matched.filter(r => r.diff || r.unitDiff);
     const pos = (n) => Math.max(0, Number(n) || 0);   // a negative count is a data error, not negative value
-    const valOps = matched.reduce((t, r) => t + pos(r.ops) * r.cost, 0);
-    const valCp = matched.reduce((t, r) => t + pos(r.cp) * r.cost, 0);
-    const noCost = matched.filter(r => !r.cost && (pos(r.ops) > 0 || pos(r.cp) > 0));
+    // Packaging (cups, lids, straws, gloves…) is overhead, not stock for sale, so it is left out of the value figures
+    const sellable = matched.filter(r => !r.overhead);
+    const valOps = sellable.reduce((t, r) => t + pos(r.ops) * r.cost, 0);
+    const valCp = sellable.reduce((t, r) => t + pos(r.cp) * r.cost, 0);
+    const noCost = sellable.filter(r => !r.cost && (pos(r.ops) > 0 || pos(r.cp) > 0));
 
     const stat = (n, label, color) => el("div", { style: { flex: "1 1 90px", minWidth: "90px" } }, [
       el("div", { style: { fontSize: "24px", fontWeight: "700", color: color || "var(--ink)", lineHeight: "1.1" } }, String(n)),
@@ -13625,7 +13627,7 @@ routes.counterpoint_stock = function (u) {
       // Stock value at cost = quantity × Counterpoint's cost per unit. Counterpoint's own "Value at retail" is 0 for
       // ingredients (they have no selling price), so this is the number that actually means something for them.
       el("div", { style: { display: "flex", gap: "14px", flexWrap: "wrap", marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border)" } }, [
-        stat(egp(valOps) + " LE", "stock value at cost (ops count)"),
+        stat(egp(valOps) + " LE", "stock value at cost (ops count, excl. packaging)"),
         stat(egp(valCp) + " LE", "stock value at cost (Counterpoint)", "var(--ink-dim)"),
         stat(noCost.length, "in stock with no cost in Counterpoint", noCost.length ? "var(--warn)" : "var(--ok)"),
       ]),
@@ -13722,8 +13724,8 @@ routes.counterpoint_stock = function (u) {
               const n = Number(String(v).replace(/,/g, "")); if (!isFinite(n) || v.trim() === "") return toast("Enter a number");
               if (adjust(r, n)) { saveState(); toast(`${r.name}: ops set to ${qty(n, r.opsUnit)}`); load(); } } }, "Set…"),
         ]) : null].filter(Boolean) : pill(r), { textAlign: "right" }),
-        cell(r.cost ? [egp(pos(r.ops) * r.cost) + " LE", el("div", { class: "muted small" }, `${egp(pos(r.cp) * r.cost)} in CP`)] : "no cost",
-          { textAlign: "right", fontVariantNumeric: "tabular-nums", color: r.cost ? "inherit" : "var(--warn)" }),
+        cell(r.overhead ? "overhead" : r.cost ? [egp(pos(r.ops) * r.cost) + " LE", el("div", { class: "muted small" }, `${egp(pos(r.cp) * r.cost)} in CP`)] : "no cost",
+          { textAlign: "right", fontVariantNumeric: "tabular-nums", color: r.overhead ? "var(--ink-faint)" : r.cost ? "inherit" : "var(--warn)" }),
       ])));
       const myAdj = (state.stock_adjustments || []).filter(a => a.branch === branch && a.at > (lastSnapshotTs() || "")).sort((a, b) => b.at.localeCompare(a.at));
       if (myAdj.length) foot.appendChild(el("details", { style: { marginTop: "10px" } }, [
@@ -13786,7 +13788,7 @@ routes.counterpoint_stock = function (u) {
         const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
         const unitDiff = unitKey(i.unit) !== unitKey(r.unit);
         const cost = Number(((_cp.catalog || {})[r.sku] || {}).cost) || 0;   // Counterpoint cost per stock unit (per g / ml / pc)
-        return { name: i.name, sku: r.sku, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001, cost };
+        return { name: i.name, sku: r.sku, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001, cost, overhead: i.category === "packaging" };
       });
       locId = maadiId;
       const used = new Set(state.items.filter(i => i.active !== false).map(i => {
