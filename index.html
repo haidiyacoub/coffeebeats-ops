@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261117-500 -->
+<!-- CB_BUILD:20261117-516 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261117-500";
+  var BUILD = "20261117-516";
   (function() {
     function checkFresh() {
       try {
@@ -13788,7 +13788,7 @@ routes.counterpoint_stock = function (u) {
         const ops = Number(opsStock[i.id]) || 0, cp = Number(r.onHand ?? 0);
         const unitDiff = unitKey(i.unit) !== unitKey(r.unit);
         const cost = Number(((_cp.catalog || {})[r.sku] || {}).cost) || 0;   // Counterpoint cost per stock unit (per g / ml / pc)
-        return { name: i.name, sku: r.sku, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001, cost, overhead: i.category === "packaging" };
+        return { name: i.name, id: i.id, sku: r.sku, ops, cp, opsUnit: i.unit, unit: r.unit || i.unit, unitDiff, diff: Math.abs(ops - cp) > 0.001, cost, overhead: i.category === "packaging" };
       });
       locId = maadiId;
       const used = new Set(state.items.filter(i => i.active !== false).map(i => {
