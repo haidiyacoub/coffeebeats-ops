@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-136 -->
+<!-- CB_BUILD:20261118-142 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-136";
+  var BUILD = "20261118-142";
   (function() {
     function checkFresh() {
       try {
@@ -8184,7 +8184,7 @@ routes.inventory_prices = function (u) {
   wrap.appendChild(search);
   const summary = el("div", { class: "muted small", style: { marginBottom: "10px" } });
   wrap.appendChild(summary);
-  const list = el("div", {});
+  const list = el("div", { class: "list" });
   wrap.appendChild(list);
 
   const perBase = (price, pack, unit) => {
@@ -8242,7 +8242,7 @@ routes.inventory_prices = function (u) {
     let lastCat = null;
     for (const it of items) {
       const cat = catLabel(it.category);
-      if (cat !== lastCat) { list.appendChild(el("h2", { style: { marginTop: "14px" } }, cat)); lastCat = cat; }
+      if (cat !== lastCat) { list.appendChild(el("h2", { style: { margin: "10px 0 0" } }, cat)); lastCat = cat; }
       const i = prices[it.id] || {};
       const sub = [];
       if (i.price > 0) {
@@ -8264,10 +8264,10 @@ routes.inventory_prices = function (u) {
       }
       const parts = [
         el("div", { class: "grow" }, [ el("div", { class: "title" }, it.name), el("div", { class: "sub" }, sub.join(" · ")) ]),
-        el("div", { style: { textAlign: "right" } }, right),
+        el("div", { style: { textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" } }, right),
       ];
       if (canEdit) {
-        const b = el("button", { class: "btn ghost", style: { padding: "4px 10px", fontSize: "12px", marginInlineStart: "8px" } }, "✏️");
+        const b = el("button", { class: "btn ghost", style: { width: "auto", flex: "0 0 auto", minHeight: "0", padding: "4px 10px", fontSize: "12px" } }, "✏️");
         b.addEventListener("click", (e) => { e.stopPropagation(); editPrice(it, i); });
         parts.push(b);
       }
