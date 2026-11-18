@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-184 -->
+<!-- CB_BUILD:20261118-196 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-184";
+  var BUILD = "20261118-196";
   (function() {
     function checkFresh() {
       try {
@@ -8193,7 +8193,8 @@ async function deleteInventoryItem(it) {
   if (state.inventory_alerts) delete state.inventory_alerts[it.id];
   state.inv_engine_recipes = (state.inv_engine_recipes || []).filter(r => r.inv_item_id !== it.id);
   try { cpSyncMenuFromCatalog(); } catch (e) { /* costs refresh on next load */ }
-  saveState();
+  // Put the name on the removed list BEFORE saving: the enforceItemRemovals Cloud Function runs on the save
+  // and only strips names that are already listed (saving first left the item in Firestore until the next write).
   try {
     const FV = firebase.firestore.FieldValue;
     await db.collection("state").doc("removed_items").set({ inv: FV.arrayUnion(it.name) }, { merge: true });
@@ -8202,6 +8203,7 @@ async function deleteInventoryItem(it) {
     console.warn("removed_items write failed", err);
     toast("Removed here, but couldn't lock it for other devices — retry while online", "error");
   }
+  saveState();
   toast(`Deleted ${it.name}` + (it.cp_sku ? ` · archive ${it.cp_sku} in Counterpoint` : ""));
   render();
   return true;
