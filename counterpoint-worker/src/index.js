@@ -11,10 +11,11 @@ const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(
 const b64uJson = (o) => b64u(enc.encode(JSON.stringify(o)));
 
 // ── Counterpoint ───────────────────────────────────────────
-async function cp(env, path, init = {}) {
+// `key` defaults to the read key; writes pass env.COUNTERPOINT_WRITE_KEY so the 5-minute sync never holds write access.
+async function cp(env, path, init = {}, key = env.COUNTERPOINT_API_KEY) {
   const res = await fetch(env.COUNTERPOINT_BASE + path, {
     ...init,
-    headers: { Authorization: 'Bearer ' + env.COUNTERPOINT_API_KEY, 'Content-Type': 'application/json', ...(init.headers || {}) },
+    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', ...(init.headers || {}) },
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Counterpoint ${res.status} ${path}: ${JSON.stringify(body).slice(0, 300)}`);
@@ -245,11 +246,32 @@ export default {
         if (url.pathname === '/sync') return json({ ok: true, docs: await pullAll(env, true) });
 
         // /push  { type: 'product'|'customer'|'sale', payload: {...} }
-        if (user.role !== 'owner') return json({ error: 'only the owner can write to Counterpoint' }, 403);
         const { type, payload } = await req.json();
+        // Managers and accountants may only RECEIVE stock (a purchase); every other write is owner-only.
+        const receiveOnly = type === 'adjust' && user.role !== 'owner' && payload && payload.reasonCode === 'RECEIVE' && Number(payload.delta) > 0;
+        if (user.role !== 'owner' && type !== 'reasons' && !receiveOnly) return json({ error: 'only the owner can write to Counterpoint' }, 403);
+
+        // reasons: list the shop's stock-adjustment reason codes (read-only call)
+        if (type === 'reasons') return json({ ok: true, result: await cp(env, '/inventory/adjustment-reasons') });
+
+        // adjust: { sku, locationId, delta, reasonCode, unit?: 'base'|'purchase', idempotencyKey? }
+        // delta is added to Counterpoint's on-hand (use a negative number to remove stock).
+        if (type === 'adjust') {
+          if (!env.COUNTERPOINT_WRITE_KEY) return json({ error: 'write key not configured' }, 500);
+          const { idempotencyKey, ...body } = payload || {};
+          if (!body.sku || !body.locationId || typeof body.delta !== 'number' || !body.reasonCode) return json({ error: 'sku, locationId, delta (number) and reasonCode are required' }, 400);
+          const init = { method: 'POST', body: JSON.stringify(body) };
+          if (idempotencyKey) init.headers = { 'Idempotency-Key': String(idempotencyKey).slice(0, 500) };
+          let result, err = null;
+          try { result = await cp(env, '/inventory/adjust', init, env.COUNTERPOINT_WRITE_KEY); } catch (e) { err = String(e.message || e); }
+          await fsWrite(env, [{ col: 'counterpoint_log', id: `adjust_${Date.now()}`, data: { type, by: user.email || user.user_id, body, idempotencyKey: idempotencyKey || null, result: result || null, error: err } }]);
+          if (err) return json({ error: err }, 502);
+          return json({ ok: true, result });
+        }
+
         const path = { product: '/products', customer: '/customers', sale: '/sales' }[type];
         if (!path) return json({ error: 'unknown type' }, 400);
-        const result = await cp(env, path, { method: 'POST', body: JSON.stringify(payload) });
+        const result = await cp(env, path, { method: 'POST', body: JSON.stringify(payload) }, env.COUNTERPOINT_WRITE_KEY || env.COUNTERPOINT_API_KEY);
         await fsWrite(env, [{ col: 'counterpoint_log', id: `push_${Date.now()}`, data: { type, by: user.email || user.user_id, result } }]);
         return json({ ok: true, dryRun: !!result.dryRun, result });
       }

@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-919 -->
+<!-- CB_BUILD:20261118-075 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-919";
+  var BUILD = "20261118-075";
   (function() {
     function checkFresh() {
       try {
@@ -3881,6 +3881,66 @@ function cpSalesUsage(tsAfter, branch) {
 }
 
 // ----- running stock (computed) -----
+// ── Push logged purchases to Counterpoint stock ──────────────────────────────
+// Each inventory line of a purchase adds its qty_canonical (ops base unit = CP base unit) to the item's
+// Counterpoint on-hand via the worker (POST /push {type:"adjust"} -> CP /inventory/adjust, reason RECEIVE).
+// The idempotency key makes a retry safe, so an unsynced line just stays pending until it goes through.
+// Only purchases logged after CP_PUSH_FROM are pushed; the ops item needs its cp_sku link; deleting a
+// purchase sends the reverse (owner only). Lines are stamped cp_synced_at / cp_undone_at (they sync with purchases).
+const CP_PUSH_FROM = "2026-11-18T17:54:00.000Z";
+let _cpPushBusy = false;
+async function cpPushPurchases() {
+  const u = currentUser();
+  if (!u || !["owner", "manager", "accountant"].includes(u.role) || _cpPushBusy) return;
+  _cpPushBusy = true;
+  let ok = 0, fail = 0, changed = false;
+  try {
+    await loadCpSales();   // fills _cp.locIds
+    const tok = await firebase.auth().currentUser.getIdToken();
+    const send = async (sku, loc, delta, key) => {
+      const res = await fetch(COUNTERPOINT_WORKER + "/push", { method: "POST",
+        headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "adjust", payload: { sku, locationId: loc, delta, reasonCode: "RECEIVE", unit: "base", idempotencyKey: key } }) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || res.status);
+      return j.result || {};
+    };
+    for (const p of state.purchases) {
+      if (p.is_test || (p.at || "") < CP_PUSH_FROM) continue;
+      const loc = (_cp.locIds || {})[p.branch]; if (!loc) continue;
+      for (let i = 0; i < (p.lines || []).length; i++) {
+        const ln = p.lines[i];
+        const qty = Number(ln.qty_canonical) || 0;
+        if (ln.kind !== "inventory" || ln.cp_synced_at || qty <= 0) continue;
+        const it = state.items.find(x => x.id === ln.inv_item_id);
+        if (!it || !it.cp_sku) continue;   // not linked yet: stays pending
+        try {
+          const r = await send(it.cp_sku, loc, qty, `cb-p-${p.id}-${i}-g${p.cp_gen || 0}`);
+          ln.cp_synced_at = new Date().toISOString(); ln.cp_on_hand = r.onHand; p.last_edited_at = ln.cp_synced_at;
+          ok++; changed = true;
+        } catch (e) { fail++; console.warn("CP push failed", e); }
+      }
+    }
+    if (u.role === "owner") {   // purchases deleted after they were pushed: take the stock back out
+      for (const p of (state.deleted_purchases || [])) {
+        const loc = (_cp.locIds || {})[p.branch]; if (!loc) continue;
+        for (let i = 0; i < (p.lines || []).length; i++) {
+          const ln = p.lines[i]; const it = state.items.find(x => x.id === ln.inv_item_id);
+          if (!ln.cp_synced_at || ln.cp_undone_at || !it || !it.cp_sku) continue;
+          try {
+            await send(it.cp_sku, loc, -(Number(ln.qty_canonical) || 0), `cb-p-${p.id}-${i}-g${p.cp_gen || 0}-u`);
+            ln.cp_undone_at = new Date().toISOString(); ok++; changed = true;
+          } catch (e) { fail++; console.warn("CP undo failed", e); }
+        }
+      }
+    }
+  } catch (e) { console.warn("cpPushPurchases", e); }
+  _cpPushBusy = false;
+  if (changed) saveState();
+  if (ok) toast(T("Counterpoint stock updated","تم تحديث مخزون Counterpoint") + ` (${ok})`);
+  if (fail) toast(T("Some purchases didn't reach Counterpoint yet; they will retry","بعض المشتريات لم تصل إلى Counterpoint بعد وستُعاد المحاولة"), "error");
+}
+
 function computeStock(branch) {
   // start from latest snapshot
   const snaps = state.snapshots.slice().sort((a,b) => a.created_at.localeCompare(b.created_at));
@@ -5344,6 +5404,8 @@ function render() {
     _cp.catalogStarted = true;
     loadCpCatalog(true).then(changed => { if (changed) { saveState(); render(); } });
   }
+  // Retry any purchase that hasn't reached Counterpoint stock yet (once per session)
+  if (["owner", "manager", "accountant"].includes(u.role) && !_cp.pushStarted) { _cp.pushStarted = true; setTimeout(cpPushPurchases, 5000); }
   // Guard direct-access to restricted routes
   if (!canAccess(route.name, u)) {
     route = { name: "home", params: {} };
@@ -8681,6 +8743,7 @@ routes.purchase_new = function (u) {
       pushPurchaseFor(branch, outLines, total, null);
     }
     saveState();
+    cpPushPurchases();   // straight to Counterpoint stock (non-blocking; retries if offline)
     // Tell the user what stock each inventory line just added to (expected = last count + purchases since).
     try {
       const invLines = outLines.filter(l => l.kind === "inventory" && l.inv_item_id && l.qty_canonical);
@@ -8723,9 +8786,14 @@ function _deletePurchase(p, keep = 20) {
   state.deleted_purchases.unshift({ ...p, _ledger_entry: ledgerEntry, _ledger_arr: ledgerEntry ? ledgerArr : null, _owner_entries: ownerEntries, deleted_at: now(), deleted_by: currentUser()?.name || "?" });
   state.deleted_purchases = state.deleted_purchases.slice(0, keep);
   saveState();
+  cpPushPurchases();   // reverses its stock in Counterpoint if it had been pushed
 }
 function _restorePurchase(r) {
   const { deleted_at, deleted_by, _ledger_entry, _ledger_arr, _owner_entries, ...original } = r;
+  if ((original.lines || []).some(l => l.cp_undone_at)) {   // its stock was taken back out of Counterpoint: push it again under a new key
+    original.cp_gen = (original.cp_gen || 0) + 1;
+    original.lines.forEach(l => { if (l.cp_undone_at) { delete l.cp_synced_at; delete l.cp_undone_at; } });
+  }
   state.purchases.push(original);
   if (_ledger_entry && _ledger_arr) state[_ledger_arr].push(_ledger_entry);
   if (Array.isArray(_owner_entries) && _owner_entries.length) {
@@ -8734,6 +8802,7 @@ function _restorePurchase(r) {
   _untombstone(original.id);
   state.deleted_purchases = (state.deleted_purchases || []).filter(x => x.id !== r.id);
   saveState();
+  cpPushPurchases();
 }
 
 routes.purchase_list = function (u) {
@@ -21928,6 +21997,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "Monthly Totals" },
         { type: "para", text: "The Purchases list has a Monthly Totals button: it shows the total money spent on purchases, then each month on its own card with its receipt total, receipt count and branch split. Tap a month to see only that month's purchases." },
         { type: "para", text: "Typed the receipt price wrong? Tap the 💲 button on the purchase row, correct the amount and save. The total and the linked petty cash / bank entry update automatically, and the correction is recorded. Only the owner can do this." },
+        { type: "para", text: "Stock goes to Counterpoint straight away: when you save a purchase, every inventory line is added to that item's stock in Counterpoint (reason RECEIVE) as well as in this app, so the two stay level. This works for Maadi and Ox, and only for items linked to their Counterpoint item. If the phone is offline or Counterpoint is unreachable the purchase is still saved and the lines are sent automatically the next time an owner, manager or accountant opens the app. If the owner deletes a purchase, its stock is taken back out of Counterpoint." },
         { type: "subheader", text: "Monthly Receipt Report" },
         { type: "para", text: "At the end of each calendar month, the system automatically sends an email to coffeebeats@haidiyacoub.com with the monthly purchase receipt summary — items with receipts and the total without receipts." },
       ],
@@ -21937,6 +22007,7 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["افتح شاشة تسجيل المشتريات.", "اختر المنتج المشترى من القائمة المنسدلة — هذا إلزامي ولا يمكن حفظ المشترى بدونه. اختيار الصنف هو ما يضيف الكمية إلى رصيد المخزون فوق الرقم الحالي.", "اشتريت أنواعاً مختلفة من القهوة في عملية شراء واحدة؟ سجّل بنداً منفصلاً لكل نوع قهوة وارفع نفس الفاتورة في كل مرة.", "الصنف غير موجود في القائمة؟ لا تسجله بطريقة أخرى — أبلغ المالك ليتم إضافته.", "أدخل المبلغ الإجمالي المدفوع (بالجنيه المصري) — أدخل إجمالي الفاتورة كاملاً.", "أدخل الكمية المستلمة.", "اضغط على أيقونة التقويم لاختيار تاريخ انتهاء الصلاحية. اتركه فارغاً للمنتجات غير القابلة للتلف.", "اضغط نعم إذا تم توفير إيصال إلكتروني وقم بتحميل الملف؛ اضغط لا في حال العكس.", "أضف أي ملاحظات حول الشراء، ثم اضغط تقديم."] },
         { type: "subheader", text: "إجمالي كل شهر" },
         { type: "para", text: "في قائمة المشتريات زر إجمالي كل شهر: يعرض إجمالي المبلغ المصروف على المشتريات، ثم كل شهر في بطاقة منفصلة بإجمالي إيصالاته وعددها وتوزيعها على الفروع. اضغط على شهر لعرض مشتريات ذلك الشهر فقط." },
+        { type: "para", text: "تذهب الكمية إلى Counterpoint فوراً: عند حفظ المشترى يُضاف كل بند مخزون إلى رصيد الصنف في Counterpoint (السبب: استلام) إضافةً إلى هذا التطبيق، فيبقى الرصيدان متطابقين. يعمل ذلك لفرعي المعادي وOx وللأصناف المرتبطة بصنفها في Counterpoint فقط. إذا كان الهاتف بلا إنترنت أو تعذّر الوصول إلى Counterpoint يُحفظ المشترى ويُرسَل تلقائياً عند فتح التطبيق من المالك أو المدير أو المحاسب. وإذا حذف المالك مشترى تُسحب كميته من Counterpoint." },
         { type: "subheader", text: "تقرير الإيصالات الشهري" },
         { type: "para", text: "في نهاية كل شهر ميلادي، يرسل النظام تلقائياً بريداً إلكترونياً إلى coffeebeats@haidiyacoub.com بملخص إيصالات المشتريات الشهرية — العناصر مع الإيصالات والإجمالي بدون إيصالات." },
       ]
@@ -23666,6 +23737,7 @@ routes.app_guide = function (u) {
         "Tap <strong>Save</strong>. Two things happen automatically: every item line adds to that branch's stock, and the money moves out of wherever you said it came from — Petty Cash balance drops by the total, or a matching negative entry appears in the Bank Ledger (bank/credit card). Unpaid purchases only affect stock, not any ledger.",
         "The purchase list shows your full history — tap any purchase to see the receipt and line items. <strong>📅 Monthly totals</strong> shows total money spent plus a card per month (receipt total, count, branch split); tap a month to filter to it.",
         "<strong>Typed the receipt price wrong?</strong> Tap the 💲 button on the purchase row, correct the amount and save. The total and the petty cash / bank entry update automatically and the correction is recorded on the purchase. Only the owner can do this; ask her to fix it.",
+        "<strong>Counterpoint stock updates by itself.</strong> When you save, each item line is also added to that item's stock in Counterpoint (reason Receive) for Maadi and Ox, so Ops and Counterpoint stay level. No internet? The purchase still saves and sends later when an owner, manager or accountant opens the app. Deleting a purchase (owner) takes its stock back out.",
       ],
       ar_steps: [
         "اضغط على <strong>تسجيل مشترى</strong> عند وصول أي توريد.",
@@ -23677,6 +23749,7 @@ routes.app_guide = function (u) {
         "أرفق صورة الفاتورة.",
         "اضغط <strong>حفظ</strong>. يحدث أمران تلقائياً: كل بند صنف يُضاف لمخزون الفرع، والمبلغ يُخصم من مصدر الدفع الذي حددته — رصيد النثرية ينقص بالإجمالي، أو يظهر قيد سالب مطابق في سجل البنك (بنك/بطاقة). المشتريات الآجلة تؤثر على المخزون فقط دون أي قيد مالي.",
         "قائمة المشتريات تعرض السجل الكامل — اضغط على أي مشترى لعرض الفاتورة والبنود. زر <strong>📅 إجمالي كل شهر</strong> يعرض إجمالي المصروف وبطاقة لكل شهر (إجمالي الإيصالات والعدد والتوزيع على الفروع)؛ اضغط على شهر لتصفية القائمة.",
+        "<strong>مخزون Counterpoint يتحدّث تلقائياً.</strong> عند الحفظ يُضاف كل بند صنف أيضاً إلى رصيده في Counterpoint (السبب: استلام) للمعادي وOx، فيبقى الرصيدان متطابقين. بدون إنترنت؟ يُحفظ المشترى ويُرسَل لاحقاً عند فتح التطبيق من المالك أو المدير أو المحاسب. حذف المشترى (للمالك) يسحب كميته من Counterpoint.",
       ],
     },
     {
