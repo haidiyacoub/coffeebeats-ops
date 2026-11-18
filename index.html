@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-250 -->
+<!-- CB_BUILD:20261118-260 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-250";
+  var BUILD = "20261118-260";
   (function() {
     function checkFresh() {
       try {
@@ -8225,6 +8225,14 @@ async function deleteInventoryItem(it) {
   return true;
 }
 
+// Foodics product names (sales imported from the Foodics report, before the 2026-11-14 move to Counterpoint) that don't
+// match an ops menu name. Keys are normalised names (lower case, no brackets/punctuation). Used by the COGS lookups.
+const FOODICS_MENU_ALIAS = {
+  "smoked turkey croissant": "Turkey Croissant",
+  "mini sandwich": "Mini Sandwich Tuna",          // Foodics "mini sandwich (L)"
+  "cold cuts croissant": "Mini Sandwich Tuna",    // Haïdi: this is actually the sandwich (L)
+  "cake slice": "COOKIES",                        // Haïdi: this is actually a cookie
+};
 // Suppliers + reference prices from the "Price" tab of Coffee Beats Menu Analysis ver3 (price per g / ml / piece, after tax).
 // Supplier always shows from here. The price is only a fallback for items with no purchase yet; a real purchase replaces it.
 // f:true = Haïdi stated this price herself (Matcha 3,400 LE/kg before tax = 3,876 after, from Dr Baby): it beats older purchases, but not a newer one.
@@ -17791,7 +17799,7 @@ routes.dashboard = function (u, params) {
     const menuByName = new Map(state.menu.map(m => [normName(m.name), m]));
     const menuLookup = (rawName) => {
       const key = normName(rawName);
-      let m = menuByName.get(key);
+      let m = menuByName.get(key) || (FOODICS_MENU_ALIAS[key] && menuByName.get(normName(FOODICS_MENU_ALIAS[key])));
       if (!m) {
         const base = normName(String(rawName||"").split(" - ")[0]);
         if (base && base !== key) m = menuByName.get(base);
@@ -17812,7 +17820,7 @@ routes.dashboard = function (u, params) {
     let cogs = 0, cogsAtItemPrice = 0, salesAtItemPrice = 0;
     for (const r of monthSales) {
       const key = normName(r.item);
-      const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
+      const qty = (hasOrderItems && r.src !== "foodics") ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);   // Foodics rows have no order lines: use their own qty
       const m = menuLookup(r.item);
       if (m && m.cost_egp) {
         cogs += qty * (Number(m.cost_egp)||0);
@@ -18418,7 +18426,7 @@ routes.dashboard = function (u, params) {
     // that isn't on the menu master record ("Original Beats"). Fall back to the part before " - ".
     const menuLookup = (rawName) => {
       const key = normName(rawName);
-      let m = menuByName.get(key);
+      let m = menuByName.get(key) || (FOODICS_MENU_ALIAS[key] && menuByName.get(normName(FOODICS_MENU_ALIAS[key])));
       if (!m) {
         const base = normName(String(rawName||"").split(" - ")[0]);
         if (base && base !== key) m = menuByName.get(base);
@@ -18447,7 +18455,7 @@ routes.dashboard = function (u, params) {
     let cogsAtItemPrice = 0, salesAtItemPrice = 0;
     for (const r of sales) {
       const key = normName(r.item);
-      const qty = hasOrderItems ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);
+      const qty = (hasOrderItems && r.src !== "foodics") ? (qtyByItem.get(key) || 0) : (Number(r.qty)||0);   // Foodics rows have no order lines: use their own qty
       const m = menuLookup(r.item);
       if (m && m.cost_egp) {
         cogsSales += qty * (Number(m.cost_egp)||0);
