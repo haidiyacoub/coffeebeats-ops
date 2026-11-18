@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-163 -->
+<!-- CB_BUILD:20261118-172 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-163";
+  var BUILD = "20261118-172";
   (function() {
     function checkFresh() {
       try {
@@ -8174,7 +8174,7 @@ routes.supplier_list = function (u) {
 // ==============================================================
 // Suppliers + reference prices from the "Price" tab of Coffee Beats Menu Analysis ver3 (price per g / ml / piece, after tax).
 // Supplier always shows from here. The price is only a fallback for items with no purchase yet; a real purchase replaces it.
-// f:true = Haïdi stated this price herself (Matcha 3,400 LE/kg from Dr Baby): it beats older purchases, but not a newer one.
+// f:true = Haïdi stated this price herself (Matcha 3,400 LE/kg before tax = 3,876 after, from Dr Baby): it beats older purchases, but not a newer one.
 const INV_PRICE_REF = { asof: "2026-11-18T12:00:00Z", items: {
   "ING-COFFEE-TYPE-1": { c: 0.895, s: "Ritual" }, "ING-COFFEE-TYPE-2": { c: 0.86, s: "Ritual" },
   "ING-COFFEE-TYPE-3": { c: 1.6, s: "Cairo Coffee Collective" }, "ING-TURKISH-COFFEE": { c: 0.5, s: "al-bahnawi" },
@@ -8184,7 +8184,7 @@ const INV_PRICE_REF = { asof: "2026-11-18T12:00:00Z", items: {
   "ING-CONDENSED-MILK": { c: 0.185, s: "JET" }, "ING-CHOCOLATE-SAUCE": { c: 0.2166, s: "JET" },
   "ING-WHITE-CHOCOLATE-SAUCE": { c: 0.2, s: "JET" }, "ING-SALTED-CARAMEL-SAUCE": { c: 0.25, s: "JET" }, "ING-CARAMEL-SAUCE": { s: "JET" },
   "ING-HAZELNUT-SYRUP": { c: 0.4218, s: "Brix" }, "ING-VANILLA-SYRUP": { c: 0.37, s: "BRIX" }, "ING-SEASALT-VANILLA": { c: 0.235, s: "BRIX" },
-  "ING-MATCHA": { c: 3.4, s: "Dr Baby", f: true },
+  "ING-MATCHA": { c: 3.876, s: "Dr Baby", f: true },   // 3,400 LE/kg before 14% tax = 3,876 after
   "ING-HONEY": { c: 0.171, s: "The Farms" }, "ING-HASKAP-BERRIES": { c: 0.9, s: "Haskap" },
   "ING-VANILLA-POWDER": { c: 0.36366, s: "QUANTA" }, "ING-COFFEE-POWDER": { c: 0.36366, s: "QUANTA" }, "ING-CHOCOLATE-POWDER": { c: 0.323, s: "QUANTA" },
   "ING-FRESH-CREAM": { c: 0.2052, s: "QUANTA" },
