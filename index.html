@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-220 -->
+<!-- CB_BUILD:20261118-250 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-220";
+  var BUILD = "20261118-250";
   (function() {
     function checkFresh() {
       try {
@@ -14873,7 +14873,9 @@ async function cpShiftTotals(branch, date) {
 function cpCommitMonth(b) {
   const s = stamp(), batch = uuid(), { branch, month } = b;
   // sales (aggregated per item for the month, dated mid-month like the Product-report upload)
-  const inMonth = (r) => (r.date || "").startsWith(month) && (r.branch || "").toLowerCase() === branch;
+  // Rows imported from the Foodics report (src "foodics", the days before the 2026-11-14 move to Counterpoint) are kept:
+  // Counterpoint only covers the days after the move, so the month = Foodics rows + Counterpoint rows.
+  const inMonth = (r) => (r.date || "").startsWith(month) && (r.branch || "").toLowerCase() === branch && r.src !== "foodics";
   state.sales = (state.sales || []).filter(r => !inMonth(r));
   state._sales_shard_wipes = state._sales_shard_wipes || [];
   let w = state._sales_shard_wipes.find(x => x.month === month);
@@ -14964,7 +14966,7 @@ routes.sales_import = function (u) {
     const goBtn = el("button", { class: "btn", style: { display: "none", marginTop: "8px" }, onClick: () => {
       if (!built) return;
       const br = built.branch, mo = built.month;
-      const uploaded = (state.sales || []).filter(r => (r.date || "").startsWith(mo) && (r.branch || "").toLowerCase() === br && r.src !== "cp").length
+      const uploaded = (state.sales || []).filter(r => (r.date || "").startsWith(mo) && (r.branch || "").toLowerCase() === br && r.src !== "cp" && r.src !== "foodics").length
         + (state.order_items || []).filter(i => i.branch === br && i.month === mo && i.src !== "cp").length
         + (state.orders || []).filter(o => o.branch === br && o.month === mo && o.src !== "cp").length;
       if (uploaded && !confirm(`${branchLabel(br)} ${mo} already has ${uploaded} rows from CSV uploads. Counterpoint only covers ${built.stats.first} → ${built.stats.last}. Replace them all with the Counterpoint data?`)) return;
