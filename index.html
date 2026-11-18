@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-178 -->
+<!-- CB_BUILD:20261118-184 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-178";
+  var BUILD = "20261118-184";
   (function() {
     function checkFresh() {
       try {
@@ -8172,6 +8172,41 @@ routes.supplier_list = function (u) {
 // price, the old one is kept as prev_price so the change shows here as ▲/▼.
 // Owner/accountant can also correct a price by hand (✏️).
 // ==============================================================
+// Permanently removes an inventory item from ops (owner only): the item, its price/pack memory, supplier links,
+// reorder alert and recipe rows. Past purchases, waste, counts and shift records are history and stay as they were.
+// The name goes on state/removed_items.inv so the enforceItemRemovals Cloud Function strips it if a stale device
+// pushes it back, and the entry is dropped from state/item_lock. Counterpoint has no delete in its API, so the CP
+// product has to be archived in its back office (the confirm box shows the code).
+async function deleteInventoryItem(it) {
+  const u = currentUser();
+  if (!u || u.role !== "owner") { toast("Only the owner can delete inventory items", "error"); return false; }
+  const hist = (state.purchases || []).filter(p => (p.lines || []).some(l => l.inv_item_id === it.id)).length;
+  const msg = `Delete "${it.name}" for good?\n\n` +
+    `Removed everywhere in ops: the item, its price & supplier, reorder alert, and recipe rows that use it. It disappears from every device and won't come back on sync.\n\n` +
+    `Kept as history: ${hist} past purchase${hist === 1 ? "" : "s"}, waste, counts and shift records.\n\n` +
+    (it.cp_sku ? `Counterpoint: the app can't delete there (its API has no delete). Archive ${it.cp_sku} in the Counterpoint back office, or ask Claude to.\n\n` : "") +
+    `This cannot be undone.`;
+  if (!confirm(msg)) return false;
+  state.items = (state.items || []).filter(x => x.id !== it.id);
+  if (state.purchase_units) delete state.purchase_units[it.id];
+  if (state.suppliers) delete state.suppliers[it.id];
+  if (state.inventory_alerts) delete state.inventory_alerts[it.id];
+  state.inv_engine_recipes = (state.inv_engine_recipes || []).filter(r => r.inv_item_id !== it.id);
+  try { cpSyncMenuFromCatalog(); } catch (e) { /* costs refresh on next load */ }
+  saveState();
+  try {
+    const FV = firebase.firestore.FieldValue;
+    await db.collection("state").doc("removed_items").set({ inv: FV.arrayUnion(it.name) }, { merge: true });
+    await db.collection("state").doc("item_lock").set({ items: { [it.id]: FV.delete() } }, { merge: true });
+  } catch (err) {
+    console.warn("removed_items write failed", err);
+    toast("Removed here, but couldn't lock it for other devices — retry while online", "error");
+  }
+  toast(`Deleted ${it.name}` + (it.cp_sku ? ` · archive ${it.cp_sku} in Counterpoint` : ""));
+  render();
+  return true;
+}
+
 // Suppliers + reference prices from the "Price" tab of Coffee Beats Menu Analysis ver3 (price per g / ml / piece, after tax).
 // Supplier always shows from here. The price is only a fallback for items with no purchase yet; a real purchase replaces it.
 // f:true = Haïdi stated this price herself (Matcha 3,400 LE/kg before tax = 3,876 after, from Dr Baby): it beats older purchases, but not a newer one.
@@ -8375,6 +8410,11 @@ routes.inventory_prices = function (u) {
         b.addEventListener("click", (e) => { e.stopPropagation(); editPrice(it, i); });
         parts.push(b);
       }
+      if (u.role === "owner") {
+        const d = el("button", { class: "btn ghost", title: T("Delete item","حذف الصنف"), style: { width: "auto", flex: "0 0 auto", minHeight: "0", padding: "4px 10px", fontSize: "12px" } }, "🗑");
+        d.addEventListener("click", (e) => { e.stopPropagation(); deleteInventoryItem(it); });
+        parts.push(d);
+      }
       list.appendChild(el("div", { class: "row", style: { alignItems: "center" } }, parts));
     }
   }
@@ -8493,10 +8533,7 @@ routes.items_list = function (u) {
       onSubmit: (v) => {
         if (String(v.del || "").trim().toUpperCase() === "DELETE") {
           if (u.role !== "owner") return toast("Only the owner can permanently delete items", "error");
-          state.items = state.items.filter(x => x.id !== it.id);
-          saveState();
-          toast(`Removed ${it.name}`);
-          render();
+          deleteInventoryItem(it);
           return;
         }
         if (!v.name || !v.name.trim()) return toast("Name is required", "error");
@@ -23825,6 +23862,7 @@ routes.app_guide = function (u) {
         "<strong>⚠ Held prices:</strong> if a new price jumps more than 40% against the last purchase, or is more than 40% away from Counterpoint's cost, it is held out of COGS (it is often a wrong pack size or a mixed receipt). Check the purchase, then tap <strong>✓ Confirm</strong> to use it, or ✏️ to correct it.",
         "Items never purchased show “—” until their first purchase. Use ✏️ to correct a price or supplier by hand.",
         "Test Mode purchases never change these prices.",
+        "<strong>🗑 Delete item (owner only):</strong> removes the item from everywhere in ops — price, supplier, reorder alert and recipe rows — on every device. Past purchases, waste and counts stay as history. Counterpoint can't be changed from the app, so archive the product there too.",
       ],
       ar_steps: [
         "اضغط <strong>أسعار المخزون</strong> (المالك/المحاسب) لعرض كل صنف مع سعر شرائه: سعر العبوة (زجاجة، كرتونة…)، التكلفة لكل جرام/مل، المورد وتاريخ آخر مشترى.",
@@ -23833,6 +23871,7 @@ routes.app_guide = function (u) {
         "<strong>⚠ الأسعار المعلّقة:</strong> إذا قفز السعر الجديد أكثر من 40٪ عن آخر مشترى، أو ابتعد أكثر من 40٪ عن تكلفة كاونتر بوينت، يُستبعد من التكلفة (غالباً حجم عبوة خاطئ أو فاتورة مختلطة). راجع المشترى ثم اضغط <strong>✓ تأكيد</strong> لاستخدامه أو ✏️ لتصحيحه.",
         "الأصناف التي لم تُشترَ بعد تظهر “—” حتى أول مشترى. استخدم ✏️ لتصحيح السعر أو المورد يدوياً.",
         "مشتريات وضع الاختبار لا تغيّر هذه الأسعار.",
+        "<strong>🗑 حذف صنف (للمالك فقط):</strong> يزيل الصنف من كل مكان في النظام — السعر والمورد وتنبيه إعادة الطلب وبنود الوصفات — على كل الأجهزة. تبقى المشتريات والهدر والجرد السابقة كسجل. لا يمكن تعديل كاونتر بوينت من التطبيق، فأرشف المنتج هناك أيضاً.",
       ],
     },
     {
