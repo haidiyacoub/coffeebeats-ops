@@ -271,7 +271,7 @@ export default {
 
         const path = { product: '/products', customer: '/customers', sale: '/sales' }[type];
         if (!path) return json({ error: 'unknown type' }, 400);
-        const result = await cp(env, path, { method: 'POST', body: JSON.stringify(payload) }, env.COUNTERPOINT_WRITE_KEY || env.COUNTERPOINT_API_KEY);
+        const result = await cp(env, path, { method: 'POST', body: JSON.stringify(payload) }, type === 'product' ? env.COUNTERPOINT_API_KEY : (env.COUNTERPOINT_WRITE_KEY || env.COUNTERPOINT_API_KEY));   // catalog writes use the main ops key
         await fsWrite(env, [{ col: 'counterpoint_log', id: `push_${Date.now()}`, data: { type, by: user.email || user.user_id, result } }]);
         return json({ ok: true, dryRun: !!result.dryRun, result });
       }
