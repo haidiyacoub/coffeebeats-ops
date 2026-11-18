@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-214 -->
+<!-- CB_BUILD:20261118-220 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-214";
+  var BUILD = "20261118-220";
   (function() {
     function checkFresh() {
       try {
@@ -3761,10 +3761,13 @@ function cpAddSnapshotRecipes(recipes) {
 //  • cost     → counterpoint_products.cost (computed by Counterpoint from those recipes + ingredient costs)
 //  • price    → counterpoint_products.unitPrice (ex-VAT) × 1.14
 // The ops menu (state.menu) is kept in step with it, so the P&L / COGS % / dashboards use the same numbers.
-// Keeps state.menu cost/price in step with the Counterpoint catalog. Cost = Counterpoint's cost for the drink
-// PLUS the change in ingredient cost since Counterpoint last had it: for every base-recipe ingredient we have a
-// confirmed purchase price for (Inventory Prices page), qty × (ops cost per g/ml − Counterpoint's cost per g/ml).
-// So a new purchase price flows into COGS, while anything Counterpoint counts that we don't (cups, options) stays as is.
+// Keeps state.menu cost/price in step with the Counterpoint catalog, with drink COGS built from the Inventory Prices list.
+// Counterpoint's own drink cost = every ingredient line of the base recipe (packaging such as cups and lids is NOT counted)
+// plus the default milk option (Full Cream). We rebuild exactly that, but with each ingredient priced from the
+// Inventory Prices list (purchases / workbook), falling back to Counterpoint's ingredient cost when the list has none.
+// The rebuild is trusted only where it reproduces Counterpoint's cost (±10%) with Counterpoint's own prices; for the few
+// drinks it doesn't (iced teas), Counterpoint's cost is kept and adjusted by the ingredient price differences instead.
+const CP_PACKAGING = /^(CUP|LIDS|ICE-CUP-LID|STRAW|STIRRER|STOPPER|NAPKINS|GLOVES|TAKEAWAY|V60|WHITE-SUGAR-PACKETS|BROWN-SUGAR-PACKETS|DIET-SUGAR)/;
 function cpOpsCostMap() {
   const out = {};
   const pm = invPriceMap();
@@ -3784,19 +3787,32 @@ function cpSyncMenuFromCatalog() {
   for (const m of (state.menu || [])) {
     const c = (m.pos_sku && bySku[m.pos_sku]) || byName[_cpNrm(m.name)];
     if (!c) continue;
-    let delta = 0;
     const needs = (_cp.recipes && (_cp.recipes["sku:" + c.sku] || _cp.recipes["name:" + _cpNrm(c.name)])) || [];
-    for (const n of needs) {
-      if (n.optionId) continue;                       // option-only lines aren't in Counterpoint's base cost
-      const oc = opsCost[n.sku], ing = _cp.catalog[n.sku];
-      if (oc == null || !ing || !(ing.cost > 0)) continue;
-      delta += (Number(n.quantity) || 0) * (oc - ing.cost);
-    }
-    // A product we also buy ready-made (snack, bar): its cost is simply what we pay per piece.
-    if (!needs.length && opsCost[c.sku] > 0) delta = opsCost[c.sku] - c.cost;
-    const cost = Math.round((c.cost + delta) * 100) / 100, price = Math.round(c.price * VAT_RATE);
+    let newCost = null, src = "cp", delta = 0;
+    if (needs.length) {
+      let sumList = 0, sumCp = 0;
+      for (const n of needs) {
+        const k = String(n.sku || "").replace(/^ING-/, "");
+        if (CP_PACKAGING.test(k)) continue;
+        if (n.optionId && n.sku !== "ING-FULL-CREAM-MILK") continue;   // add-ons / other milks are only costed when sold
+        const q = Number(n.quantity) || 0, ing = _cp.catalog[n.sku], cpc = ing ? ing.cost : 0, oc = opsCost[n.sku];
+        sumCp += q * cpc; sumList += q * (oc != null ? oc : cpc);
+      }
+      if (c.cost > 0 && sumCp > 0 && Math.abs(sumCp - c.cost) / c.cost <= 0.10) { newCost = sumList; src = "list"; }
+      else {
+        for (const n of needs) {                       // fallback: Counterpoint's cost + ingredient price differences
+          if (n.optionId) continue;
+          const oc = opsCost[n.sku], ing = _cp.catalog[n.sku];
+          if (oc == null || !ing || !(ing.cost > 0)) continue;
+          delta += (Number(n.quantity) || 0) * (oc - ing.cost);
+        }
+        newCost = c.cost + delta; src = delta ? "cp+list" : "cp";
+      }
+    } else if (opsCost[c.sku] > 0) { newCost = opsCost[c.sku]; src = "list"; }   // bought ready-made (snack, bar): what we pay per piece
+    else newCost = c.cost;
+    const cost = Math.round(newCost * 100) / 100, price = Math.round(c.price * VAT_RATE);
     if (cost > 0 && m.cost_egp !== cost) { m.cost_egp = cost; m.last_edited_at = new Date().toISOString(); changed = true; }
-    if (cost > 0) m.cost_ops_delta = Math.round(delta * 100) / 100;   // how much of this cost comes from our purchase prices
+    if (cost > 0) { m.cost_ops_delta = Math.round((cost - c.cost) * 100) / 100; m.cost_src = src; }   // cost_ops_delta = change vs Counterpoint's own cost
     if (price > 0 && m.price_egp !== price) { m.price_egp = price; m.last_edited_at = new Date().toISOString(); changed = true; }
   }
   return changed;
@@ -8430,6 +8446,42 @@ routes.inventory_prices = function (u) {
   }
   search.addEventListener("input", draw);
   draw();
+
+  // ---- Drink COGS built from these prices ----
+  const cogsBtn = el("button", { class: "btn secondary", style: { marginTop: "14px" } }, T("📊 Show drink COGS from these prices","📊 عرض تكلفة المشروبات من هذه الأسعار"));
+  const cogsBox = el("div", { style: { marginTop: "10px" } });
+  let cogsOpen = false;
+  function drawCogs() {
+    cogsBox.innerHTML = "";
+    if (!cogsOpen) return;
+    const rows = (state.menu || []).filter(m => Number(m.cost_egp) > 0 && Number(m.price_egp) > 0)
+      .map(m => ({ m, net: m.price_egp / VAT_RATE, pct: m.cost_egp / (m.price_egp / VAT_RATE) * 100 }))
+      .sort((a, b) => b.pct - a.pct);
+    const fromList = rows.filter(r => r.m.cost_src === "list").length;
+    cogsBox.appendChild(el("div", { class: "muted small", style: { marginBottom: "8px" } }, T(
+      `${rows.length} menu items · ${fromList} costed straight from this list (every ingredient × its price here; packaging not counted, same as Counterpoint). Others keep Counterpoint's cost, adjusted by any ingredient price differences. COGS % = cost ÷ price before 14% VAT. Highest first.`,
+      `${rows.length} صنف · ${fromList} محسوب مباشرة من هذه القائمة (كل مكوّن × سعره هنا؛ التغليف غير محسوب مثل كاونتر بوينت). الباقي يحتفظ بتكلفة كاونتر بوينت معدّلة بفروق الأسعار. نسبة التكلفة = التكلفة ÷ السعر قبل ضريبة 14٪. الأعلى أولاً.`)));
+    const tbl = el("table", { style: { width: "100%", fontSize: "13px", borderCollapse: "collapse" } });
+    tbl.appendChild(el("thead", {}, el("tr", {}, [T("Item","الصنف"), T("Cost","التكلفة"), T("Price","السعر"), "COGS %", T("vs CP","مقابل CP")].map(h => el("th", { style: { textAlign: "left", padding: "4px 6px", borderBottom: "1px solid var(--border)" } }, h)))));
+    const tb = el("tbody", {});
+    for (const r of rows) {
+      const col = r.pct > 35 ? "var(--bad)" : r.pct > 28 ? "var(--warn, #b45309)" : "var(--ok)";
+      const d = Number(r.m.cost_ops_delta) || 0;
+      tb.appendChild(el("tr", {}, [
+        el("td", { style: { padding: "4px 6px" } }, r.m.name),
+        el("td", { style: { padding: "4px 6px" } }, (Math.round(r.m.cost_egp * 100) / 100).toFixed(2)),
+        el("td", { style: { padding: "4px 6px" } }, String(r.m.price_egp)),
+        el("td", { style: { padding: "4px 6px", fontWeight: "700", color: col } }, r.pct.toFixed(1) + "%"),
+        el("td", { class: "muted", style: { padding: "4px 6px" } }, Math.abs(d) < 0.005 ? "—" : (d > 0 ? "▲ +" : "▼ ") + d.toFixed(2)),
+      ]));
+    }
+    tbl.appendChild(tb);
+    cogsBox.appendChild(el("div", { style: { overflowX: "auto" } }, tbl));
+  }
+  cogsBtn.addEventListener("click", () => { cogsOpen = !cogsOpen; cogsBtn.textContent = cogsOpen ? T("Hide drink COGS","إخفاء تكلفة المشروبات") : T("📊 Show drink COGS from these prices","📊 عرض تكلفة المشروبات من هذه الأسعار"); drawCogs(); });
+  wrap.appendChild(cogsBtn);
+  wrap.appendChild(cogsBox);
+
   wrap.appendChild(btnBack());
   return wrap;
 };
@@ -23876,6 +23928,7 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>Inventory Prices</strong> (owner/accountant) to see every inventory item with what it costs to buy: price per pack (bottle, carton…), cost per gram/ml, supplier and the date of the last purchase.",
         "Prices <strong>update automatically</strong> from the Purchase Log: when a new purchase has a different price (for example Dina Farms milk), the new price replaces the old one and a ▲/▼ shows what it was before.",
+        "<strong>📊 Drink COGS:</strong> the button at the bottom lists every menu item's cost and COGS %, built ingredient by ingredient from these prices (packaging is not counted, same as Counterpoint). Drinks Counterpoint's recipe can't rebuild exactly keep Counterpoint's cost, adjusted by price differences.",
         "<strong>COGS follows these prices.</strong> Each drink's cost = Counterpoint's cost adjusted by the difference between the price we actually pay and Counterpoint's ingredient cost. It recalculates when a purchase is saved, a price is edited, or the owner/accountant/head barista opens the app.",
         "<strong>Unit and pack size are set here.</strong> The label (bottle, box…) and pack size you save with ✏️ are the source of truth: the Record Purchase form pre-fills them, and a purchase in a different pack is converted to this pack. A purchase only changes the <em>price</em>, and only when its price actually differs.",
         "<strong>⚠ Held prices:</strong> if a new price jumps more than 40% against the last purchase, or is more than 40% away from Counterpoint's cost, it is held out of COGS (it is often a wrong pack size or a mixed receipt). Check the purchase, then tap <strong>✓ Confirm</strong> to use it, or ✏️ to correct it.",
@@ -23886,6 +23939,7 @@ routes.app_guide = function (u) {
       ar_steps: [
         "اضغط <strong>أسعار المخزون</strong> (المالك/المحاسب) لعرض كل صنف مع سعر شرائه: سعر العبوة (زجاجة، كرتونة…)، التكلفة لكل جرام/مل، المورد وتاريخ آخر مشترى.",
         "تتحدث الأسعار <strong>تلقائياً</strong> من سجل المشتريات: عند تسجيل مشترى بسعر مختلف (مثل لبن مزارع دينا) يحل السعر الجديد محل القديم وتظهر ▲/▼ بالسعر السابق.",
+        "<strong>📊 تكلفة المشروبات:</strong> الزر أسفل الصفحة يعرض تكلفة كل صنف ونسبة التكلفة، محسوبة مكوّناً بمكوّن من هذه الأسعار (التغليف غير محسوب مثل كاونتر بوينت). المشروبات التي لا تستطيع وصفة كاونتر بوينت إعادة بنائها بدقة تحتفظ بتكلفته معدّلة بفروق الأسعار.",
         "<strong>تكلفة المنتجات (COGS) تتبع هذه الأسعار.</strong> تكلفة كل مشروب = تكلفة كاونتر بوينت معدّلة بفرق السعر الذي ندفعه فعلياً عن تكلفة المكوّن في كاونتر بوينت. تُعاد عند حفظ مشترى أو تعديل سعر أو عند فتح المالك/المحاسب/رئيس البريستا للتطبيق.",
         "<strong>الوحدة وحجم العبوة تُحدَّد هنا.</strong> الاسم (زجاجة، علبة…) وحجم العبوة اللذان تحفظهما بـ ✏️ هما المرجع: نموذج تسجيل المشترى يملؤهما تلقائياً، وأي مشترى بعبوة مختلفة يُحوَّل إلى هذه العبوة. المشترى يغيّر <em>السعر</em> فقط، وفقط إذا اختلف السعر فعلاً.",
         "<strong>⚠ الأسعار المعلّقة:</strong> إذا قفز السعر الجديد أكثر من 40٪ عن آخر مشترى، أو ابتعد أكثر من 40٪ عن تكلفة كاونتر بوينت، يُستبعد من التكلفة (غالباً حجم عبوة خاطئ أو فاتورة مختلطة). راجع المشترى ثم اضغط <strong>✓ تأكيد</strong> لاستخدامه أو ✏️ لتصحيحه.",
