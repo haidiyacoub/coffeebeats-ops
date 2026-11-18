@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261117-667 -->
+<!-- CB_BUILD:20261118-919 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261117-667";
+  var BUILD = "20261118-919";
   (function() {
     function checkFresh() {
       try {
@@ -4946,11 +4946,10 @@ function changePurchasePaidBy(p, newPaid, force) {
 // Fix a wrongly-typed receipt price on an existing purchase. Each line's total is editable;
 // inventory lines re-derive unit price / unit cost, the purchase total updates, and the
 // linked petty-cash / bank / personal-funds row is re-posted at the new amount.
-// Allowed: owner, accountant, or the person who logged it within 24h. Old values are kept in price_edits.
+// Allowed: owner only. Old values are kept in price_edits.
 function canEditPurchasePrice(p, u) {
   if (!u || !p) return false;
-  if (u.role === "owner" || u.role === "accountant") return true;
-  return p.by === u.id && (Date.now() - new Date(p.at).getTime()) < 24 * 3600 * 1000;
+  return u.role === "owner"; // owner-only
 }
 function editPurchasePrice(p, onDone) {
   const lines = p.lines || [];
@@ -8822,12 +8821,6 @@ routes.purchase_list = function (u) {
       ]),
       el("span", { class: "pill" }, p.paid_by.replace("_"," ")),
     ];
-    if (u.role !== "owner" && canEditPurchasePrice(p, u)) {
-      rowChildren.push(el("button", {
-        class: "btn ghost", style: { marginLeft: "6px" }, title: T("Fix receipt price","تصحيح سعر الفاتورة"),
-        onClick: (e) => { e.stopPropagation(); editPurchasePrice(p, () => render()); }
-      }, "💲"));
-    }
     if (u.role === "owner") {
       const actions = el("div", { style: { display: "flex", gap: "4px", alignItems: "center" } });
       actions.appendChild(el("button", {
@@ -21934,7 +21927,7 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Open the Record Purchase screen.", "Select the item purchased from the dropdown list — this is mandatory and the purchase cannot be saved without it. Choosing the item is what adds the quantity to the stock count on top of the current number.", "Bought different coffee types in one purchase? Make a separate purchase item for each coffee type and upload the same receipt each time.", "Item not in the dropdown? Do not record it another way — report it to the owner so it can be added.", "Enter the total amount paid (in EGP) — enter the complete invoice total.", "Enter the quantity received.", "Tap the calendar icon to select the expiry date. Leave blank for non-perishables.", "Tap Yes if an electronic receipt was provided and upload the file; tap No otherwise.", "Add any notes about the purchase, then tap Submit."] },
         { type: "subheader", text: "Monthly Totals" },
         { type: "para", text: "The Purchases list has a Monthly Totals button: it shows the total money spent on purchases, then each month on its own card with its receipt total, receipt count and branch split. Tap a month to see only that month's purchases." },
-        { type: "para", text: "Typed the receipt price wrong? Tap the 💲 button on the purchase row, correct the amount and save. The total and the linked petty cash / bank entry update automatically, and the correction is recorded. Baristas can do this within 24 hours of logging; after that the owner or accountant does it." },
+        { type: "para", text: "Typed the receipt price wrong? Tap the 💲 button on the purchase row, correct the amount and save. The total and the linked petty cash / bank entry update automatically, and the correction is recorded. Only the owner can do this." },
         { type: "subheader", text: "Monthly Receipt Report" },
         { type: "para", text: "At the end of each calendar month, the system automatically sends an email to coffeebeats@haidiyacoub.com with the monthly purchase receipt summary — items with receipts and the total without receipts." },
       ],
@@ -23672,7 +23665,7 @@ routes.app_guide = function (u) {
         "Attach a photo of the receipt.",
         "Tap <strong>Save</strong>. Two things happen automatically: every item line adds to that branch's stock, and the money moves out of wherever you said it came from — Petty Cash balance drops by the total, or a matching negative entry appears in the Bank Ledger (bank/credit card). Unpaid purchases only affect stock, not any ledger.",
         "The purchase list shows your full history — tap any purchase to see the receipt and line items. <strong>📅 Monthly totals</strong> shows total money spent plus a card per month (receipt total, count, branch split); tap a month to filter to it.",
-        "<strong>Typed the receipt price wrong?</strong> Tap the 💲 button on the purchase row, correct the amount and save. The total and the petty cash / bank entry update automatically and the correction is recorded on the purchase. You can do this within 24 hours of logging it; after that ask the owner or accountant.",
+        "<strong>Typed the receipt price wrong?</strong> Tap the 💲 button on the purchase row, correct the amount and save. The total and the petty cash / bank entry update automatically and the correction is recorded on the purchase. Only the owner can do this; ask her to fix it.",
       ],
       ar_steps: [
         "اضغط على <strong>تسجيل مشترى</strong> عند وصول أي توريد.",
