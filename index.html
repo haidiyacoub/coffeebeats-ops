@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-196 -->
+<!-- CB_BUILD:20261118-208 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-196";
+  var BUILD = "20261118-208";
   (function() {
     function checkFresh() {
       try {
@@ -8278,6 +8278,14 @@ function invPriceMap() {
     if (rf && rf.s) supplier = rf.s;
     if (!supplier) supplier = ((state.suppliers || {})[it.id] || []).map(x => x.name).filter(Boolean)[0] || "";
     const cost = price > 0 && pack > 0 ? price / pack : 0;
+    // Unit label + pack size set on this page (✏️) are the source of truth: purchases in any other pack are converted
+    // to the page's pack, they never change it.
+    const defd = (e.pack_set || e.manual) && Number(e.pack_size_canonical) > 0;
+    if (defd && cost > 0) {
+      const dp = Number(e.pack_size_canonical);
+      pack = dp; label = e.unit_label || label; price = Math.round(cost * dp * 100) / 100;
+      if (prev) prev = { ...prev, price: Math.round(prev.cost * dp * 100) / 100 };
+    }
     // A big jump against the previous price is held back from COGS until the owner/accountant confirms it (✓),
     // because it is often a wrong pack size or a mixed receipt rather than a real price change.
     const jump = cost && prev && prev.cost ? cost / prev.cost - 1 : 0;
@@ -8340,7 +8348,7 @@ routes.inventory_prices = function (u) {
           supplier: (v.supplier || "").trim(),
           prev_price: oldPrice && oldPrice !== np ? oldPrice : (old.prev_price || 0),
           prev_at: oldPrice && oldPrice !== np ? (old.updated_at || info.at || "") : (old.prev_at || ""),
-          manual: true, by: s.by, by_name: s.by_name,
+          manual: true, pack_set: true, by: s.by, by_name: s.by_name,
           updated_at: s.at,
         };
         cpSyncMenuFromCatalog();
@@ -8938,17 +8946,25 @@ routes.purchase_new = function (u) {
         // remember conversion for next time
         if (!isTestMode()) {
           const _old = state.purchase_units[l.inv_item_id] || {};
-          const _np = Number(l.unit_price) || 0, _op = Number(_old.last_unit_price) || 0;
-          const _chg = _op > 0 && _np > 0 && _np !== _op;
-          state.purchase_units[l.inv_item_id] = {
-            unit_label: l.purchase_unit || "",
-            pack_size_canonical: Number(l.pack_size) || 0,
-            last_unit_price: _np,
-            supplier: supplier || _old.supplier || "",
-            prev_price: _chg ? _op : (_old.prev_price || 0),
-            prev_at: _chg ? (_old.updated_at || "") : (_old.prev_at || ""),
-            updated_at: s.at,
-          };
+          const _defd = (_old.pack_set || _old.manual) && Number(_old.pack_size_canonical) > 0;
+          // Inventory Prices owns the unit label + pack size; a purchase only brings the price, converted to that pack.
+          const _perUnit = Number(l.pack_size) > 0 ? (Number(l.unit_price) || 0) / Number(l.pack_size) : 0;
+          const _np = _defd ? Math.round(_perUnit * Number(_old.pack_size_canonical) * 100) / 100 : (Number(l.unit_price) || 0);
+          const _op = Number(_old.last_unit_price) || 0;
+          const _same = _op > 0 && Math.abs(_np - _op) < 0.005;
+          const _chg = _op > 0 && _np > 0 && !_same;
+          if (!_same) {   // price unchanged → leave the entry (and its date) alone
+            state.purchase_units[l.inv_item_id] = {
+              unit_label: _defd ? (_old.unit_label || "") : (l.purchase_unit || ""),
+              pack_size_canonical: _defd ? Number(_old.pack_size_canonical) : (Number(l.pack_size) || 0),
+              last_unit_price: _np,
+              supplier: supplier || _old.supplier || "",
+              prev_price: _chg ? _op : (_old.prev_price || 0),
+              prev_at: _chg ? (_old.updated_at || "") : (_old.prev_at || ""),
+              ...(_defd ? { pack_set: true } : {}),
+              updated_at: s.at,
+            };
+          }
           // Inventory Prices page picks this up automatically; tell the person it moved.
           if (_chg) toast(`💲 ${item ? item.name : ""}: ${_op} → ${_np} LE (${T("Inventory Prices updated","تم تحديث أسعار المخزون")})`);
         }
@@ -23861,6 +23877,7 @@ routes.app_guide = function (u) {
         "Tap <strong>Inventory Prices</strong> (owner/accountant) to see every inventory item with what it costs to buy: price per pack (bottle, carton…), cost per gram/ml, supplier and the date of the last purchase.",
         "Prices <strong>update automatically</strong> from the Purchase Log: when a new purchase has a different price (for example Dina Farms milk), the new price replaces the old one and a ▲/▼ shows what it was before.",
         "<strong>COGS follows these prices.</strong> Each drink's cost = Counterpoint's cost adjusted by the difference between the price we actually pay and Counterpoint's ingredient cost. It recalculates when a purchase is saved, a price is edited, or the owner/accountant/head barista opens the app.",
+        "<strong>Unit and pack size are set here.</strong> The label (bottle, box…) and pack size you save with ✏️ are the source of truth: the Record Purchase form pre-fills them, and a purchase in a different pack is converted to this pack. A purchase only changes the <em>price</em>, and only when its price actually differs.",
         "<strong>⚠ Held prices:</strong> if a new price jumps more than 40% against the last purchase, or is more than 40% away from Counterpoint's cost, it is held out of COGS (it is often a wrong pack size or a mixed receipt). Check the purchase, then tap <strong>✓ Confirm</strong> to use it, or ✏️ to correct it.",
         "Items never purchased show “—” until their first purchase. Use ✏️ to correct a price or supplier by hand.",
         "Test Mode purchases never change these prices.",
@@ -23870,6 +23887,7 @@ routes.app_guide = function (u) {
         "اضغط <strong>أسعار المخزون</strong> (المالك/المحاسب) لعرض كل صنف مع سعر شرائه: سعر العبوة (زجاجة، كرتونة…)، التكلفة لكل جرام/مل، المورد وتاريخ آخر مشترى.",
         "تتحدث الأسعار <strong>تلقائياً</strong> من سجل المشتريات: عند تسجيل مشترى بسعر مختلف (مثل لبن مزارع دينا) يحل السعر الجديد محل القديم وتظهر ▲/▼ بالسعر السابق.",
         "<strong>تكلفة المنتجات (COGS) تتبع هذه الأسعار.</strong> تكلفة كل مشروب = تكلفة كاونتر بوينت معدّلة بفرق السعر الذي ندفعه فعلياً عن تكلفة المكوّن في كاونتر بوينت. تُعاد عند حفظ مشترى أو تعديل سعر أو عند فتح المالك/المحاسب/رئيس البريستا للتطبيق.",
+        "<strong>الوحدة وحجم العبوة تُحدَّد هنا.</strong> الاسم (زجاجة، علبة…) وحجم العبوة اللذان تحفظهما بـ ✏️ هما المرجع: نموذج تسجيل المشترى يملؤهما تلقائياً، وأي مشترى بعبوة مختلفة يُحوَّل إلى هذه العبوة. المشترى يغيّر <em>السعر</em> فقط، وفقط إذا اختلف السعر فعلاً.",
         "<strong>⚠ الأسعار المعلّقة:</strong> إذا قفز السعر الجديد أكثر من 40٪ عن آخر مشترى، أو ابتعد أكثر من 40٪ عن تكلفة كاونتر بوينت، يُستبعد من التكلفة (غالباً حجم عبوة خاطئ أو فاتورة مختلطة). راجع المشترى ثم اضغط <strong>✓ تأكيد</strong> لاستخدامه أو ✏️ لتصحيحه.",
         "الأصناف التي لم تُشترَ بعد تظهر “—” حتى أول مشترى. استخدم ✏️ لتصحيح السعر أو المورد يدوياً.",
         "مشتريات وضع الاختبار لا تغيّر هذه الأسعار.",
