@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-142 -->
+<!-- CB_BUILD:20261118-157 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-142";
+  var BUILD = "20261118-157";
   (function() {
     function checkFresh() {
       try {
@@ -3761,6 +3761,46 @@ function cpAddSnapshotRecipes(recipes) {
 //  • cost     → counterpoint_products.cost (computed by Counterpoint from those recipes + ingredient costs)
 //  • price    → counterpoint_products.unitPrice (ex-VAT) × 1.14
 // The ops menu (state.menu) is kept in step with it, so the P&L / COGS % / dashboards use the same numbers.
+// Keeps state.menu cost/price in step with the Counterpoint catalog. Cost = Counterpoint's cost for the drink
+// PLUS the change in ingredient cost since Counterpoint last had it: for every base-recipe ingredient we have a
+// confirmed purchase price for (Inventory Prices page), qty × (ops cost per g/ml − Counterpoint's cost per g/ml).
+// So a new purchase price flows into COGS, while anything Counterpoint counts that we don't (cups, options) stays as is.
+function cpOpsCostMap() {
+  const out = {};
+  const pm = invPriceMap();
+  for (const it of (state.items || [])) {
+    if (!it.cp_sku || it.active === false) continue;
+    const e = pm[it.id];
+    if (e && e.use > 0) out[it.cp_sku] = e.use;
+  }
+  return out;
+}
+function cpSyncMenuFromCatalog() {
+  if (!_cp.catalog) return false;
+  let changed = false;
+  const bySku = {}, byName = {};
+  Object.values(_cp.catalog).filter(c => c.sold).forEach(c => { if (c.sku) bySku[c.sku] = c; byName[_cpNrm(c.name)] = c; });
+  const opsCost = cpOpsCostMap();
+  for (const m of (state.menu || [])) {
+    const c = (m.pos_sku && bySku[m.pos_sku]) || byName[_cpNrm(m.name)];
+    if (!c) continue;
+    let delta = 0;
+    const needs = (_cp.recipes && (_cp.recipes["sku:" + c.sku] || _cp.recipes["name:" + _cpNrm(c.name)])) || [];
+    for (const n of needs) {
+      if (n.optionId) continue;                       // option-only lines aren't in Counterpoint's base cost
+      const oc = opsCost[n.sku], ing = _cp.catalog[n.sku];
+      if (oc == null || !ing || !(ing.cost > 0)) continue;
+      delta += (Number(n.quantity) || 0) * (oc - ing.cost);
+    }
+    // A product we also buy ready-made (snack, bar): its cost is simply what we pay per piece.
+    if (!needs.length && opsCost[c.sku] > 0) delta = opsCost[c.sku] - c.cost;
+    const cost = Math.round((c.cost + delta) * 100) / 100, price = Math.round(c.price * VAT_RATE);
+    if (cost > 0 && m.cost_egp !== cost) { m.cost_egp = cost; m.last_edited_at = new Date().toISOString(); changed = true; }
+    if (cost > 0) m.cost_ops_delta = Math.round(delta * 100) / 100;   // how much of this cost comes from our purchase prices
+    if (price > 0 && m.price_egp !== price) { m.price_egp = price; m.last_edited_at = new Date().toISOString(); changed = true; }
+  }
+  return changed;
+}
 async function loadCpCatalog(force) {
   if (_cp.catalogLoading) return _cp.catalogLoading;
   if (!force && _cp.catalog && Date.now() - (_cp.catalogAt || 0) < 300000) return false;
@@ -3786,15 +3826,7 @@ async function loadCpCatalog(force) {
       cpAddSnapshotRecipes(recipes);
       _cp.catalog = catalog; _cp.recipes = recipes; _cp.catalogAt = Date.now(); _cp.ver++;
       // keep the ops menu in step (cost + VAT-inclusive price) for items the till sells
-      const bySku = {}, byName = {};
-      Object.values(catalog).filter(c => c.sold).forEach(c => { if (c.sku) bySku[c.sku] = c; byName[_cpNrm(c.name)] = c; });
-      for (const m of (state.menu || [])) {
-        const c = (m.pos_sku && bySku[m.pos_sku]) || byName[_cpNrm(m.name)];
-        if (!c) continue;
-        const cost = Math.round(c.cost * 100) / 100, price = Math.round(c.price * VAT_RATE);
-        if (cost > 0 && m.cost_egp !== cost) { m.cost_egp = cost; m.last_edited_at = new Date().toISOString(); changed = true; }
-        if (price > 0 && m.price_egp !== price) { m.price_egp = price; m.last_edited_at = new Date().toISOString(); changed = true; }
-      }
+      if (cpSyncMenuFromCatalog()) changed = true;
     } catch (e) { /* no access / offline: keep the ops menu as it is */
       if (!_cp.recipes) { _cp.recipes = cpAddSnapshotRecipes({}); _cp.ver++; }   // recipes still work from the built-in snapshot
     }
@@ -8143,28 +8175,43 @@ routes.supplier_list = function (u) {
 function invPriceMap() {
   const out = {};
   const pu = state.purchase_units || {};
-  // latest real (non-test) purchase line per item, in case purchase_units has no entry yet
-  const latest = {};
+  // every real (non-test) inventory purchase line per item, newest first
+  const hist = {};
   for (const p of (state.purchases || [])) {
     if (p.is_test) continue;
     for (const l of (p.lines || [])) {
-      if (l.kind !== "inventory" || !l.inv_item_id || !(Number(l.unit_price) > 0)) continue;
-      const k = (p.at || p.date || "");
-      if (!latest[l.inv_item_id] || k > latest[l.inv_item_id].k) latest[l.inv_item_id] = { k, p, l };
+      const price = Number(l.unit_price) || 0, pack = Number(l.pack_size_canonical) || 0;
+      if (l.kind !== "inventory" || !l.inv_item_id || !(price > 0) || !(pack > 0)) continue;
+      (hist[l.inv_item_id] = hist[l.inv_item_id] || []).push({ at: p.at || p.date || "", date: p.date || (p.at || "").slice(0, 10),
+        supplier: (p.supplier || "").trim(), label: l.purchase_unit || "", price, pack, cost: price / pack });
     }
   }
   for (const it of (state.items || [])) {
     const e = pu[it.id] || {};
-    const lt = latest[it.id];
-    let price = Number(e.last_unit_price) || 0, label = e.unit_label || "", pack = Number(e.pack_size_canonical) || 0;
-    let at = e.updated_at || "", supplier = e.supplier || "", date = (e.updated_at || "").slice(0, 10);
-    if (lt && (!price || lt.k > at)) {
-      price = Number(lt.l.unit_price) || 0; label = lt.l.purchase_unit || label; pack = Number(lt.l.pack_size_canonical) || pack;
-      at = lt.k; supplier = lt.p.supplier || supplier; date = lt.p.date || (lt.k || "").slice(0, 10);
+    const h = (hist[it.id] || []).sort((a, b) => b.at.localeCompare(a.at));
+    const lt = h[0];
+    const prevH = lt ? h.find(x => Math.abs(x.cost - lt.cost) > 1e-9) : null;
+    let price = 0, label = "", pack = 0, supplier = "", date = "", at = "", manual = false, prev = null;
+    const manualNewer = e.manual && Number(e.last_unit_price) > 0 && (!lt || (e.updated_at || "") > lt.at);
+    if (manualNewer) {
+      price = Number(e.last_unit_price); pack = Number(e.pack_size_canonical) || (lt ? lt.pack : 0); label = e.unit_label || "";
+      supplier = e.supplier || ""; at = e.updated_at || ""; date = at.slice(0, 10); manual = true;
+      const oldP = Number(e.prev_price) || 0;
+      if (oldP > 0 && pack > 0) prev = { cost: oldP / pack, price: oldP, date: (e.prev_at || "").slice(0, 10) };
+    } else if (lt) {
+      price = lt.price; pack = lt.pack; label = lt.label; supplier = lt.supplier; at = lt.at; date = lt.date;
+      if (prevH) prev = { cost: prevH.cost, price: prevH.price, date: prevH.date };
     }
     if (!supplier) supplier = ((state.suppliers || {})[it.id] || []).map(x => x.name).filter(Boolean)[0] || "";
-    out[it.id] = { price, label, pack, supplier, date, at, manual: !!e.manual,
-      prev: Number(e.prev_price) || 0, prevAt: (e.prev_at || "").slice(0, 10) };
+    const cost = price > 0 && pack > 0 ? price / pack : 0;
+    // A big jump against the previous price is held back from COGS until the owner/accountant confirms it (✓),
+    // because it is often a wrong pack size or a mixed receipt rather than a real price change.
+    const jump = cost && prev && prev.cost ? cost / prev.cost - 1 : 0;
+    // ...and so is a price far from what Counterpoint has for the same item (when we can see it).
+    const ref = (cost && it.cp_sku && _cp.catalog && _cp.catalog[it.cp_sku]) ? Number(_cp.catalog[it.cp_sku].cost) || 0 : 0;
+    const cpOff = ref > 0 ? cost / ref - 1 : 0;
+    const flagged = !manual && (Math.abs(jump) > 0.4 || Math.abs(cpOff) > 0.4) && e.confirmed_at !== at;
+    out[it.id] = { price, label, pack, supplier, date, at, manual, cost, prev, jump, cpRef: ref, cpOff, flagged, use: flagged ? 0 : cost };
   }
   return out;
 }
@@ -8222,7 +8269,8 @@ routes.inventory_prices = function (u) {
           manual: true, by: s.by, by_name: s.by_name,
           updated_at: s.at,
         };
-        saveState(); toast(T("Price saved","تم حفظ السعر")); render();
+        cpSyncMenuFromCatalog();
+        saveState(); toast(T("Price saved — COGS updated","تم حفظ السعر — حُدّثت التكلفة")); render();
       }
     });
   }
@@ -8236,8 +8284,9 @@ routes.inventory_prices = function (u) {
         return it.name.toLowerCase().includes(q) || (i.supplier || "").toLowerCase().includes(q) || catLabel(it.category).toLowerCase().includes(q); })
       .sort((a, b) => catLabel(a.category).localeCompare(catLabel(b.category)) || a.name.localeCompare(b.name));
     const noPrice = items.filter(it => !(prices[it.id] || {}).price).length;
-    summary.textContent = T(`${items.length} items · ${noPrice} with no price yet (they fill in when first purchased)`,
-                            `${items.length} صنف · ${noPrice} بدون سعر بعد (يُملأ عند أول مشترى)`);
+    const held = items.filter(it => (prices[it.id] || {}).flagged).length;
+    summary.textContent = T(`${items.length} items · ${noPrice} with no price yet · ${held} held (price off by >40%, confirm ✓ to use in COGS)`,
+                            `${items.length} صنف · ${noPrice} بدون سعر · ${held} معلّق (قفز السعر >40٪، أكّد ✓ لاستخدامه في التكلفة)`);
     if (!items.length) { list.appendChild(el("div", { class: "muted", style: { padding: "24px", textAlign: "center" } }, T("No items found.","لا أصناف."))); return; }
     let lastCat = null;
     for (const it of items) {
@@ -8254,10 +8303,16 @@ routes.inventory_prices = function (u) {
       const right = [];
       if (i.price > 0) {
         right.push(el("div", { style: { fontWeight: "700", fontSize: "16px" } }, `${(Math.round(i.price * 100) / 100).toLocaleString("en-EG")} LE`));
-        if (i.prev && i.prev !== i.price) {
-          const up = i.price > i.prev;
+        if (i.prev && Math.abs(i.cost - i.prev.cost) > 1e-9) {
+          const up = i.cost > i.prev.cost, pct = Math.round((i.cost / i.prev.cost - 1) * 100);
           right.push(el("div", { class: "small", style: { color: up ? "var(--bad)" : "var(--ok)" } },
-            `${up ? "▲" : "▼"} ${T("was","كان")} ${i.prev}${i.prevAt ? " · " + i.prevAt : ""}`));
+            `${up ? "▲" : "▼"} ${pct > 0 ? "+" : ""}${pct}% · ${T("was","كان")} ${Math.round(i.prev.price * 100) / 100}${i.prev.date ? " · " + i.prev.date : ""}`));
+        }
+        if (i.flagged) {
+          const why = Math.abs(i.jump) > 0.4 ? T("jumped vs last purchase","قفز عن آخر مشترى") : T(`${Math.round(i.cpOff * 100)}% vs Counterpoint`,`${Math.round(i.cpOff * 100)}٪ مقابل كاونتر بوينت`);
+          right.push(el("div", { class: "small", style: { color: "var(--warn, #b45309)", fontWeight: "600" } }, T("⚠ held, not in COGS: ","⚠ معلّق، خارج التكلفة: ") + why));
+        } else if (i.use > 0 && i.cpRef > 0) {
+          right.push(el("div", { class: "small muted" }, T("✓ in COGS","✓ في التكلفة")));
         }
       } else {
         right.push(el("span", { class: "pill muted" }, "—"));
@@ -8266,6 +8321,18 @@ routes.inventory_prices = function (u) {
         el("div", { class: "grow" }, [ el("div", { class: "title" }, it.name), el("div", { class: "sub" }, sub.join(" · ")) ]),
         el("div", { style: { textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" } }, right),
       ];
+      if (canEdit && i.flagged) {
+        const ok = el("button", { class: "btn secondary", style: { width: "auto", flex: "0 0 auto", minHeight: "0", padding: "4px 10px", fontSize: "12px" } }, "✓ " + T("Confirm","تأكيد"));
+        ok.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const s0 = stamp();
+          state.purchase_units = state.purchase_units || {};
+          state.purchase_units[it.id] = { ...(state.purchase_units[it.id] || {}), confirmed_at: i.at, confirmed_by: s0.by_name, updated_at: (state.purchase_units[it.id] || {}).updated_at || s0.at };
+          const ch = cpSyncMenuFromCatalog();
+          saveState(); toast(T("Confirmed — now used in COGS","تم التأكيد — يُستخدم الآن في التكلفة")); render();
+        });
+        parts.push(ok);
+      }
       if (canEdit) {
         const b = el("button", { class: "btn ghost", style: { width: "auto", flex: "0 0 auto", minHeight: "0", padding: "4px 10px", fontSize: "12px" } }, "✏️");
         b.addEventListener("click", (e) => { e.stopPropagation(); editPrice(it, i); });
@@ -8901,6 +8968,7 @@ routes.purchase_new = function (u) {
     } else {
       pushPurchaseFor(branch, outLines, total, null);
     }
+    cpSyncMenuFromCatalog();   // new purchase prices flow into drink costs (COGS)
     saveState();
     cpPushPurchases();   // straight to Counterpoint stock (non-blocking; retries if offline)
     // Tell the user what stock each inventory line just added to (expected = last count + purchases since).
@@ -23716,12 +23784,16 @@ routes.app_guide = function (u) {
       en_steps: [
         "Tap <strong>Inventory Prices</strong> (owner/accountant) to see every inventory item with what it costs to buy: price per pack (bottle, carton…), cost per gram/ml, supplier and the date of the last purchase.",
         "Prices <strong>update automatically</strong> from the Purchase Log: when a new purchase has a different price (for example Dina Farms milk), the new price replaces the old one and a ▲/▼ shows what it was before.",
+        "<strong>COGS follows these prices.</strong> Each drink's cost = Counterpoint's cost adjusted by the difference between the price we actually pay and Counterpoint's ingredient cost. It recalculates when a purchase is saved, a price is edited, or the owner/accountant/head barista opens the app.",
+        "<strong>⚠ Held prices:</strong> if a new price jumps more than 40% against the last purchase, or is more than 40% away from Counterpoint's cost, it is held out of COGS (it is often a wrong pack size or a mixed receipt). Check the purchase, then tap <strong>✓ Confirm</strong> to use it, or ✏️ to correct it.",
         "Items never purchased show “—” until their first purchase. Use ✏️ to correct a price or supplier by hand.",
         "Test Mode purchases never change these prices.",
       ],
       ar_steps: [
         "اضغط <strong>أسعار المخزون</strong> (المالك/المحاسب) لعرض كل صنف مع سعر شرائه: سعر العبوة (زجاجة، كرتونة…)، التكلفة لكل جرام/مل، المورد وتاريخ آخر مشترى.",
         "تتحدث الأسعار <strong>تلقائياً</strong> من سجل المشتريات: عند تسجيل مشترى بسعر مختلف (مثل لبن مزارع دينا) يحل السعر الجديد محل القديم وتظهر ▲/▼ بالسعر السابق.",
+        "<strong>تكلفة المنتجات (COGS) تتبع هذه الأسعار.</strong> تكلفة كل مشروب = تكلفة كاونتر بوينت معدّلة بفرق السعر الذي ندفعه فعلياً عن تكلفة المكوّن في كاونتر بوينت. تُعاد عند حفظ مشترى أو تعديل سعر أو عند فتح المالك/المحاسب/رئيس البريستا للتطبيق.",
+        "<strong>⚠ الأسعار المعلّقة:</strong> إذا قفز السعر الجديد أكثر من 40٪ عن آخر مشترى، أو ابتعد أكثر من 40٪ عن تكلفة كاونتر بوينت، يُستبعد من التكلفة (غالباً حجم عبوة خاطئ أو فاتورة مختلطة). راجع المشترى ثم اضغط <strong>✓ تأكيد</strong> لاستخدامه أو ✏️ لتصحيحه.",
         "الأصناف التي لم تُشترَ بعد تظهر “—” حتى أول مشترى. استخدم ✏️ لتصحيح السعر أو المورد يدوياً.",
         "مشتريات وضع الاختبار لا تغيّر هذه الأسعار.",
       ],
