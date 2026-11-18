@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-075 -->
+<!-- CB_BUILD:20261118-136 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-075";
+  var BUILD = "20261118-136";
   (function() {
     function checkFresh() {
       try {
@@ -6066,6 +6066,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("🏦", T("Bank Ledger","دفتر البنك"), T("Transfers & card payments","التحويلات ومدفوعات البطاقة"), () => go("bank")));
     tiles.appendChild(tile("📉", T("Inventory Status","حالة المخزون"), T("Low-stock alerts & restock","تنبيهات نقص المخزون وإعادة الطلب"), () => go("reorder_action_list")));
     tiles.appendChild(tile("🧠", T("Inventory Engine","محرك المخزون"), T("POS-driven intelligence · predictive reorder","ذكاء مدفوع بنقاط البيع · إعادة طلب تنبؤية"), () => go("inventory_engine")));
+    if (canAccess("inventory_prices", u)) tiles.appendChild(tile("💲", T("Inventory Prices","أسعار المخزون"), T("What every item costs · auto-updates from purchases","سعر كل صنف · يتحدث من المشتريات"), () => go("inventory_prices")));
     tiles.appendChild(tile("🏪", T("Supplier List","قائمة الموردين"), T("Manage suppliers per item","إدارة الموردين لكل صنف"), () => go("supplier_list")));
     tiles.appendChild(tile("🏆", T("Leaderboard","لوحة الصدارة"), T("Monthly staff rankings · #1 earns a bonus","ترتيب الفريق الشهري · الأول يحصل على مكافأة"), () => go("leaderboard")));
     tiles.appendChild(_notifTile());
@@ -6129,6 +6130,7 @@ routes.home = function (u) {
     tiles.appendChild(tile("📁", "Assets", "Files & documents", () => go("assets_list")));
     tiles.appendChild(tile("📉", "Inventory Status", "Low-stock alerts & restock", () => go("reorder_action_list")));
     tiles.appendChild(tile("🧠", "Inventory Engine", "POS-driven intelligence · predictive reorder", () => go("inventory_engine")));
+    if (canAccess("inventory_prices", u)) tiles.appendChild(tile("💲", "Inventory Prices", "What every item costs · auto-updates from purchases", () => go("inventory_prices")));
     tiles.appendChild(tile("🏪", "Supplier List", "Manage suppliers per item", () => go("supplier_list")));
     tiles.appendChild(tile("🍽️", "Menu Items", "Costs + prices", () => go("menu")));
     tiles.appendChild(tile("⚙️", "Settings", "Sync, export, backup", () => go("settings")));
@@ -8132,6 +8134,153 @@ routes.supplier_list = function (u) {
 // ==============================================================
 // INVENTORY ITEMS — master item list management
 // ==============================================================
+// INVENTORY PRICES — every inventory item with what it costs to buy.
+// Prices come from the purchase log: each purchase writes state.purchase_units[item]
+// (price per pack, pack size, supplier, date). When a new purchase has a different
+// price, the old one is kept as prev_price so the change shows here as ▲/▼.
+// Owner/accountant can also correct a price by hand (✏️).
+// ==============================================================
+function invPriceMap() {
+  const out = {};
+  const pu = state.purchase_units || {};
+  // latest real (non-test) purchase line per item, in case purchase_units has no entry yet
+  const latest = {};
+  for (const p of (state.purchases || [])) {
+    if (p.is_test) continue;
+    for (const l of (p.lines || [])) {
+      if (l.kind !== "inventory" || !l.inv_item_id || !(Number(l.unit_price) > 0)) continue;
+      const k = (p.at || p.date || "");
+      if (!latest[l.inv_item_id] || k > latest[l.inv_item_id].k) latest[l.inv_item_id] = { k, p, l };
+    }
+  }
+  for (const it of (state.items || [])) {
+    const e = pu[it.id] || {};
+    const lt = latest[it.id];
+    let price = Number(e.last_unit_price) || 0, label = e.unit_label || "", pack = Number(e.pack_size_canonical) || 0;
+    let at = e.updated_at || "", supplier = e.supplier || "", date = (e.updated_at || "").slice(0, 10);
+    if (lt && (!price || lt.k > at)) {
+      price = Number(lt.l.unit_price) || 0; label = lt.l.purchase_unit || label; pack = Number(lt.l.pack_size_canonical) || pack;
+      at = lt.k; supplier = lt.p.supplier || supplier; date = lt.p.date || (lt.k || "").slice(0, 10);
+    }
+    if (!supplier) supplier = ((state.suppliers || {})[it.id] || []).map(x => x.name).filter(Boolean)[0] || "";
+    out[it.id] = { price, label, pack, supplier, date, at, manual: !!e.manual,
+      prev: Number(e.prev_price) || 0, prevAt: (e.prev_at || "").slice(0, 10) };
+  }
+  return out;
+}
+
+routes.inventory_prices = function (u) {
+  const canEdit = u.role === "owner" || u.role === "accountant";
+  const catLabel = (v) => ({ "coffee-beans":"Coffee Beans", milk:"Milk", tea:"Tea", powder:"Powder", spices:"Spices", sugar:"Sugar",
+    puree:"Puree", syrup:"Syrup", sauce:"Sauce", "dairy-extras":"Dairy Extras", "halo-snacks":"Halo Snacks", snacks:"Snacks",
+    beverages:"Beverages", packaging:"Packaging", maintenance:"Maintenance" })[v] || v || "Other";
+
+  const wrap = el("div", {});
+  wrap.appendChild(header(T("Inventory Prices","أسعار المخزون"),
+    T("What each inventory item costs to buy. Updates itself from the Purchase Log whenever a purchase has a new price.",
+      "سعر شراء كل صنف في المخزون. يتحدث تلقائياً من سجل المشتريات عند تسجيل سعر جديد.")));
+
+  const search = el("input", { type: "search", placeholder: T("Search items or suppliers…","ابحث عن صنف أو مورد…"), style: { marginBottom: "12px" } });
+  wrap.appendChild(search);
+  const summary = el("div", { class: "muted small", style: { marginBottom: "10px" } });
+  wrap.appendChild(summary);
+  const list = el("div", {});
+  wrap.appendChild(list);
+
+  const perBase = (price, pack, unit) => {
+    if (!(price > 0) || !(pack > 0)) return "";
+    const c = price / pack;
+    if (unit === "g")  return `${c.toFixed(3)} LE/g · ${(c * 1000).toFixed(2)} LE/kg`;
+    if (unit === "ml") return `${c.toFixed(3)} LE/ml · ${(c * 1000).toFixed(2)} LE/L`;
+    return `${c.toFixed(2)} LE/${unit || "unit"}`;
+  };
+
+  function editPrice(it, info) {
+    openPrompt({
+      title: T(`Price — ${it.name}`, `السعر — ${it.name}`),
+      fields: [
+        { key: "unit_label", label: T("Bought as (bottle, pack, carton…)","يُشترى كـ (زجاجة، عبوة، كرتونة…)"), type: "text", value: info.label || "" },
+        { key: "pack_size",  label: T(`Pack size (${it.unit || "units"} per pack)`,`حجم العبوة (${it.unit || "وحدة"} لكل عبوة)`), type: "number", value: info.pack || "" },
+        { key: "unit_price", label: T("Price per pack (LE)","سعر العبوة (ج.م)"), type: "number", value: info.price || "" },
+        { key: "supplier",   label: T("Supplier","المورد"), type: "text", value: info.supplier || "" },
+      ],
+      onSubmit: (v) => {
+        const np = Number(v.unit_price) || 0, pk = Number(v.pack_size) || 0;
+        if (!(np > 0)) return toast(T("Enter a price","أدخل السعر"), "error");
+        const s = stamp();
+        state.purchase_units = state.purchase_units || {};
+        const old = state.purchase_units[it.id] || {};
+        const oldPrice = Number(old.last_unit_price) || info.price || 0;
+        state.purchase_units[it.id] = {
+          ...old,
+          unit_label: (v.unit_label || "").trim(),
+          pack_size_canonical: pk || Number(old.pack_size_canonical) || 0,
+          last_unit_price: np,
+          supplier: (v.supplier || "").trim(),
+          prev_price: oldPrice && oldPrice !== np ? oldPrice : (old.prev_price || 0),
+          prev_at: oldPrice && oldPrice !== np ? (old.updated_at || info.at || "") : (old.prev_at || ""),
+          manual: true, by: s.by, by_name: s.by_name,
+          updated_at: s.at,
+        };
+        saveState(); toast(T("Price saved","تم حفظ السعر")); render();
+      }
+    });
+  }
+
+  function draw() {
+    list.innerHTML = "";
+    const q = search.value.trim().toLowerCase();
+    const prices = invPriceMap();
+    const items = (state.items || []).filter(it => it.active !== false)
+      .filter(it => { if (!q) return true; const i = prices[it.id] || {};
+        return it.name.toLowerCase().includes(q) || (i.supplier || "").toLowerCase().includes(q) || catLabel(it.category).toLowerCase().includes(q); })
+      .sort((a, b) => catLabel(a.category).localeCompare(catLabel(b.category)) || a.name.localeCompare(b.name));
+    const noPrice = items.filter(it => !(prices[it.id] || {}).price).length;
+    summary.textContent = T(`${items.length} items · ${noPrice} with no price yet (they fill in when first purchased)`,
+                            `${items.length} صنف · ${noPrice} بدون سعر بعد (يُملأ عند أول مشترى)`);
+    if (!items.length) { list.appendChild(el("div", { class: "muted", style: { padding: "24px", textAlign: "center" } }, T("No items found.","لا أصناف."))); return; }
+    let lastCat = null;
+    for (const it of items) {
+      const cat = catLabel(it.category);
+      if (cat !== lastCat) { list.appendChild(el("h2", { style: { marginTop: "14px" } }, cat)); lastCat = cat; }
+      const i = prices[it.id] || {};
+      const sub = [];
+      if (i.price > 0) {
+        sub.push(`${i.label ? T("per ","لكل ") + i.label : T("per pack","لكل عبوة")}${i.pack ? ` (${i.pack} ${it.unit})` : ""}`);
+        const pb = perBase(i.price, i.pack, it.unit); if (pb) sub.push(pb);
+      }
+      if (i.supplier) sub.push("🏪 " + i.supplier);
+      if (i.date) sub.push((i.manual ? "✏️ " : "🧾 ") + i.date);
+      const right = [];
+      if (i.price > 0) {
+        right.push(el("div", { style: { fontWeight: "700", fontSize: "16px" } }, `${(Math.round(i.price * 100) / 100).toLocaleString("en-EG")} LE`));
+        if (i.prev && i.prev !== i.price) {
+          const up = i.price > i.prev;
+          right.push(el("div", { class: "small", style: { color: up ? "var(--bad)" : "var(--ok)" } },
+            `${up ? "▲" : "▼"} ${T("was","كان")} ${i.prev}${i.prevAt ? " · " + i.prevAt : ""}`));
+        }
+      } else {
+        right.push(el("span", { class: "pill muted" }, "—"));
+      }
+      const parts = [
+        el("div", { class: "grow" }, [ el("div", { class: "title" }, it.name), el("div", { class: "sub" }, sub.join(" · ")) ]),
+        el("div", { style: { textAlign: "right" } }, right),
+      ];
+      if (canEdit) {
+        const b = el("button", { class: "btn ghost", style: { padding: "4px 10px", fontSize: "12px", marginInlineStart: "8px" } }, "✏️");
+        b.addEventListener("click", (e) => { e.stopPropagation(); editPrice(it, i); });
+        parts.push(b);
+      }
+      list.appendChild(el("div", { class: "row", style: { alignItems: "center" } }, parts));
+    }
+  }
+  search.addEventListener("input", draw);
+  draw();
+  wrap.appendChild(btnBack());
+  return wrap;
+};
+
+// ==============================================================
 routes.items_list = function (u) {
   const canEdit = u.role === "owner" || u.role === "accountant";
 
@@ -8644,12 +8793,22 @@ routes.purchase_new = function (u) {
         const canonicalQty = lineCanonicalQty(l);
         const cost = lineTotal(l);
         // remember conversion for next time
-        state.purchase_units[l.inv_item_id] = {
-          unit_label: l.purchase_unit || "",
-          pack_size_canonical: Number(l.pack_size) || 0,
-          last_unit_price: Number(l.unit_price) || 0,
-          updated_at: s.at,
-        };
+        if (!isTestMode()) {
+          const _old = state.purchase_units[l.inv_item_id] || {};
+          const _np = Number(l.unit_price) || 0, _op = Number(_old.last_unit_price) || 0;
+          const _chg = _op > 0 && _np > 0 && _np !== _op;
+          state.purchase_units[l.inv_item_id] = {
+            unit_label: l.purchase_unit || "",
+            pack_size_canonical: Number(l.pack_size) || 0,
+            last_unit_price: _np,
+            supplier: supplier || _old.supplier || "",
+            prev_price: _chg ? _op : (_old.prev_price || 0),
+            prev_at: _chg ? (_old.updated_at || "") : (_old.prev_at || ""),
+            updated_at: s.at,
+          };
+          // Inventory Prices page picks this up automatically; tell the person it moved.
+          if (_chg) toast(`💲 ${item ? item.name : ""}: ${_op} → ${_np} LE (${T("Inventory Prices updated","تم تحديث أسعار المخزون")})`);
+        }
         return {
           kind: "inventory",
           inv_item_id: l.inv_item_id,
@@ -16720,7 +16879,7 @@ const MANAGEABLE_ROUTES = [
   "shift_close_new","shift_close_list",
   "cleaning_log_new","cleaning_log_list",
   "salaries","penalties","maadi_deposits",
-  "overheads","bank","dashboard","menu","items_list",
+  "overheads","bank","dashboard","menu","items_list","inventory_prices",
   "reorder_action_list","supplier_list","inventory_engine",
   "sales_import","discount_report","users","settings",
   "leave_new","leave_list",
@@ -23551,6 +23710,23 @@ routes.app_guide = function (u) {
       ],
     },
     {
+      icon: "💲",
+      en_title: "Inventory Prices",
+      ar_title: "أسعار المخزون",
+      en_steps: [
+        "Tap <strong>Inventory Prices</strong> (owner/accountant) to see every inventory item with what it costs to buy: price per pack (bottle, carton…), cost per gram/ml, supplier and the date of the last purchase.",
+        "Prices <strong>update automatically</strong> from the Purchase Log: when a new purchase has a different price (for example Dina Farms milk), the new price replaces the old one and a ▲/▼ shows what it was before.",
+        "Items never purchased show “—” until their first purchase. Use ✏️ to correct a price or supplier by hand.",
+        "Test Mode purchases never change these prices.",
+      ],
+      ar_steps: [
+        "اضغط <strong>أسعار المخزون</strong> (المالك/المحاسب) لعرض كل صنف مع سعر شرائه: سعر العبوة (زجاجة، كرتونة…)، التكلفة لكل جرام/مل، المورد وتاريخ آخر مشترى.",
+        "تتحدث الأسعار <strong>تلقائياً</strong> من سجل المشتريات: عند تسجيل مشترى بسعر مختلف (مثل لبن مزارع دينا) يحل السعر الجديد محل القديم وتظهر ▲/▼ بالسعر السابق.",
+        "الأصناف التي لم تُشترَ بعد تظهر “—” حتى أول مشترى. استخدم ✏️ لتصحيح السعر أو المورد يدوياً.",
+        "مشتريات وضع الاختبار لا تغيّر هذه الأسعار.",
+      ],
+    },
+    {
       icon: "💳",
       en_title: "My HR",
       ar_title: "الموارد البشرية الخاصة بي",
@@ -24166,7 +24342,7 @@ routes.app_guide = function (u) {
     "My HR": "me", "My Job Description": "me", "KPI Scorecard": "me",
     "Monthly Training Quiz": "me", "My ID": "me", "Notifications & Alerts": "me",
     "Suggestions & Complaints": "me", "Leaderboard": "me",
-    "Inventory Items & Suppliers": "inventory", "Inventory Count (Stock Take)": "inventory",
+    "Inventory Items & Suppliers": "inventory", "Inventory Prices": "inventory", "Inventory Count (Stock Take)": "inventory",
     "Record Purchase": "inventory", "Inventory Intelligence Engine": "inventory",
     "Petty Cash": "money", "Bank Ledger": "money", "Monthly Overheads": "money",
     "Maadi Deposits": "money", "Upload Sales (POS Import)": "money", "Menu & Pricing": "money",
