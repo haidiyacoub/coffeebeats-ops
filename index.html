@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261118-260 -->
+<!-- CB_BUILD:20261119-995 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261118-260";
+  var BUILD = "20261119-995";
   (function() {
     function checkFresh() {
       try {
@@ -8676,6 +8676,14 @@ routes.purchase_new = function (u) {
   // When picking an item, prefill unit + pack size from last saved conversion
   function applyLastConversion(ln) {
     if (!ln.inv_item_id) return;
+    // Inventory Prices is the source of truth: start from its unit label, pack size and price (all editable on the line).
+    let ip = null;
+    try { ip = invPriceMap()[ln.inv_item_id]; } catch (e) {}
+    if (ip && ip.pack > 0) {
+      if (!ln.purchase_unit) ln.purchase_unit = ip.label || "";
+      if (!ln.pack_size)     ln.pack_size     = Number(ip.pack) || 0;
+      if (!ln.unit_price && ip.price > 0) ln.unit_price = Number(ip.price) || 0;
+    }
     const saved = state.purchase_units[ln.inv_item_id];
     if (saved) {
       if (!ln.purchase_unit) ln.purchase_unit = saved.unit_label || "";
@@ -8816,9 +8824,8 @@ routes.purchase_new = function (u) {
         if (it) {
           card.appendChild(el("div", { class: "banner-arch", style: { marginTop: "8px" } },
             T(`You buy this by e.g. bottle, pack, carton. Inventory counts in ${invUnit}. ` +
-            `Tell us how many ${invUnit} are in one purchase unit — we'll remember it next time.`,
-            `تشتري هذا بوحدة مثل زجاجة أو عبوة أو كرتونة. المخزون يُحسب بـ ${invUnit}. ` +
-            `أخبرنا كم ${invUnit} في وحدة الشراء الواحدة — سنتذكرها في المرة القادمة.`)));
+            `Unit and pack size start from Inventory Prices — change the pack size only if this delivery came in a different pack (the price is converted back to the Inventory Prices pack).`,
+            `الوحدة وحجم العبوة مأخوذان من أسعار المخزون — غيّر حجم العبوة فقط إذا وصلت هذه الدفعة بعبوة مختلفة (يُحوَّل السعر إلى عبوة أسعار المخزون).`)));
 
           card.appendChild(el("label", {}, T("Purchase unit (e.g. bottle, pack, carton)","وحدة الشراء (مثال: زجاجة، عبوة، كرتونة)")));
           const puInput = el("input", { type: "text", value: ln.purchase_unit || "", placeholder: T("bottle","زجاجة") });
