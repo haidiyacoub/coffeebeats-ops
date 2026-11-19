@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261119-392 -->
+<!-- CB_BUILD:20261119-397 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261119-392";
+  var BUILD = "20261119-397";
   (function() {
     function checkFresh() {
       try {
@@ -14983,6 +14983,10 @@ let _cpAutoAt = 0, _cpAutoBusy = null;
 async function cpAutoRefreshSales(force) {
   if (_cpAutoBusy) return _cpAutoBusy;
   if (!force && Date.now() - _cpAutoAt < 600000) return false;
+  // Never run before this session's first Firestore pull has landed: the pull replaces state.sales wholesale,
+  // so rows built earlier would be wiped (the dashboard flipped back to old numbers after "Synced").
+  if (typeof _pulledThisSession === "undefined" || !_pulledThisSession) return false;
+  if (typeof hasPending === "function" && hasPending()) return false;   // local edits still waiting to upload
   _cpAutoAt = Date.now();
   _cpAutoBusy = (async () => {
     let changed = false;
@@ -17872,7 +17876,11 @@ routes.dashboard = function (u, params) {
   // 2) pull this month's (and, early in a month, last month's) Counterpoint sales and refresh the stored rows,
   //    at most every 10 minutes; if anything changed the dashboard redraws itself.
   try { if (_cp.catalog && cpSyncMenuFromCatalog()) saveState(); } catch (e) { /* costs refresh on next load */ }
-  cpAutoRefreshSales().then(changed => { if (changed) { saveState(); if (route.name === "dashboard") render(); } });
+  (async () => {   // wait (up to ~60 s) for this session's first Firestore pull, then refresh
+    for (let i = 0; i < 30 && !_pulledThisSession; i++) await new Promise(r => setTimeout(r, 2000));
+    const changed = await cpAutoRefreshSales();
+    if (changed) { saveState(); if (route.name === "dashboard") render(); }
+  })();
 
   // Normalize each sales row's branch to canonical maadi/zawya for reliable filtering.
   // (An imported row tagged "Zawya - Cairo" or similar still matches even if the stored
