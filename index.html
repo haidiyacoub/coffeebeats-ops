@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261119-383 -->
+<!-- CB_BUILD:20261119-392 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261119-383";
+  var BUILD = "20261119-392";
   (function() {
     function checkFresh() {
       try {
@@ -18709,14 +18709,14 @@ routes.dashboard = function (u, params) {
 
     // ---------- top KPI cards ----------
     const topKpis = [
-      kpi("Revenue (Net)", money(revenue), sales.length + " rows"),
-      kpi("After 14% VAT", money(revenueAfterVat), `÷ 1.14 — ${money(revenue - revenueAfterVat)} VAT · margin base`),
+      kpi("POS sales (incl. VAT)", money(revenue), sales.length + " rows"),
+      kpi("Net revenue (before VAT)", money(revenueAfterVat), `÷ 1.14 — ${money(revenue - revenueAfterVat)} VAT · margin base`),
       ...(hasVenueShare(branch) ? [
         kpi("What CB gets from " + branchLabel(branch), money(revenueAfterShares), `after venue's 10% — ${money(revenueAfterVat - revenueAfterShares)} to ${branchLabel(branch)}`),
       ] : []),
       kpi("Discount", money(discount), (revenue + discount) ? ((discount/(revenue+discount))*100).toFixed(1)+"%" : "—"),
       kpi("Purchases", money(purchTotal), purch.length + " invoices"),
-      kpi("Waste events", String(waste.length), money(wasteCost) + " valued"),
+      kpi("Waste events", String(waste.length), money(wasteCost) + " valued" + (revenueAfterVat > 0 ? " · " + (wasteCost / revenueAfterVat * 100).toFixed(2) + "% of net revenue" : "")),
     ];
     if (branch === "zawya" && cbPct !== null) {
       topKpis.push(kpi("CB Sales %", cbPct.toFixed(1) + "%", `CB ${money(revenue)} of ${money(totalVenueNet)} venue total`));
@@ -18755,6 +18755,7 @@ routes.dashboard = function (u, params) {
       el("div", { class: "kv" }, [ el("div", { class: "k" }, "COGS from sales × item cost"), el("div", { class: "v" }, money(cogsSales)) ]),
       el("div", { class: "kv" }, [ el("div", { class: "k" }, "COGS theoretical (opening + purchases − closing)"), el("div", { class: "v" }, closing && opening && closing.id!==opening.id ? money(theoreticalCost) : "—") ]),
       el("div", { class: "kv" }, [ el("div", { class: "k" }, "Waste cost"), el("div", { class: "v" }, money(wasteCost)) ]),
+      el("div", { class: "kv" }, [ el("div", { class: "k" }, "Waste as % of net revenue (before VAT)"), el("div", { class: "v" }, revenueAfterVat > 0 ? (wasteCost / revenueAfterVat * 100).toFixed(2) + "%" : "—") ]),
       el("div", { class: "kv" }, [ el("div", { class: "k" }, "Theoretical − sales-derived (variance)"), el("div", { class: "v" }, (closing && opening && closing.id!==opening.id) ? money(theoreticalCost - cogsSales) : "—") ]),
       el("div", { class: "muted small", style: { marginTop: "6px" } }, snapshotNote || `Matched ${matched} units · unmatched ${unmatched} units · ${theoreticalCounted} inventory items valued.`),
     ]));
