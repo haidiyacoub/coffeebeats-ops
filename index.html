@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261119-379 -->
+<!-- CB_BUILD:20261119-383 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261119-379";
+  var BUILD = "20261119-383";
   (function() {
     function checkFresh() {
       try {
@@ -8263,8 +8263,8 @@ const INV_PRICE_REF = { asof: "2026-11-18T12:00:00Z", items: {
 // Items whose normal supplier is fixed. A purchase of the item from anyone else is an emergency/substitute buy:
 // it comes in a different pack (subPack), is NOT used to update Inventory Prices, and is flagged instead.
 const INV_DEFAULT_SUPPLIER = {
-  "ING-FULL-CREAM-MILK": { name: "Dina Farms", re: /dina|دينا|مزارع/i, subPack: 1000, examples: "Lamar, Labanita, Juhayna" },
-  "ING-SKIMMED-MILK": { name: "Dina Farms", re: /dina|دينا|مزارع/i, subPack: 1000, examples: "Lamar, Labanita, Juhayna" },
+  "ING-FULL-CREAM-MILK": { name: "Dina Farms", re: /dina|دينا|مزارع/i, subPack: 1000, examples: "Lamar, Labanita, Juhayna, Almarai" },
+  "ING-SKIMMED-MILK": { name: "Dina Farms", re: /dina|دينا|مزارع/i, subPack: 1000, examples: "Lamar, Labanita, Juhayna, Almarai" },
 };
 function invSubstituteInfo(itemId, supplierName) {
   const sup = String(supplierName || "").trim();
@@ -24082,7 +24082,7 @@ routes.app_guide = function (u) {
         "<strong>Unit and pack size are set here.</strong> The label (bottle, box…) and pack size you save with ✏️ are the source of truth: the Record Purchase form pre-fills them, and a purchase in a different pack is converted to this pack. A purchase only changes the <em>price</em>, and only when its price actually differs.",
         "<strong>⚠ Held prices:</strong> if a new price jumps more than 40% against the last purchase, or is more than 40% away from Counterpoint's cost, it is held out of COGS (it is often a wrong pack size or a mixed receipt). Check the purchase, then tap <strong>✓ Confirm</strong> to use it, or ✏️ to correct it.",
         "<strong>Every price change is flagged,</strong> even a fraction of a pound: the row gets a red/green edge and shows ▲/▼ with the % and the LE difference. Tap <strong>Price changes only</strong> to see just those items.",
-        "<strong>🥛 Emergency milk:</strong> our normal Full Cream supplier is Dina Farms (850 ml bottles). Milk from any other supplier (Lamar, Labanita, Juhayna: 1000 ml bottles) is an emergency purchase: the form sets the pack to 1000 ml, it does <em>not</em> change these prices, and it is listed in the orange box at the top of this page.",
+        "<strong>🥛 Emergency milk:</strong> our normal Full Cream supplier is Dina Farms (850 ml bottles). Milk from any other supplier (Lamar, Labanita, Juhayna, Almarai: 1000 ml bottles) is an emergency purchase: the form sets the pack to 1000 ml, it does <em>not</em> change these prices, and it is listed in the orange box at the top of this page.",
         "Items never purchased show “—” until their first purchase. Use ✏️ to correct a price or supplier by hand.",
         "Test Mode purchases never change these prices.",
         "<strong>🗑 Delete item (owner only):</strong> removes the item from everywhere in ops — price, supplier, reorder alert and recipe rows — on every device. Past purchases, waste and counts stay as history. Counterpoint can't be changed from the app, so archive the product there too.",
@@ -24091,7 +24091,7 @@ routes.app_guide = function (u) {
         "اضغط <strong>أسعار المخزون</strong> (المالك/المحاسب) لعرض كل صنف مع سعر شرائه: سعر العبوة (زجاجة، كرتونة…)، التكلفة لكل جرام/مل، المورد وتاريخ آخر مشترى.",
         "تتحدث الأسعار <strong>تلقائياً</strong> من سجل المشتريات: عند تسجيل مشترى بسعر مختلف (مثل لبن مزارع دينا) يحل السعر الجديد محل القديم وتظهر ▲/▼ بالسعر السابق.",
         "<strong>كل تغيّر في السعر يظهر</strong> حتى لو بنصف جنيه أو أقل: يظهر على الصف حد أحمر/أخضر مع ▲/▼ والنسبة والفرق بالجنيه. اضغط <strong>التغييرات فقط</strong> لعرضها وحدها.",
-        "<strong>🥛 حليب الطوارئ:</strong> مورّدنا المعتاد للحليب كامل الدسم هو مزارع دينا (زجاجة 850 مل). الحليب من أي مورد آخر (لمار، لبنيتا، جهينة: زجاجة 1000 مل) شراء طارئ: يضبط النموذج العبوة على 1000 مل، ولا يغيّر هذه الأسعار، ويظهر في المربع البرتقالي أعلى الصفحة.",
+        "<strong>🥛 حليب الطوارئ:</strong> مورّدنا المعتاد للحليب كامل الدسم هو مزارع دينا (زجاجة 850 مل). الحليب من أي مورد آخر (لمار، لبنيتا، جهينة، مراعي: زجاجة 1000 مل) شراء طارئ: يضبط النموذج العبوة على 1000 مل، ولا يغيّر هذه الأسعار، ويظهر في المربع البرتقالي أعلى الصفحة.",
         "<strong>📊 تكلفة المشروبات:</strong> الزر أسفل الصفحة يعرض تكلفة كل صنف ونسبة التكلفة، محسوبة مكوّناً بمكوّن من هذه الأسعار (التغليف غير محسوب مثل كاونتر بوينت). المشروبات التي لا تستطيع وصفة كاونتر بوينت إعادة بنائها بدقة تحتفظ بتكلفته معدّلة بفروق الأسعار.",
         "<strong>تكلفة المنتجات (COGS) تتبع هذه الأسعار.</strong> تكلفة كل مشروب = تكلفة كاونتر بوينت معدّلة بفرق السعر الذي ندفعه فعلياً عن تكلفة المكوّن في كاونتر بوينت. تُعاد عند حفظ مشترى أو تعديل سعر أو عند فتح المالك/المحاسب/رئيس البريستا للتطبيق.",
         "<strong>الوحدة وحجم العبوة تُحدَّد هنا.</strong> الاسم (زجاجة، علبة…) وحجم العبوة اللذان تحفظهما بـ ✏️ هما المرجع: نموذج تسجيل المشترى يملؤهما تلقائياً، وأي مشترى بعبوة مختلفة يُحوَّل إلى هذه العبوة. المشترى يغيّر <em>السعر</em> فقط، وفقط إذا اختلف السعر فعلاً.",
