@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261119-376 -->
+<!-- CB_BUILD:20261119-379 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261119-376";
+  var BUILD = "20261119-379";
   (function() {
     function checkFresh() {
       try {
@@ -8264,6 +8264,7 @@ const INV_PRICE_REF = { asof: "2026-11-18T12:00:00Z", items: {
 // it comes in a different pack (subPack), is NOT used to update Inventory Prices, and is flagged instead.
 const INV_DEFAULT_SUPPLIER = {
   "ING-FULL-CREAM-MILK": { name: "Dina Farms", re: /dina|دينا|مزارع/i, subPack: 1000, examples: "Lamar, Labanita, Juhayna" },
+  "ING-SKIMMED-MILK": { name: "Dina Farms", re: /dina|دينا|مزارع/i, subPack: 1000, examples: "Lamar, Labanita, Juhayna" },
 };
 function invSubstituteInfo(itemId, supplierName) {
   const sup = String(supplierName || "").trim();
@@ -14976,6 +14977,39 @@ async function cpShiftTotals(branch, date) {
   for (const k of ["cash", "cc", "instapay", "talabat_credit", "talabat_cash", "other", "discount", "refunded"]) t[k] = r2(t[k]);
   return t;
 }
+// Auto-pull Counterpoint sales for the dashboard (current month; previous month during the first 3 days).
+// Never overwrites months that were filled from CSV uploads. Throttled; returns true when stored rows changed.
+let _cpAutoAt = 0, _cpAutoBusy = null;
+async function cpAutoRefreshSales(force) {
+  if (_cpAutoBusy) return _cpAutoBusy;
+  if (!force && Date.now() - _cpAutoAt < 600000) return false;
+  _cpAutoAt = Date.now();
+  _cpAutoBusy = (async () => {
+    let changed = false;
+    try {
+      await loadCpCatalog();
+      const today = _cairoDate(new Date().toISOString());
+      const months = [today.slice(0, 7)];
+      if (Number(today.slice(8, 10)) <= 3) { const d = new Date(today + "T00:00:00Z"); d.setUTCDate(0); months.push(d.toISOString().slice(0, 7)); }
+      for (const mo of months) for (const br of ["maadi", "zawya", "ox"]) {
+        try {
+          const uploaded = (state.sales || []).filter(r => (r.date || "").startsWith(mo) && (r.branch || "").toLowerCase() === br && r.src !== "cp" && r.src !== "foodics").length;
+          if (uploaded) continue;
+          const built = await cpBuildMonth(br, mo);
+          if (!built.stats.used) continue;
+          const sig = (rows) => rows.length + "|" + Math.round(rows.reduce((a, x) => a + (Number(x.net) || Number(x.net_sales) || 0) + (Number(x.qty) || 0), 0) * 100);
+          const old = (state.sales || []).filter(r => (r.date || "").startsWith(mo) && (r.branch || "").toLowerCase() === br && r.src === "cp");
+          if (sig(built.sales) === sig(old.map(r => ({ net: r.net_sales, qty: r.qty })))
+              && (state.order_items || []).filter(i => i.branch === br && i.month === mo).length === built.orderItems.length) continue;
+          cpCommitMonth(built); changed = true;
+        } catch (e) { /* branch has no Counterpoint location / offline: skip */ }
+      }
+    } catch (e) { /* no access: keep what is stored */ }
+    _cpAutoBusy = null;
+    return changed;
+  })();
+  return _cpAutoBusy;
+}
 function cpCommitMonth(b) {
   const s = stamp(), batch = uuid(), { branch, month } = b;
   // sales (aggregated per item for the month, dated mid-month like the Product-report upload)
@@ -17832,6 +17866,13 @@ routes.dashboard = function (u, params) {
   wrap.appendChild(secPnl);
   wrap.appendChild(secCash);
   wrap.appendChild(secBranch);
+
+  // Keep the dashboard live: COGS from the Inventory Prices list (ops) × sales straight from Counterpoint.
+  // 1) re-cost every menu item from the current Inventory Prices before anything is computed;
+  // 2) pull this month's (and, early in a month, last month's) Counterpoint sales and refresh the stored rows,
+  //    at most every 10 minutes; if anything changed the dashboard redraws itself.
+  try { if (_cp.catalog && cpSyncMenuFromCatalog()) saveState(); } catch (e) { /* costs refresh on next load */ }
+  cpAutoRefreshSales().then(changed => { if (changed) { saveState(); if (route.name === "dashboard") render(); } });
 
   // Normalize each sales row's branch to canonical maadi/zawya for reliable filtering.
   // (An imported row tagged "Zawya - Cairo" or similar still matches even if the stored
