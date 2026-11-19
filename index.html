@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261119-397 -->
+<!-- CB_BUILD:20261119-410 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261119-397";
+  var BUILD = "20261119-410";
   (function() {
     function checkFresh() {
       try {
@@ -14869,6 +14869,8 @@ routes.bank = function (u) {
 // Counterpoint sale lines carry unitPrice ex-VAT and addons (priceDelta); the sale carries total, delivery,
 // discount name, refunds and cashierName. Everything is re-derived to the VAT-inclusive figures the uploads use.
 const _cairoDate = (iso) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+// First real Counterpoint trading day per branch. Earlier Counterpoint sales are tests; the days before are Foodics.
+const CP_GO_LIVE = { maadi: "2026-11-14" };
 async function cpBuildMonth(branch, month) {
   const re = { maadi: /maadi/i, zawya: /zawya/i, ox: /\box\b/i }[branch];
   const locSnap = await db.collection("counterpoint_locations").get();
@@ -14894,6 +14896,7 @@ async function cpBuildMonth(branch, month) {
     if (s.locationId != null && String(s.locationId) !== String(locId)) continue;
     const date = _cairoDate(s.createdAt);
     if (date.slice(0, 7) !== month) continue;
+    if (CP_GO_LIVE[branch] && date < CP_GO_LIVE[branch]) continue;   // 3–12 Nov Maadi test sales: those days are Foodics
     st.salesInMonth++;
     if (!Array.isArray(s.lines) || !s.lines.length) { st.noLines++; continue; }
     const total = num(s.total), refunded = num(s.refundedTotal);
