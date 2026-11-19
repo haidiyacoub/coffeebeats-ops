@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261119-995 -->
+<!-- CB_BUILD:20261119-376 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261119-995";
+  var BUILD = "20261119-376";
   (function() {
     function checkFresh() {
       try {
@@ -8260,6 +8260,31 @@ const INV_PRICE_REF = { asof: "2026-11-18T12:00:00Z", items: {
   "ING-BROWN-SUGAR-PACKETS": { s: "JET" }, "ING-WHITE-SUGAR-PACKETS": { s: "JET" }, "ING-STIRRER": { s: "JET" }, "ING-STRAW": { s: "JET" },
   "ING-NAPKINS": { s: "MATRIX/Jet" }, "ING-GLOVES": { s: "MATRIX/Jet" },
 } };
+// Items whose normal supplier is fixed. A purchase of the item from anyone else is an emergency/substitute buy:
+// it comes in a different pack (subPack), is NOT used to update Inventory Prices, and is flagged instead.
+const INV_DEFAULT_SUPPLIER = {
+  "ING-FULL-CREAM-MILK": { name: "Dina Farms", re: /dina|دينا|مزارع/i, subPack: 1000, examples: "Lamar, Labanita, Juhayna" },
+};
+function invSubstituteInfo(itemId, supplierName) {
+  const sup = String(supplierName || "").trim();
+  if (!sup) return null;
+  const it = (state.items || []).find(x => x.id === itemId);
+  const d = it && it.cp_sku ? INV_DEFAULT_SUPPLIER[it.cp_sku] : null;
+  return d && !d.re.test(sup) ? d : null;
+}
+function invSubstitutePurchases(days) {
+  const cutoff = days ? new Date(Date.now() - days * 864e5).toISOString().slice(0, 10) : "";
+  const out = [];
+  for (const p of (state.purchases || [])) {
+    if (p.is_test || (cutoff && (p.date || "") < cutoff)) continue;
+    for (const l of (p.lines || [])) {
+      if (l.kind !== "inventory" || !l.inv_item_id) continue;
+      const d = invSubstituteInfo(l.inv_item_id, p.supplier);
+      if (d) out.push({ p, l, d });
+    }
+  }
+  return out.sort((a, b) => (b.p.at || "").localeCompare(a.p.at || ""));
+}
 function invPriceMap() {
   const out = {};
   const pu = state.purchase_units || {};
@@ -8270,6 +8295,7 @@ function invPriceMap() {
     for (const l of (p.lines || [])) {
       const price = Number(l.unit_price) || 0, pack = Number(l.pack_size_canonical) || 0;
       if (l.kind !== "inventory" || !l.inv_item_id || !(price > 0) || !(pack > 0)) continue;
+      if (invSubstituteInfo(l.inv_item_id, p.supplier)) continue;   // emergency brand: flagged on the page, never sets the price
       (hist[l.inv_item_id] = hist[l.inv_item_id] || []).push({ at: p.at || p.date || "", date: p.date || (p.at || "").slice(0, 10),
         supplier: (p.supplier || "").trim(), label: l.purchase_unit || "", price, pack, cost: price / pack });
     }
@@ -8335,8 +8361,36 @@ routes.inventory_prices = function (u) {
 
   const search = el("input", { type: "search", placeholder: T("Search items or suppliers…","ابحث عن صنف أو مورد…"), style: { marginBottom: "12px" } });
   wrap.appendChild(search);
+  let onlyChanged = false;
+  const chgBtn = el("button", { class: "btn secondary", style: { width: "auto", minHeight: "0", padding: "4px 12px", fontSize: "13px", marginBottom: "10px" } }, "");
+  chgBtn.addEventListener("click", () => { onlyChanged = !onlyChanged; draw(); });
+  wrap.appendChild(chgBtn);
   const summary = el("div", { class: "muted small", style: { marginBottom: "10px" } });
   wrap.appendChild(summary);
+  // Emergency / substitute-brand purchases (e.g. Lamar / Labanita / Juhayna milk): never change the list, flagged here instead.
+  const subBox = el("div", {});
+  wrap.appendChild(subBox);
+  function drawSubs() {
+    subBox.innerHTML = "";
+    const subs = invSubstitutePurchases(60);
+    if (!subs.length) return;
+    const card = el("div", { class: "card", style: { borderColor: "var(--warn, #b45309)", marginBottom: "12px" } });
+    card.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } },
+      T(`⚠ Emergency / substitute purchases (last 60 days): ${subs.length}`, `⚠ مشتريات طارئة / بديلة (آخر 60 يوماً): ${subs.length}`)));
+    card.appendChild(el("div", { class: "muted small", style: { marginBottom: "6px" } },
+      T("Bought from a supplier other than the normal one. They do not change the prices below. Shown here so you can see what was bought, the bottle size and the real cost.",
+        "اشتريت من مورد غير المعتاد. لا تغيّر الأسعار أدناه. تظهر هنا لتعرف ما اشتُري وحجم العبوة والتكلفة الحقيقية.")));
+    for (const { p, l, d } of subs.slice(0, 15)) {
+      const real = d.subPack;
+      const per = Number(l.unit_price) > 0 ? Number(l.unit_price) / real : 0;
+      const stored = Number(l.pack_size_canonical) || 0;
+      const packNote = stored && stored !== real ? ` · ⚠ ${T("logged as", "سُجّلت")} ${stored} ${l.unit || ""} ${T("not", "بدل")} ${real} (${T("stock under-counted by", "نقص المخزون")} ${Math.round((real - stored) * (Number(l.purchase_qty) || 0))} ${l.unit || ""})` : "";
+      card.appendChild(el("div", { class: "small", style: { padding: "3px 0", borderTop: "1px solid var(--line, #0001)" } },
+        `${p.date} · ${p.branch} · ${l.item_name} · ${p.supplier} · ${l.purchase_qty} × ${Math.round(Number(l.unit_price) * 100) / 100} LE = ${Math.round((Number(l.line_total) || 0) * 100) / 100} LE` +
+        (per ? ` · ${per.toFixed(4)} LE/${l.unit || "unit"} (${T("at", "على")} ${real})` : "") + packNote + ` · ${p.by_name || ""}`));
+    }
+    subBox.appendChild(card);
+  }
   const list = el("div", { class: "list" });
   wrap.appendChild(list);
 
@@ -8391,8 +8445,12 @@ routes.inventory_prices = function (u) {
       .sort((a, b) => catLabel(a.category).localeCompare(catLabel(b.category)) || a.name.localeCompare(b.name));
     const noPrice = items.filter(it => !(prices[it.id] || {}).price).length;
     const held = items.filter(it => (prices[it.id] || {}).flagged).length;
-    summary.textContent = T(`${items.length} items · ${noPrice} with no price yet · ${held} held (price off by >40%, confirm ✓ to use in COGS)`,
-                            `${items.length} صنف · ${noPrice} بدون سعر · ${held} معلّق (قفز السعر >40٪، أكّد ✓ لاستخدامه في التكلفة)`);
+    const isChg = (i) => i && i.prev && i.cost > 0 && Math.abs(i.cost - i.prev.cost) > 1e-9;
+    const changed = items.filter(it => isChg(prices[it.id])).length;
+    summary.textContent = T(`${items.length} items · ${noPrice} with no price yet · ${changed} with a price change (any size) · ${held} held (price off by >40%, confirm ✓ to use in COGS)`,
+                            `${items.length} صنف · ${noPrice} بدون سعر · ${changed} تغيّر سعرها (أي مقدار) · ${held} معلّق (قفز السعر >40٪، أكّد ✓ لاستخدامه في التكلفة)`);
+    chgBtn.textContent = (onlyChanged ? "✓ " : "") + T(`Price changes only (${changed})`, `التغييرات فقط (${changed})`);
+    if (onlyChanged) { for (let k = items.length - 1; k >= 0; k--) if (!isChg(prices[items[k].id])) items.splice(k, 1); }
     if (!items.length) { list.appendChild(el("div", { class: "muted", style: { padding: "24px", textAlign: "center" } }, T("No items found.","لا أصناف."))); return; }
     let lastCat = null;
     for (const it of items) {
@@ -8406,13 +8464,18 @@ routes.inventory_prices = function (u) {
       }
       if (i.supplier) sub.push("🏪 " + i.supplier);
       if (i.date) sub.push((i.manual ? "✏️ " : i.fromRef ? "📒 " : "🧾 ") + (i.fromRef ? T("workbook ver3","ملف ver3") : i.date));
+      const _subN = invSubstitutePurchases(60).filter(x => x.l.inv_item_id === it.id).length;
+      if (_subN) sub.push(T(`⚠ ${_subN} emergency purchase(s) from another supplier, see top of page`, `⚠ ${_subN} شراء طارئ من مورد آخر، انظر أعلى الصفحة`));
       const right = [];
       if (i.price > 0) {
         right.push(el("div", { style: { fontWeight: "700", fontSize: "16px" } }, `${(Math.round(i.price * 100) / 100).toLocaleString("en-EG")} LE`));
         if (i.prev && Math.abs(i.cost - i.prev.cost) > 1e-9) {
-          const up = i.cost > i.prev.cost, pct = Math.round((i.cost / i.prev.cost - 1) * 100);
-          right.push(el("div", { class: "small", style: { color: up ? "var(--bad)" : "var(--ok)" } },
-            `${up ? "▲" : "▼"} ${pct > 0 ? "+" : ""}${pct}% · ${T("was","كان")} ${Math.round(i.prev.price * 100) / 100}${i.prev.date ? " · " + i.prev.date : ""}`));
+          const up = i.cost > i.prev.cost, rel = (i.cost / i.prev.cost - 1) * 100;
+          const pct = Math.abs(rel) < 10 ? Math.round(rel * 10) / 10 : Math.round(rel);
+          const fm = (n) => String(+Number(n).toFixed(3));
+          const dLE = (i.cost - i.prev.cost) * (i.pack || 1);
+          right.push(el("div", { class: "small", style: { color: up ? "var(--bad)" : "var(--ok)", fontWeight: "600" } },
+            `${up ? "▲" : "▼"} ${pct > 0 ? "+" : ""}${pct}% (${dLE > 0 ? "+" : ""}${fm(dLE)} LE) · ${T("was","كان")} ${fm(i.prev.price)}${i.prev.date ? " · " + i.prev.date : ""}`));
         }
         if (i.flagged) {
           const why = Math.abs(i.jump) > 0.4 ? T("jumped vs last purchase","قفز عن آخر مشترى") : T(`${Math.round(i.cpOff * 100)}% vs Counterpoint`,`${Math.round(i.cpOff * 100)}٪ مقابل كاونتر بوينت`);
@@ -8449,11 +8512,11 @@ routes.inventory_prices = function (u) {
         d.addEventListener("click", (e) => { e.stopPropagation(); deleteInventoryItem(it); });
         parts.push(d);
       }
-      list.appendChild(el("div", { class: "row", style: { alignItems: "center" } }, parts));
+      list.appendChild(el("div", { class: "row", style: { alignItems: "center", ...(isChg(i) ? { borderInlineStart: "4px solid " + (i.cost > i.prev.cost ? "var(--bad)" : "var(--ok)") } : {}) } }, parts));
     }
   }
   search.addEventListener("input", draw);
-  draw();
+  draw(); drawSubs();
 
   // ---- Drink COGS built from these prices ----
   const cogsBtn = el("button", { class: "btn secondary", style: { marginTop: "14px" } }, T("📊 Show drink COGS from these prices","📊 عرض تكلفة المشروبات من هذه الأسعار"));
@@ -8684,8 +8747,10 @@ routes.purchase_new = function (u) {
       if (!ln.pack_size)     ln.pack_size     = Number(ip.pack) || 0;
       if (!ln.unit_price && ip.price > 0) ln.unit_price = Number(ip.price) || 0;
     }
+    const sub = invSubstituteInfo(ln.inv_item_id, supplier);
+    if (sub && ip && Number(ln.pack_size) === Number(ip.pack)) { ln.pack_size = sub.subPack; ln._subPack = true; ln.unit_price = 0; }
     const saved = state.purchase_units[ln.inv_item_id];
-    if (saved) {
+    if (saved && !sub) {
       if (!ln.purchase_unit) ln.purchase_unit = saved.unit_label || "";
       if (!ln.pack_size)     ln.pack_size     = Number(saved.pack_size_canonical) || 0;
       if (!ln.unit_price && saved.last_unit_price) ln.unit_price = Number(saved.last_unit_price) || 0;
@@ -8746,7 +8811,19 @@ routes.purchase_new = function (u) {
 
     form.appendChild(el("label", {}, T("Supplier","المورد")));
     const sInput = el("input", { type:"text", value: supplier, placeholder: T("e.g. Beano's, Juhayna, Ahmad Tea","مثال: بينوز، جهينة، أحمد تي") });
-    sInput.addEventListener("input", () => supplier = sInput.value); form.appendChild(sInput);
+    sInput.addEventListener("input", () => supplier = sInput.value);
+    sInput.addEventListener("change", () => {   // supplier decides substitute vs default pack: re-apply to lines still on the default pack
+      let moved = false;
+      for (const l of lines) {
+        if (l.kind !== "inventory" || !l.inv_item_id) continue;
+        const sub = invSubstituteInfo(l.inv_item_id, supplier);
+        let ip = null; try { ip = invPriceMap()[l.inv_item_id]; } catch (e) {}
+        if (sub && ip && Number(l.pack_size) === Number(ip.pack)) { l.pack_size = sub.subPack; l._subPack = true; moved = true; }
+        else if (!sub && l._subPack && ip && Number(l.pack_size) === 1000) { l.pack_size = Number(ip.pack) || l.pack_size; l._subPack = false; moved = true; }
+      }
+      if (moved) draw();
+    });
+    form.appendChild(sInput);
 
     form.appendChild(el("label", {}, T("Paid by","طريقة الدفع")));
     const paySel = el("select", {},
@@ -8826,6 +8903,11 @@ routes.purchase_new = function (u) {
             T(`You buy this by e.g. bottle, pack, carton. Inventory counts in ${invUnit}. ` +
             `Unit and pack size start from Inventory Prices — change the pack size only if this delivery came in a different pack (the price is converted back to the Inventory Prices pack).`,
             `الوحدة وحجم العبوة مأخوذان من أسعار المخزون — غيّر حجم العبوة فقط إذا وصلت هذه الدفعة بعبوة مختلفة (يُحوَّل السعر إلى عبوة أسعار المخزون).`)));
+
+          const _subI = invSubstituteInfo(ln.inv_item_id, supplier);
+          if (_subI) card.appendChild(el("div", { class: "banner-arch", style: { marginTop: "8px", borderColor: "var(--warn, #b45309)" } },
+            T(`⚠ Emergency milk: our normal supplier for ${it.name} is ${_subI.name}. ${_subI.examples} come in ${_subI.subPack} ${invUnit} bottles, so the pack size is set to ${_subI.subPack}. This purchase is flagged for the owner and does NOT change Inventory Prices.`,
+              `⚠ حليب طوارئ: مورّدنا المعتاد لـ ${it.name} هو ${_subI.name}. ${_subI.examples} تأتي بعبوة ${_subI.subPack} ${invUnit}، لذا ضُبط حجم العبوة على ${_subI.subPack}. يُعلَّم هذا المشترى للمالك ولا يغيّر أسعار المخزون.`)));
 
           card.appendChild(el("label", {}, T("Purchase unit (e.g. bottle, pack, carton)","وحدة الشراء (مثال: زجاجة، عبوة، كرتونة)")));
           const puInput = el("input", { type: "text", value: ln.purchase_unit || "", placeholder: T("bottle","زجاجة") });
@@ -8993,6 +9075,12 @@ routes.purchase_new = function (u) {
       }
     }
 
+    for (const l of lines) {   // emergency brand left on the default pack → it is 1000 ml, fix it before saving
+      if (l.kind !== "inventory") continue;
+      const sub = invSubstituteInfo(l.inv_item_id, supplier);
+      let ip = null; try { ip = invPriceMap()[l.inv_item_id]; } catch (e) {}
+      if (sub && ip && Number(l.pack_size) === Number(ip.pack)) { l.pack_size = sub.subPack; toast(T(`Pack size set to ${sub.subPack} (emergency ${supplier})`, `ضُبط حجم العبوة على ${sub.subPack}`)); }
+    }
     const s = stamp();
     const total = lines.reduce((s2, l) => s2 + lineTotal(l), 0);
     const rpBlobs = receiptPhotoField.getBlobs();
@@ -9011,7 +9099,9 @@ routes.purchase_new = function (u) {
         const canonicalQty = lineCanonicalQty(l);
         const cost = lineTotal(l);
         // remember conversion for next time
-        if (!isTestMode()) {
+        const _subBuy = !!invSubstituteInfo(l.inv_item_id, supplier);
+        if (_subBuy) toast(T(`⚠ ${item ? item.name : ""} from ${supplier}: flagged as an emergency purchase, Inventory Prices not changed`, `⚠ ${item ? item.name : ""} من ${supplier}: شراء طارئ، لم تتغير أسعار المخزون`));
+        if (!isTestMode() && !_subBuy) {
           const _old = state.purchase_units[l.inv_item_id] || {};
           const _defd = (_old.pack_set || _old.manual) && Number(_old.pack_size_canonical) > 0;
           // Inventory Prices owns the unit label + pack size; a purchase only brings the price, converted to that pack.
@@ -9040,6 +9130,7 @@ routes.purchase_new = function (u) {
           inv_item_id: l.inv_item_id,
           item_name: item ? item.name : "",
           unit: item ? item.unit : "",
+          ...(_subBuy ? { substitute: true } : {}),
           purchase_unit: l.purchase_unit || "",
           pack_size_canonical: Number(l.pack_size) || 0,
           purchase_qty: Number(l.purchase_qty) || 0,
@@ -23949,6 +24040,8 @@ routes.app_guide = function (u) {
         "<strong>COGS follows these prices.</strong> Each drink's cost = Counterpoint's cost adjusted by the difference between the price we actually pay and Counterpoint's ingredient cost. It recalculates when a purchase is saved, a price is edited, or the owner/accountant/head barista opens the app.",
         "<strong>Unit and pack size are set here.</strong> The label (bottle, box…) and pack size you save with ✏️ are the source of truth: the Record Purchase form pre-fills them, and a purchase in a different pack is converted to this pack. A purchase only changes the <em>price</em>, and only when its price actually differs.",
         "<strong>⚠ Held prices:</strong> if a new price jumps more than 40% against the last purchase, or is more than 40% away from Counterpoint's cost, it is held out of COGS (it is often a wrong pack size or a mixed receipt). Check the purchase, then tap <strong>✓ Confirm</strong> to use it, or ✏️ to correct it.",
+        "<strong>Every price change is flagged,</strong> even a fraction of a pound: the row gets a red/green edge and shows ▲/▼ with the % and the LE difference. Tap <strong>Price changes only</strong> to see just those items.",
+        "<strong>🥛 Emergency milk:</strong> our normal Full Cream supplier is Dina Farms (850 ml bottles). Milk from any other supplier (Lamar, Labanita, Juhayna: 1000 ml bottles) is an emergency purchase: the form sets the pack to 1000 ml, it does <em>not</em> change these prices, and it is listed in the orange box at the top of this page.",
         "Items never purchased show “—” until their first purchase. Use ✏️ to correct a price or supplier by hand.",
         "Test Mode purchases never change these prices.",
         "<strong>🗑 Delete item (owner only):</strong> removes the item from everywhere in ops — price, supplier, reorder alert and recipe rows — on every device. Past purchases, waste and counts stay as history. Counterpoint can't be changed from the app, so archive the product there too.",
@@ -23956,6 +24049,8 @@ routes.app_guide = function (u) {
       ar_steps: [
         "اضغط <strong>أسعار المخزون</strong> (المالك/المحاسب) لعرض كل صنف مع سعر شرائه: سعر العبوة (زجاجة، كرتونة…)، التكلفة لكل جرام/مل، المورد وتاريخ آخر مشترى.",
         "تتحدث الأسعار <strong>تلقائياً</strong> من سجل المشتريات: عند تسجيل مشترى بسعر مختلف (مثل لبن مزارع دينا) يحل السعر الجديد محل القديم وتظهر ▲/▼ بالسعر السابق.",
+        "<strong>كل تغيّر في السعر يظهر</strong> حتى لو بنصف جنيه أو أقل: يظهر على الصف حد أحمر/أخضر مع ▲/▼ والنسبة والفرق بالجنيه. اضغط <strong>التغييرات فقط</strong> لعرضها وحدها.",
+        "<strong>🥛 حليب الطوارئ:</strong> مورّدنا المعتاد للحليب كامل الدسم هو مزارع دينا (زجاجة 850 مل). الحليب من أي مورد آخر (لمار، لبنيتا، جهينة: زجاجة 1000 مل) شراء طارئ: يضبط النموذج العبوة على 1000 مل، ولا يغيّر هذه الأسعار، ويظهر في المربع البرتقالي أعلى الصفحة.",
         "<strong>📊 تكلفة المشروبات:</strong> الزر أسفل الصفحة يعرض تكلفة كل صنف ونسبة التكلفة، محسوبة مكوّناً بمكوّن من هذه الأسعار (التغليف غير محسوب مثل كاونتر بوينت). المشروبات التي لا تستطيع وصفة كاونتر بوينت إعادة بنائها بدقة تحتفظ بتكلفته معدّلة بفروق الأسعار.",
         "<strong>تكلفة المنتجات (COGS) تتبع هذه الأسعار.</strong> تكلفة كل مشروب = تكلفة كاونتر بوينت معدّلة بفرق السعر الذي ندفعه فعلياً عن تكلفة المكوّن في كاونتر بوينت. تُعاد عند حفظ مشترى أو تعديل سعر أو عند فتح المالك/المحاسب/رئيس البريستا للتطبيق.",
         "<strong>الوحدة وحجم العبوة تُحدَّد هنا.</strong> الاسم (زجاجة، علبة…) وحجم العبوة اللذان تحفظهما بـ ✏️ هما المرجع: نموذج تسجيل المشترى يملؤهما تلقائياً، وأي مشترى بعبوة مختلفة يُحوَّل إلى هذه العبوة. المشترى يغيّر <em>السعر</em> فقط، وفقط إذا اختلف السعر فعلاً.",
