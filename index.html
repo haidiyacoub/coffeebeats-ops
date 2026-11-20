@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261119-410 -->
+<!-- CB_BUILD:20261120-056 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261119-410";
+  var BUILD = "20261120-056";
   (function() {
     function checkFresh() {
       try {
@@ -3776,7 +3776,17 @@ function cpOpsCostMap() {
     const e = pm[it.id];
     if (e && e.use > 0) out[it.cp_sku] = e.use;
   }
+  // Ingredients with no explicit cp_sku link: match the ops item by name, so a Counterpoint ingredient that has no cost
+  // (or isn't linked) still gets its price from Inventory Prices. Keyed "name:<normalised>".
+  for (const it of (state.items || [])) {
+    if (it.active === false) continue;
+    const e = pm[it.id];
+    if (e && e.use > 0) { const k = "name:" + _cpNrm(it.name); if (out[k] == null) out[k] = e.use; }
+  }
   return out;
+}
+function cpOpsCostFor(opsCost, n) {
+  return opsCost[n.sku] != null ? opsCost[n.sku] : opsCost["name:" + _cpNrm(n.name || "")];
 }
 function cpSyncMenuFromCatalog() {
   if (!_cp.catalog) return false;
@@ -3795,16 +3805,16 @@ function cpSyncMenuFromCatalog() {
         const k = String(n.sku || "").replace(/^ING-/, "");
         if (CP_PACKAGING.test(k)) continue;
         if (n.optionId && n.sku !== "ING-FULL-CREAM-MILK") continue;   // add-ons / other milks are only costed when sold
-        const q = Number(n.quantity) || 0, ing = _cp.catalog[n.sku], cpc = ing ? ing.cost : 0, oc = opsCost[n.sku];
+        const q = Number(n.quantity) || 0, ing = _cp.catalog[n.sku], cpc = ing ? ing.cost : 0, oc = cpOpsCostFor(opsCost, n);
         sumCp += q * cpc; sumList += q * (oc != null ? oc : cpc);
       }
       if (c.cost > 0 && sumCp > 0 && Math.abs(sumCp - c.cost) / c.cost <= 0.10) { newCost = sumList; src = "list"; }
       else {
         for (const n of needs) {                       // fallback: Counterpoint's cost + ingredient price differences
           if (n.optionId) continue;
-          const oc = opsCost[n.sku], ing = _cp.catalog[n.sku];
-          if (oc == null || !ing || !(ing.cost > 0)) continue;
-          delta += (Number(n.quantity) || 0) * (oc - ing.cost);
+          const oc = cpOpsCostFor(opsCost, n), ing = _cp.catalog[n.sku];
+          if (oc == null) continue;
+          delta += (Number(n.quantity) || 0) * (oc - (ing && ing.cost > 0 ? ing.cost : 0));   // no CP cost → whole inventory price is added
         }
         newCost = c.cost + delta; src = delta ? "cp+list" : "cp";
       }
