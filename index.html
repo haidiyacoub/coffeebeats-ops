@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261124-136 -->
+<!-- CB_BUILD:20261124-238 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261124-136";
+  var BUILD = "20261124-238";
   (function() {
     function checkFresh() {
       try {
@@ -876,7 +876,7 @@ const toast = (msg, kind="") => {
 const BRANCH_LIFECYCLE = {
   maadi: {},
   zawya: { close: "2026-11-23" },
-  ox:    { setup: "2026-11-11", open: "2026-11-24" }
+  ox:    { setup: "2026-11-11", open: "2099-12-31" }  // placeholder: OX not operational until Haïdi says so
 };
 const ALL_BRANCHES = ["maadi", "ox", "zawya"];
 const BRANCH_LABELS = { maadi: "Maadi", zawya: "Zawya", ox: "OX" };
@@ -16202,7 +16202,7 @@ routes.roster = function (u) {
   state.branch_opening_times.ox = state.branch_opening_times.ox || { morning: "09:00" };
   if (!state.branch_opening_times.ox.updated_at && state.branch_opening_times.ox.morning === "10:00") state.branch_opening_times.ox.morning = "09:00"; // old seed
   // OX is not shown on the weekly schedule before 24 Nov 2026; once there it runs ONE morning shift 9:00–18:00 (2 baristas), no night shift.
-  const OX_SCHEDULE_FROM = "2026-11-24";
+  const OX_SCHEDULE_FROM = BRANCH_LIFECYCLE.ox.open;
   const _otOxVisible = _brToday() >= OX_SCHEDULE_FROM;
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
