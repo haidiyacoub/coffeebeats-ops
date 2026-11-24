@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261124-344 -->
+<!-- CB_BUILD:20261124-503 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261124-344";
+  var BUILD = "20261124-503";
   (function() {
     function checkFresh() {
       try {
@@ -879,7 +879,7 @@ const BRANCH_LIFECYCLE = {
   ox:    { setup: "2026-11-11", open: "2099-12-31" }  // placeholder: OX not operational until Haïdi says so
 };
 const ALL_BRANCHES = ["maadi", "ox", "zawya"];
-const BRANCH_LABELS = { maadi: "Maadi", zawya: "Zawya", ox: "OX" };
+const BRANCH_LABELS = { maadi: "Maadi", zawya: "Zawya (archive)", ox: "OX" };
 function hasVenueShare(b) { b = String(b || "").toLowerCase(); return b === "zawya" || b === "ox"; }
 function canonBranch(raw) {
   const s = String(raw || "").trim().toLowerCase();
@@ -888,6 +888,9 @@ function canonBranch(raw) {
   if (/(^|[^a-z0-9])ox([^a-z0-9]|$)/.test(s)) return "ox";
   return s;
 }
+function branchLabelAr(b) { b = String(b || "").toLowerCase(); return b === "maadi" ? "معادي" : b === "ox" ? "OX" : b === "zawya" ? "Zawya (أرشيف)" : (b || "—"); }
+// Second branch shown beside Maadi in month-based tables: Zawya (archive) before Nov 2026, OX from Nov 2026.
+function secondBranchForMonth(m) { return String(m || "") >= "2026-11" ? "ox" : "zawya"; }
 function branchLabel(b) { b = String(b || "").toLowerCase(); return BRANCH_LABELS[b] || (b ? b[0].toUpperCase() + b.slice(1) : "—"); }
 function _brToday() { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
 function allBranches() { return ALL_BRANCHES.slice(); }
@@ -4292,7 +4295,7 @@ function scanPettyCashMonthReset() {
   if (s.petty_cash_last_reset_month >= month) return; // already fresh this month
 
   const maadiBal = pettyCashBalance("maadi");
-  const zawyaBal = pettyCashBalance("zawya");
+  const zawyaBal = pettyCashBalance("ox") + pettyCashBalance("zawya"); // OX float + any leftover archived-Zawya float
   const combined = maadiBal + zawyaBal;
 
   if (combined <= 0) {
@@ -4307,7 +4310,7 @@ function scanPettyCashMonthReset() {
   if (s.petty_cash_deposit_notified_month !== month) {
     notifyLeadershipRole("budget_inventory",
       "Petty cash — bank last month's balance",
-      `${money(combined)} left in petty cash (Zawya ${money(zawyaBal)} · Maadi ${money(maadiBal)}). Deposit it at the bank and log it on the Petty Cash screen so ${month} starts at zero.`);
+      `${money(combined)} left in petty cash (OX ${money(zawyaBal)} · Maadi ${money(maadiBal)}). Deposit it at the bank and log it on the Petty Cash screen so ${month} starts at zero.`);
     s.petty_cash_deposit_notified_month = month;
     saveState();
   }
@@ -5303,13 +5306,13 @@ function pettyCashZawyaPct() {
 }
 function pettyCashSplitPct(branch) {
   const z = pettyCashZawyaPct();
-  return branch === "zawya" ? z : 100 - z;
+  return branch === "ox" ? z : 100 - z;
 }
 // Split a total top-up amount into { zawya, maadi } whole-pound shares that sum exactly.
 function pettyCashSplitAmount(total) {
   const t = Math.max(0, Number(total) || 0);
   const zawya = Math.round(t * pettyCashZawyaPct() / 100);
-  return { zawya, maadi: t - zawya };
+  return { ox: zawya, maadi: t - zawya };
 }
 // Day (YYYY-MM-DD) of the most recent "start fresh" / zero-out inside `month`,
 // or "" if the float wasn't reset mid-month. Covers the Bank-all reset
@@ -5559,7 +5562,7 @@ function loginView() {
     for (const u of people) {
       const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
       const branchLabel = u.role === "accountant" ? "all branches"
-        : (u.branches && u.branches.length) ? u.branches.join(", ")
+        : (u.branches && u.branches.length) ? u.branches.map(branchLabel).join(", ")
         : (["barista","head_barista"].includes(u.role) ? "rotates" : "");
       userList.appendChild(el("div", { class: "row", onClick: () => selectUser(u) }, [
         el("div", { class: "icon", style: { fontSize: "22px" } }, icon),
@@ -5985,8 +5988,8 @@ function headBaristaMissingAlert(u) {
 routes.home = function (u) {
   const wrap = el("div", {});
   const branchInfo = u.role === "accountant" ? "all branches (accountant)"
-                   : (u.branches && u.branches.length) ? `branches: ${u.branches.join(", ")}`
-                   : (["barista","head_barista"].includes(u.role) ? "rotates (Maadi + Zawya)" : "no branches assigned");
+                   : (u.branches && u.branches.length) ? `branches: ${u.branches.map(branchLabel).join(", ")}`
+                   : (["barista","head_barista"].includes(u.role) ? "rotates (Maadi + OX)" : "no branches assigned");
   wrap.appendChild(el("div", { class: "banner-arch" }, [ `Signed in as `, el("b", {}, u.name), ` · ${branchInfo}`]));
 
   // ── Head barista: highly visible missing-items alert ──
@@ -6101,7 +6104,7 @@ routes.home = function (u) {
 
   // ── Head barista: full frontline + management extras ──
   if (u.role === "head_barista") {
-    tiles.appendChild(tile("📅", T("Weekly Schedule","الجدول الأسبوعي"), T("Shifts by day · Maadi + Zawya","الشيفتات حسب اليوم · معادي وزاوية"), () => go("roster")));
+    tiles.appendChild(tile("📅", T("Weekly Schedule","الجدول الأسبوعي"), T("Shifts by day · Maadi + OX","الشيفتات حسب اليوم · معادي وOX"), () => go("roster")));
     tiles.appendChild(tile("📖", T("Barista Handbook","دليل البريستا"), T("Recipes & drink guide","الوصفات ودليل المشروبات"), () => go("handbook")));
     tiles.appendChild(tile("📱", T("App Guide","دليل التطبيق"), T("How to use this app (EN + AR)","كيفية استخدام التطبيق (عربي وإنجليزي)"), () => go("app_guide")));
     tiles.appendChild(tile("🗑️", T("Record Waste","تسجيل الهدر"), T("Every shift","كل شيفت"), () => go("waste_new")));
@@ -6173,7 +6176,7 @@ routes.home = function (u) {
   if (u.role === "owner" || u.role === "accountant") {
     tiles.appendChild(sectionHeader("Operation"));
     tiles.appendChild(_notifTile());
-    tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + Zawya", () => go("roster")));
+    tiles.appendChild(tile("📅", "Weekly Schedule", "Shifts by day · Maadi + OX", () => go("roster")));
     tiles.appendChild(tile("📖", "Barista Handbook", "Recipes & drink guide", () => go("handbook")));
     tiles.appendChild(tile("📱", "App Guide", "How to use this app (EN + AR)", () => go("app_guide")));
     tiles.appendChild(tile("🗑️", "Record Waste", "Every shift", () => go("waste_new")));
@@ -6248,7 +6251,7 @@ routes.home = function (u) {
   try { runEngineAlertScan(); } catch (e) { console.warn(e); }
   const lowBoth = [
     ...lowStockItems("maadi").map(r => ({...r, _b: "maadi"})),
-    ...lowStockItems("zawya").map(r => ({...r, _b: "zawya"})),
+    ...activeBranches().filter(b => b !== "maadi").flatMap(b => lowStockItems(b).map(r => ({...r, _b: b}))),
   ];
   if (lowBoth.length) {
     const card = el("div", { class: "card", style: { borderColor: "var(--bad)", marginTop: "16px" } });
@@ -8712,11 +8715,11 @@ routes.purchase_new = function (u) {
 
   // "Both branches" tab — for shared costs (marketing, agency, software) that
   // belong to Maadi and Zawya together. Only offered to users who manage both.
-  const canBothBranches = (u.branches || []).includes("maadi") && (u.branches || []).includes("zawya");
+  const canBothBranches = (u.branches || []).includes("maadi") && ((u.branches || []).includes("ox") || (u.branches || []).includes("zawya"));
   const pickerBranches = canBothBranches ? [...u.branches, "both"] : u.branches;
 
   let branch = u.branches[0];
-  let splitZawyaPct = 50;   // Zawya's share when branch === "both"; Maadi gets the rest
+  let splitZawyaPct = 50;   // OX's share when branch === "both"; Maadi gets the rest
   let supplier = "";
   let paid_by = "petty_cash";
   let date = new Date().toISOString().slice(0,10);
@@ -8793,24 +8796,24 @@ routes.purchase_new = function (u) {
       splitCard.appendChild(el("div", { style: { fontWeight: "700", marginBottom: "4px" } },
         T("🔀 Both branches — shared cost","🔀 الفرعان معاً — تكلفة مشتركة")));
       splitCard.appendChild(el("div", { class: "muted small" },
-        T("For costs that serve Maadi and Zawya together (marketing, agency retainer, software). Only 'Other' lines are allowed. This is saved as two linked purchases — one per branch — so each branch's P&L carries its share.",
-          "للتكاليف التي تخدم المعادي وزاوية معاً (تسويق، وكالة، برامج). يُسمح ببنود 'أخرى' فقط. يُحفظ كمشتريين مرتبطين — واحد لكل فرع — بحيث يتحمّل كل فرع نصيبه في الأرباح والخسائر.")));
-      splitCard.appendChild(el("label", { style: { marginTop: "8px" } }, T("Zawya share (%) — Maadi gets the rest","نصيب زاوية (%) — والباقي للمعادي")));
+        T("For costs that serve Maadi and OX together (marketing, agency retainer, software). Only 'Other' lines are allowed. This is saved as two linked purchases — one per branch — so each branch's P&L carries its share.",
+          "للتكاليف التي تخدم المعادي وOX معاً (تسويق، وكالة، برامج). يُسمح ببنود 'أخرى' فقط. يُحفظ كمشتريين مرتبطين — واحد لكل فرع — بحيث يتحمّل كل فرع نصيبه في الأرباح والخسائر.")));
+      splitCard.appendChild(el("label", { style: { marginTop: "8px" } }, T("OX share (%) — Maadi gets the rest","نصيب OX (%) — والباقي للمعادي")));
       const zIn = el("input", { type: "number", min: "0", max: "100", value: zPct, style: { maxWidth: "100px" } });
       const prev = el("div", { class: "muted small", style: { marginTop: "6px" } });
       const drawPrev = () => {
         const z = Math.min(100, Math.max(0, Number(zIn.value) || 0));
         const t = lines.reduce((s2, l) => s2 + (Number(l.amount) || 0), 0);
         const zAmt = Math.round(t * z / 100);
-        prev.textContent = T(`Zawya ${money(zAmt)} (${z}%)  ·  Maadi ${money(t - zAmt)} (${100 - z}%)`,
-                             `زاوية ${money(zAmt)} (${z}%)  ·  معادي ${money(t - zAmt)} (${100 - z}%)`);
+        prev.textContent = T(`OX ${money(zAmt)} (${z}%)  ·  Maadi ${money(t - zAmt)} (${100 - z}%)`,
+                             `OX ${money(zAmt)} (${z}%)  ·  معادي ${money(t - zAmt)} (${100 - z}%)`);
       };
       zIn.addEventListener("input", () => { splitZawyaPct = Number(zIn.value) || 0; drawPrev(); });
       drawPrev();
       splitCard.appendChild(zIn);
       splitCard.appendChild(el("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "6px" } }, [
         el("button", { class: "btn ghost", onClick: () => { splitZawyaPct = 50; draw(); } }, "50 / 50"),
-        el("button", { class: "btn ghost", onClick: () => { splitZawyaPct = 60; draw(); } }, T("60 Zawya / 40 Maadi","60 زاوية / 40 معادي")),
+        el("button", { class: "btn ghost", onClick: () => { splitZawyaPct = 60; draw(); } }, T("60 OX / 40 Maadi","60 OX / 40 معادي")),
       ]));
       splitCard.appendChild(prev);
       form.appendChild(splitCard);
@@ -8856,8 +8859,8 @@ routes.purchase_new = function (u) {
     if (paid_by === "petty_cash") {
       if (branch === "both") {
         form.appendChild(el("div", { class: "muted small" }, T(
-          `Current petty cash — Maadi ${money(pettyCashBalance("maadi"))} · Zawya ${money(pettyCashBalance("zawya"))} (each branch's float covers its own share)`,
-          `العهدة النقدية الحالية — معادي ${money(pettyCashBalance("maadi"))} · زاوية ${money(pettyCashBalance("zawya"))} (كل فرع يغطي نصيبه)`)));
+          `Current petty cash — Maadi ${money(pettyCashBalance("maadi"))} · OX ${money(pettyCashBalance("ox"))} (each branch's float covers its own share)`,
+          `العهدة النقدية الحالية — معادي ${money(pettyCashBalance("maadi"))} · OX ${money(pettyCashBalance("ox"))} (كل فرع يغطي نصيبه)`)));
       } else {
         const bal = pettyCashBalance(branch);
         form.appendChild(el("div", { class: "muted small" }, T(`Current petty cash at ${branch}: ${money(bal)}`, `العهدة النقدية الحالية في ${branch}: ${money(bal)}`)));
@@ -9213,12 +9216,12 @@ routes.purchase_new = function (u) {
       // Split the shared cost into two linked purchases whose totals sum exactly.
       const zPct = Math.min(100, Math.max(0, Number(splitZawyaPct) || 0));
       const groupId = uuid();
-      const parts = [{ br: "zawya", pct: zPct }, { br: "maadi", pct: 100 - zPct }];
+      const parts = [{ br: "ox", pct: zPct }, { br: "maadi", pct: 100 - zPct }];
       for (let i = 0; i < parts.length; i++) {
         const pt = parts[i];
         const brLines = outLines.map(l => {
           const zShare = Math.round((Number(l.line_total) || 0) * zPct / 100);
-          const share = pt.br === "zawya" ? zShare : (Number(l.line_total) || 0) - zShare;
+          const share = pt.br === "ox" ? zShare : (Number(l.line_total) || 0) - zShare;
           return { kind: "other", description: l.description || "", amount: share, line_total: share, qty_canonical: 0, note: l.note || "" };
         });
         const brTotal = brLines.reduce((s2, l) => s2 + l.line_total, 0);
@@ -9250,7 +9253,7 @@ routes.purchase_new = function (u) {
       });
     } else {
       toast(branch === "both"
-        ? T("Saved as 2 linked purchases (Maadi + Zawya)","حُفظ كمشتريين مرتبطين (معادي + زاوية)")
+        ? T("Saved as 2 linked purchases (Maadi + OX)","حُفظ كمشتريين مرتبطين (معادي + OX)")
         : T("Purchase saved","تم حفظ المشترى"));
       go("home");
     }
@@ -9498,7 +9501,7 @@ routes.purchase_no_receipt_report = function (u) {
     }
     totalsCard.appendChild(el("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px" } }, [
       el("div", {}, [ el("div", { class: "muted small" }, "🏠 Maadi"), el("div", { style: { fontSize: "18px", fontWeight: "700" } }, money(byBranch.maadi || 0)) ]),
-      el("div", {}, [ el("div", { class: "muted small" }, "🏢 Zawya"), el("div", { style: { fontSize: "18px", fontWeight: "700" } }, money(byBranch.zawya || 0)) ]),
+      el("div", {}, [ el("div", { class: "muted small" }, "🏢 OX"), el("div", { style: { fontSize: "18px", fontWeight: "700" } }, money(byBranch.zawya || 0)) ]),
       el("div", {}, [ el("div", { class: "muted small" }, T("Total","الإجمالي")), el("div", { style: { fontSize: "18px", fontWeight: "700", color: "var(--warn)" } }, money(grandTotal)) ]),
     ]));
     totalsCard.appendChild(el("div", { class: "muted small", style: { marginTop: "6px" } }, T(`${flagged.length} purchase(s)`, `${flagged.length} مشترى`)));
@@ -9755,15 +9758,15 @@ routes.petty_cash = function (u) {
   // still in the floats, show the owner / head barista a prompt to bank it.
   const _pcMonth      = new Date().toISOString().slice(0, 7);
   const _pcLastReset  = state.settings.petty_cash_last_reset_month || _pcMonth;
-  const _pcCombined   = pettyCashBalance("maadi") + pettyCashBalance("zawya");
+  const _pcCombined   = pettyCashBalance("maadi") + pettyCashBalance("ox") + pettyCashBalance("zawya");
   const _pcResetDue   = _pcLastReset < _pcMonth && _pcCombined > 0;
   if (_pcResetDue && ["owner","accountant","head_barista"].includes(u.role)) {
     const rb = el("div", { class: "card", style: { borderColor: "var(--bad)", background: "rgba(220,53,69,0.06)" } });
     rb.appendChild(el("div", { style: { color: "var(--bad)", fontWeight: "800", marginBottom: "4px" } },
       T(`🏦 New month — ${money(_pcCombined)} still in petty cash`, `🏦 شهر جديد — ${money(_pcCombined)} ما زالت في العهدة`)));
     rb.appendChild(el("div", { class: "muted small" },
-      T(`Zawya ${money(pettyCashBalance("zawya"))} · Maadi ${money(pettyCashBalance("maadi"))}. Deposit last month's leftover cash at the bank, then reset so ${_pcMonth} starts at zero.`,
-        `زاوية ${money(pettyCashBalance("zawya"))} · معادي ${money(pettyCashBalance("maadi"))}. أودِع نقدية الشهر الماضي المتبقية في البنك ثم صفّر الرصيد ليبدأ ${_pcMonth} من الصفر.`)));
+      T(`OX ${money(pettyCashBalance("ox"))} · Maadi ${money(pettyCashBalance("maadi"))}. Deposit last month's leftover cash at the bank, then reset so ${_pcMonth} starts at zero.`,
+        `OX ${money(pettyCashBalance("ox"))} · معادي ${money(pettyCashBalance("maadi"))}. أودِع نقدية الشهر الماضي المتبقية في البنك ثم صفّر الرصيد ليبدأ ${_pcMonth} من الصفر.`)));
     if (u.role === "owner" || u.role === "head_barista") {
       rb.appendChild(el("button", { class: "btn", style: { marginTop: "10px" }, onClick: () => promptMonthReset() },
         T("🏦 Deposit & start fresh","🏦 إيداع وبدء جديد")));
@@ -9773,9 +9776,9 @@ routes.petty_cash = function (u) {
 
   // ---------- Combined view ----------
   if (canSeeAll) {
-    const combinedBal = pettyCashBalance("maadi") + pettyCashBalance("zawya");
+    const combinedBal = pettyCashBalance("maadi") + pettyCashBalance("ox") + pettyCashBalance("zawya");
     const combinedCard = el("div", { class: "card", style: { borderColor: "var(--accent)" } });
-    combinedCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, T("Combined (Maadi + Zawya)","الإجمالي (معادي + زاوية)")));
+    combinedCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px" } }, T("Combined (Maadi + OX)","الإجمالي (معادي + OX)")));
     combinedCard.appendChild(el("div", { style: { fontSize: "30px", fontWeight: "700", color: combinedBal < PETTY_CASH_ALERT ? "var(--bad)" : "var(--ink)" } }, money(combinedBal)));
     combinedCard.appendChild(el("div", { class: "muted small" }, T(`Weekly outflow: ${money(weeklyExpenditure("combined"))}`, `المصروف الأسبوعي: ${money(weeklyExpenditure("combined"))}`)));
     // Monthly budget + this month's top-ups
@@ -9784,8 +9787,8 @@ routes.petty_cash = function (u) {
     const _cbTopped = pettyCashToppedUp("combined", _pcMonth);
     const _cbResetDay = pettyCashResetDay(_pcMonth);
     combinedCard.appendChild(el("div", { class: "muted small" }, T(
-      `Monthly budget ${money(_cbBudget)} — Zawya ${money(_cbSplit.zawya)} (${pettyCashZawyaPct()}%) · Maadi ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`,
-      `الميزانية الشهرية ${money(_cbBudget)} — زاوية ${money(_cbSplit.zawya)} (${pettyCashZawyaPct()}%) · معادي ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`)));
+      `Monthly budget ${money(_cbBudget)} — OX ${money(_cbSplit.ox)} (${pettyCashZawyaPct()}%) · Maadi ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`,
+      `الميزانية الشهرية ${money(_cbBudget)} — OX ${money(_cbSplit.ox)} (${pettyCashZawyaPct()}%) · معادي ${money(_cbSplit.maadi)} (${100 - pettyCashZawyaPct()}%)`)));
     combinedCard.appendChild(el("div", { class: "muted small" }, _cbResetDay
       ? T(`Topped up since fresh start ${fmtDay(_cbResetDay)}: ${money(_cbTopped)}`,
           `شُحن منذ البداية الجديدة ${fmtDay(_cbResetDay)}: ${money(_cbTopped)}`)
@@ -9823,7 +9826,7 @@ routes.petty_cash = function (u) {
     const bal = pettyCashBalance(b);
     const weekly = weeklyExpenditure(b);
     const card = el("div", { class: "card", style: { marginTop: "12px" } });
-    card.appendChild(el("h2", {}, T(`${b[0].toUpperCase()+b.slice(1)} balance: ${money(bal)}`, `رصيد ${b === "maadi" ? "معادي" : "زاوية"}: ${money(bal)}`)));
+    card.appendChild(el("h2", {}, T(`${b[0].toUpperCase()+b.slice(1)} balance: ${money(bal)}`, `رصيد ${branchLabelAr(b)}: ${money(bal)}`)));
 
     card.appendChild(el("div", { class: "kv" }, [
       el("div", { class: "k" }, T("This week's expenditures","مصروفات هذا الأسبوع")),
@@ -9899,7 +9902,7 @@ routes.petty_cash = function (u) {
     };
     state.petty_cash.push(entry);
     // Alert when combined total drops below threshold
-    const total = pettyCashBalance("maadi") + pettyCashBalance("zawya");
+    const total = pettyCashBalance("maadi") + pettyCashBalance("ox") + pettyCashBalance("zawya");
     if (total < PETTY_CASH_ALERT) {
       notifyHaidi("Low petty cash — combined", `Total is ${money(total)} (under ${money(PETTY_CASH_ALERT)})`);
     }
@@ -9949,7 +9952,7 @@ routes.petty_cash = function (u) {
     const current = pettyCashBalance(branch);
     openPrompt({
       title: T(`Correct ${branch} balance — now shows ${money(current)}`,
-               `تصحيح رصيد ${branch === "maadi" ? "معادي" : "زاوية"} — يظهر الآن ${money(current)}`),
+               `تصحيح رصيد ${branchLabelAr(branch)} — يظهر الآن ${money(current)}`),
       fields: [
         { key: "actual", label: T("Cash physically in the float now (EGP)","النقدية الفعلية في العهدة الآن (جنيه)"), type: "number", value: Math.round(current) },
         { key: "date", label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0,10) },
@@ -9989,7 +9992,7 @@ routes.petty_cash = function (u) {
 
   function addExpense(branch) {
     openPrompt({
-      title: T(`Record expenditure — ${branch}`, `تسجيل مصروف — ${branch === "maadi" ? "معادي" : "زاوية"}`),
+      title: T(`Record expenditure — ${branch}`, `تسجيل مصروف — ${branchLabelAr(branch)}`),
       fields: [
         { key: "amount", label: T("Amount spent (EGP)","المبلغ المصروف (جنيه)"), type: "number", value: 0 },
         { key: "date", label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0,10) },
@@ -10008,8 +10011,8 @@ routes.petty_cash = function (u) {
   function addSplitTopup() {
     const zPct = pettyCashZawyaPct();
     openPrompt({
-      title: T(`Top-up petty cash — auto-split Zawya ${zPct}% / Maadi ${100 - zPct}%`,
-               `شحن العهدة — تقسيم تلقائي زاوية ${zPct}% / معادي ${100 - zPct}%`),
+      title: T(`Top-up petty cash — auto-split OX ${zPct}% / Maadi ${100 - zPct}%`,
+               `شحن العهدة — تقسيم تلقائي OX ${zPct}% / معادي ${100 - zPct}%`),
       fields: [
         { key: "amount", label: T("Total amount (EGP)","إجمالي المبلغ (جنيه)"), type: "number", value: 0 },
         { key: "date", label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0,10) },
@@ -10025,7 +10028,7 @@ routes.petty_cash = function (u) {
         const split = pettyCashSplitAmount(amt);
         const s = stamp();
         const personal = vals.funded_from === "owner_personal";
-        for (const b of ["zawya", "maadi"]) {
+        for (const b of ["ox", "maadi"]) {
           const share = split[b];
           if (share <= 0) continue;
           const topup = pushEntry(b, "topup", share, `${vals.note || "Top-up"} (auto-split ${zPct}/${100 - zPct})`, vals.date);
@@ -10042,10 +10045,10 @@ routes.petty_cash = function (u) {
         delete state.settings.alerted_combined;
         saveState();
         toast(personal
-          ? T(`Split: Zawya ${money(split.zawya)} · Maadi ${money(split.maadi)} · added to what the company owes you`,
-              `تقسيم: زاوية ${money(split.zawya)} · معادي ${money(split.maadi)} · أُضيف لما تدين به الشركة لك`)
-          : T(`Split: Zawya ${money(split.zawya)} · Maadi ${money(split.maadi)}`,
-              `تقسيم: زاوية ${money(split.zawya)} · معادي ${money(split.maadi)}`));
+          ? T(`Split: OX ${money(split.ox)} · Maadi ${money(split.maadi)} · added to what the company owes you`,
+              `تقسيم: OX ${money(split.ox)} · معادي ${money(split.maadi)} · أُضيف لما تدين به الشركة لك`)
+          : T(`Split: OX ${money(split.ox)} · Maadi ${money(split.maadi)}`,
+              `تقسيم: OX ${money(split.ox)} · معادي ${money(split.maadi)}`));
         render();
       }
     });
@@ -10056,7 +10059,7 @@ routes.petty_cash = function (u) {
     const bal = pettyCashBalance(branch);
     if (bal <= 0) return toast(T("Nothing to bank","لا يوجد رصيد للإيداع"), "error");
     openPrompt({
-      title: T(`Bank ${branch} petty cash — ${money(bal)}`, `إيداع عهدة ${branch === "maadi" ? "معادي" : "زاوية"} — ${money(bal)}`),
+      title: T(`Bank ${branch} petty cash — ${money(bal)}`, `إيداع عهدة ${branchLabelAr(branch)} — ${money(bal)}`),
       fields: [
         { key: "date", label: T("Deposit date","تاريخ الإيداع"), type: "date", value: new Date().toISOString().slice(0,10) },
         { key: "note", label: T("Note / slip ref","ملاحظة / رقم الإيصال"), type: "text", value: "" },
@@ -10066,7 +10069,7 @@ routes.petty_cash = function (u) {
         const moved = _bankPettyCashBranch(branch, s, vals.date,
           vals.note ? `Banked — ${vals.note}` : `Remaining ${branch} petty cash banked`);
         saveState();
-        toast(T(`Banked ${money(moved)} — ${branch} now at zero`, `أُودِع ${money(moved)} — ${branch === "maadi" ? "معادي" : "زاوية"} الآن صفر`));
+        toast(T(`Banked ${money(moved)} — ${branch} now at zero`, `أُودِع ${money(moved)} — ${branchLabelAr(branch)} الآن صفر`));
         render();
       }
     });
@@ -10074,7 +10077,7 @@ routes.petty_cash = function (u) {
 
   // Owner / head barista: bank both branches and mark the month started fresh.
   function promptMonthReset() {
-    const total = pettyCashBalance("maadi") + pettyCashBalance("zawya");
+    const total = pettyCashBalance("maadi") + pettyCashBalance("ox") + pettyCashBalance("zawya");
     openPrompt({
       title: T(`Deposit ${money(total)} & start ${_pcMonth} fresh`, `إيداع ${money(total)} وبدء ${_pcMonth} من جديد`),
       fields: [
@@ -10451,11 +10454,11 @@ routes.salaries = function (u) {
         hbSection.appendChild(el("div", { style: { fontWeight:"600", marginBottom:"6px" } }, p.name));
 
         for (const b of breakdown) {
-          const branchLabel = b.branch === "maadi" ? T("🏠 Maadi","🏠 معادي") : T("🏢 Zawya","🏢 زاوية");
+          const branchLabel = b.branch === "maadi" ? T("🏠 Maadi","🏠 معادي") : b.branch === "zawya" ? T("🏢 Zawya (archive)","🏢 Zawya (أرشيف)") : T("🏢 OX","🏢 OX");
           const statusPill  = b.met
             ? el("span", { class: "pill ok", style: { fontSize:"11px" } }, T("✓ Target met","✓ الهدف محقق"))
             : el("span", { class: "pill warn", style: { fontSize:"11px", color:"var(--warn)" } }, T("✗ Target not met","✗ الهدف غير محقق"));
-          const note = b.branch === "zawya"
+          const note = (b.branch === "zawya" || b.branch === "ox")
             ? `Raw net ${money(b.rawSales)} → ÷1.14 VAT → ×0.90 share = ${money(b.sales)} vs target ${money(b.target)}`
             : `Net sales ${money(b.sales)} vs target ${money(b.target)}`;
           hbSection.appendChild(el("div", { class: "kv", style: { marginBottom:"4px" } }, [
@@ -10488,7 +10491,7 @@ routes.salaries = function (u) {
             title: "Edit HB incentive config",
             fields: [
               { key: "maadi_target",     label: "Maadi target (EGP)",          type: "number", value: cfg.maadi_target     || 80000  },
-              { key: "zawya_target",     label: "Zawya target after deductions (EGP)", type: "number", value: cfg.zawya_target     || 130000 },
+              { key: "zawya_target",     label: "OX target after deductions (EGP)", type: "number", value: cfg.zawya_target     || 130000 },
               { key: "rate",             label: "Incentive rate (e.g. 0.01 = 1%)", type: "number", value: cfg.rate             || 0.01   },
               { key: "cap",              label: "Monthly incentive cap (EGP)",  type: "number", value: cfg.cap              || 5000   },
               { key: "base_salary_low",  label: "Base salary Jun–Aug 2026 (EGP)", type: "number", value: cfg.base_salary_low  || 12000  },
@@ -11594,7 +11597,7 @@ function pettyCashTile() {
     const all = !u || u.role === "owner" || u.role === "accountant";
     const brs = all ? reportBranches() : ((u.branches || []).filter(b => ALL_BRANCHES.includes(b)));
     if (brs.length) {
-      const nm = { maadi: T("Maadi","معادي"), zawya: T("Zawya","زاوية") };
+      const nm = { maadi: T("Maadi","معادي"), ox: T("OX","OX"), zawya: T("Zawya (archive)","Zawya (أرشيف)") };
       const parts = brs.map(b => `${nm[b]} ${money(pettyCashBalance(b))}`);
       const month = new Date().toISOString().slice(0, 7);
       const total = brs.reduce((a, b) => a + pettyCashBalance(b), 0);
@@ -11725,7 +11728,7 @@ function zawyaCashTile() {
     const r = zawyaCashByMonth().find(x => x.month === month);
     if (r) sub = T(`${fmtYm(month)}: cash ${money(r.cash)} · expect ${money(r.expected)}`, `${fmtYm(month)}: نقدي ${money(r.cash)} · المتوقع ${money(r.expected)}`);
   } catch (e) { console.warn("zawya cash tile", e); }
-  return tile("🎬", T("Zawya Cash","نقدية زاوية"), sub, () => go("zawya_cash"));
+  return tile("🎬", T("Zawya Cash (archive)","نقدية Zawya (أرشيف)"), sub, () => go("zawya_cash"));
 }
 
 function zawyaCashReceivedPrompt(month, expected, onDone) {
@@ -11757,7 +11760,7 @@ function zawyaCashReceivedPrompt(month, expected, onDone) {
 
 routes.zawya_cash = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header(T("Zawya cash reconciliation","مطابقة نقدية زاوية"),
+  wrap.appendChild(header(T("Zawya cash reconciliation (archive)","مطابقة نقدية Zawya (أرشيف)"),
     T(`Cash from Zawya shift closes each month, minus ${Math.round(ZAWYA_VAT * 100)}% VAT and Zawya's ${Math.round(ZAWYA_VENUE_SHARE * 100)}% share = what Zawya should pay us. Log what they actually pay to see the gap.`,
       `النقدي من إغلاقات شيفت زاوية كل شهر، ناقص ضريبة ${Math.round(ZAWYA_VAT * 100)}% ونصيب زاوية ${Math.round(ZAWYA_VENUE_SHARE * 100)}% = ما يجب أن تدفعه زاوية. سجّل المبلغ المستلم فعلياً لمعرفة الفرق.`)));
   const body = el("div", {});
@@ -12438,7 +12441,7 @@ function normBranchKey(branch) {
 }
 function getStaffSalaryBranch(uid) {
   const cfg = (state.salary_config || {})[uid] || {};
-  if (["maadi", "zawya", "split"].includes(cfg.salary_branch)) return cfg.salary_branch;
+  if (["maadi", "ox", "zawya", "split"].includes(cfg.salary_branch)) return cfg.salary_branch;
   const usr = (state.users || []).find(x => x.id === uid || x.uid === uid);
   const brs = [...new Set((usr && Array.isArray(usr.branches) ? usr.branches : [])
     .map(b => normBranchKey(b)).filter(Boolean))];
@@ -12843,6 +12846,19 @@ function calcHBIncentive(person, month) {
     breakdown.push({ branch: "zawya", sales: adjustedSales, rawSales, target, met, bonus });
   }
 
+  if (branches.includes("ox")) {
+    // OX: same venue-share model as Zawya had (÷1.14 VAT, ×0.90 after the venue's 10%); reuses the
+    // "zawya_target" setting (key kept so saved config still applies), shown as "OX target" in the editor.
+    const target = cfg.ox_target || cfg.zawya_target || 130000;
+    const rawSales = state.sales.filter(s => canonBranch(s.branch) === "ox" && (s.date || "").slice(0,7) === month
+        && !isOxNotSold(s.category, s.item)).reduce((sum, s) => sum + (Number(s.net_sales) || 0), 0);
+    const adjustedSales = Math.round((rawSales / 1.14) * 0.90);
+    const met    = adjustedSales >= target;
+    const bonus  = met ? Math.round(adjustedSales * rate) : 0;
+    total += bonus;
+    breakdown.push({ branch: "ox", sales: adjustedSales, rawSales, target, met, bonus });
+  }
+
   total = Math.min(total, cap);
   return { total, breakdown };
 }
@@ -12991,6 +13007,7 @@ routes.overheads = function (u) {
   function drawFixedCard() {
     fixedWrap.innerHTML = "";
     const fixedCard = el("div", { class: "card", style: { marginTop: "12px" } });
+    const _fxCols = "1fr" + " 1fr".repeat(reportBranches().length);
     fixedCard.appendChild(el("div", { style: { display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"10px", gap:"8px", flexWrap:"wrap" } }, [
       el("div", { class: "muted small", style: { textTransform:"uppercase", letterSpacing:"1px", fontWeight:"700" } }, "Fixed monthly amounts"),
       canEditList
@@ -13001,19 +13018,18 @@ routes.overheads = function (u) {
     if (editList) fixedCard.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } },
       "Rename or remove line items below. Amounts still save on Enter / tap-away."));
     const hdr = el("div", { style: {
-      display:"grid", gridTemplateColumns: editList ? "1fr 1fr 1fr auto" : "1fr 1fr 1fr",
+      display:"grid", gridTemplateColumns: _fxCols + (editList ? " auto" : ""),
       gap:"8px", marginBottom:"10px", fontSize:"12px", fontWeight:"700",
       textTransform:"uppercase", letterSpacing:"0.8px", color:"var(--ink-dim)"
     }});
     hdr.appendChild(el("div", {}, "Category"));
-    hdr.appendChild(el("div", { style:{textAlign:"center"} }, "🏠 Maadi (EGP)"));
-    hdr.appendChild(el("div", { style:{textAlign:"center"} }, "🏢 Zawya (EGP)"));
+    for (const _hb of reportBranches()) hdr.appendChild(el("div", { style:{textAlign:"center"} }, (_hb === "maadi" ? "🏠 " : "🏢 ") + branchLabel(_hb) + " (EGP)"));
     if (editList) hdr.appendChild(el("div", {}, ""));
     fixedCard.appendChild(hdr);
 
     for (const cat of recurringOverheadCats()) {
       const row = el("div", { style: {
-        display:"grid", gridTemplateColumns: editList ? "1fr 1fr 1fr auto" : "1fr 1fr 1fr",
+        display:"grid", gridTemplateColumns: _fxCols + (editList ? " auto" : ""),
         gap:"8px", alignItems:"center", paddingBottom:"8px",
         borderBottom:"1px solid var(--border)", marginBottom:"8px"
       }});
@@ -13062,7 +13078,7 @@ routes.overheads = function (u) {
           // the user wants; the override was for a different intent).
           delete state.overhead_monthly_amts[monthlyKey(br, cat.value, month)];
           saveState({ immediate: true });
-          toast(`${cat.label} · ${br === "maadi" ? "Maadi" : "Zawya"}: saved ${money(amt)}`, "ok");
+          toast(`${cat.label} · ${branchLabel(br)}: saved ${money(amt)}`, "ok");
           draw();
         };
         inp.addEventListener("blur", doSave);
@@ -13113,12 +13129,12 @@ routes.overheads = function (u) {
     el("span", { class:"muted small", style:{fontWeight:"600"} }, "Month"),
     monthInput,
     el("button", { class:"btn secondary", style:{marginLeft:"auto"}, onClick:()=>addOverhead("marketing_fees","maadi") }, "➕ Maadi marketing/misc"),
-    el("button", { class:"btn secondary", onClick:()=>addOverhead("marketing_fees","zawya") }, "➕ Zawya marketing/misc"),
+    el("button", { class:"btn secondary", onClick:()=>addOverhead("marketing_fees","ox") }, "➕ OX marketing/misc"),
     ...(reportBranches().includes("ox") ? [
       el("button", { class:"btn secondary", onClick:()=>addOverhead("renovation","ox") }, "➕ OX renovation / transport / setup"),
     ] : []),
     el("div", { class:"muted small", style:{ flexBasis:"100%", marginTop:"2px" } },
-      "Tip: inside the ➕ form, set Branch to 🔀 Both branches to split one amount across Maadi + Zawya, and pick a “Paid from” to auto-record the petty-cash / bank payment."),
+      "Tip: inside the ➕ form, set Branch to 🔀 Both branches to split one amount across Maadi + OX, and pick a “Paid from” to auto-record the petty-cash / bank payment."),
   ]));
 
   // ─── Sub-tabs — each overheads area on its own tab instead of one long scroll ──
@@ -13308,7 +13324,7 @@ routes.overheads = function (u) {
     const staff = overheadStaff();
     const totalSalary = staff.reduce((s, p) => s + salaryCostForMonth(p.id, month), 0);
     const maadiTotal  = branchSalaryForMonth("maadi", month, staff);
-    const zawyaTotal  = branchSalaryForMonth("zawya", month, staff);
+    const zawyaTotal  = branchSalaryForMonth(secondBranchForMonth(month), month, staff);
     const canEdit = u.role === "owner";
 
     const card = el("div", { class:"card", style:{ marginTop:"12px" } });
@@ -13316,7 +13332,7 @@ routes.overheads = function (u) {
       `Staff salaries — branch allocation · ${month}`));
     card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"10px" } },
       canEdit
-        ? "Assign each person's salary to the branch they work at. Rotating staff are split 50/50 between Maadi and Zawya. Unset baristas fall back to their profile branch list."
+        ? "Assign each person's salary to the branch they work at. Rotating staff are split 50/50 between Maadi and OX. Unset baristas fall back to their profile branch list."
         : "How each person's salary is charged to a branch. Owner only — accountant can view but not change."));
 
     // Totals row
@@ -13335,8 +13351,8 @@ routes.overheads = function (u) {
       const sal = salaryCostForMonth(p.id, month);
       const paidTick = salaryPaidTickAmount(p.id, month) != null;
       const cur = getStaffSalaryBranch(p.id);
-      const isDerived = !["maadi","zawya","split"].includes(((state.salary_config || {})[p.id] || {}).salary_branch);
-      const curLabel = cur === "split" ? "Rotating · split 50/50" : cur === "maadi" ? "→ Maadi" : "→ Zawya";
+      const isDerived = !["maadi","ox","zawya","split"].includes(((state.salary_config || {})[p.id] || {}).salary_branch);
+      const curLabel = cur === "split" ? "Rotating · split 50/50" : cur === "maadi" ? "→ Maadi" : "→ " + branchLabel(cur);
 
       const row = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr auto", gap:"10px", alignItems:"center", marginBottom:"7px" } });
       row.appendChild(el("div", {}, [
@@ -13347,19 +13363,20 @@ routes.overheads = function (u) {
       if (canEdit) {
         const sel = el("select", { style:{ padding:"5px 8px", borderRadius:"6px", border:"1px solid var(--border,#ddd)", background:"var(--surface,#fff)", color:"var(--ink,#222)", fontSize:"12px" } }, [
           el("option", { value:"maadi", selected: cur === "maadi" ? "true" : null }, "🏠 Maadi"),
-          el("option", { value:"zawya", selected: cur === "zawya" ? "true" : null }, "🏢 Zawya"),
+          el("option", { value:"ox", selected: cur === "ox" ? "true" : null }, "🏢 OX"),
+          ...(cur === "zawya" ? [el("option", { value:"zawya", selected: "true" }, "🏢 Zawya (archive)")] : []),
           el("option", { value:"split", selected: cur === "split" ? "true" : null }, "🔄 Rotating"),
         ]);
         sel.addEventListener("change", () => {
           state.salary_config = state.salary_config || {};
           state.salary_config[p.id] = { ...(state.salary_config[p.id] || {}), salary_branch: sel.value };
           saveState();
-          toast(`${p.name}: salary → ${sel.value === "split" ? "rotating (50/50)" : sel.value === "maadi" ? "Maadi" : "Zawya"}`);
+          toast(`${p.name}: salary → ${sel.value === "split" ? "rotating (50/50)" : branchLabel(sel.value)}`);
           draw();
         });
         row.appendChild(sel);
       } else {
-        row.appendChild(el("div", { class:"muted small" }, cur === "split" ? "Rotating" : cur === "maadi" ? "Maadi" : "Zawya"));
+        row.appendChild(el("div", { class:"muted small" }, cur === "split" ? "Rotating" : cur === "maadi" ? "Maadi" : branchLabel(cur)));
       }
       card.appendChild(row);
     }
@@ -13369,7 +13386,7 @@ routes.overheads = function (u) {
   function drawTotalsCard() {
     const _staff = overheadStaff();
     const maadiSalary = branchSalaryForMonth("maadi", month, _staff);
-    const zawyaSalary = branchSalaryForMonth("zawya", month, _staff);
+    const zawyaSalary = branchSalaryForMonth(secondBranchForMonth(month), month, _staff);
 
     const card = el("div", { class:"card", style:{ marginTop:"12px" } });
     card.appendChild(el("div", { class:"muted small", style:{ textTransform:"uppercase", letterSpacing:"1px", marginBottom:"8px", fontWeight:"700" } },
@@ -13378,7 +13395,7 @@ routes.overheads = function (u) {
     const hdrRow = el("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", fontSize:"12px", color:"var(--ink-dim)", fontWeight:"700", marginBottom:"6px" } });
     hdrRow.appendChild(el("div", {}, "Line item"));
     hdrRow.appendChild(el("div", { style:{textAlign:"right"} }, "🏠 Maadi"));
-    hdrRow.appendChild(el("div", { style:{textAlign:"right"} }, "🏢 Zawya"));
+    hdrRow.appendChild(el("div", { style:{textAlign:"right"} }, "🏢 " + branchLabel(secondBranchForMonth(month))));
     card.appendChild(hdrRow);
 
     card.appendChild(el("div", { class:"muted small", style:{ marginBottom:"8px", fontSize:"12px" } },
@@ -13409,7 +13426,7 @@ routes.overheads = function (u) {
 
     // Recurring bills breakdown
     for (const cat of recurringOverheadCats()) {
-      const m = billCell("maadi", cat), z = billCell("zawya", cat);
+      const m = billCell("maadi", cat), z = billCell(secondBranchForMonth(month), cat);
       maadiBills += m.paid; zawyaBills += z.paid;
       if (!m.isPaid) maadiOutstanding += m.ref;
       if (!z.isPaid) zawyaOutstanding += z.ref;
@@ -13420,9 +13437,9 @@ routes.overheads = function (u) {
       ]));
     }
     // Variable — logged actuals, always counted
-    const varRowsMonth = state.overheads.filter(o => (o.branch==="maadi"||o.branch==="zawya") && ((o.month||(o.date||"").slice(0,7))===month) && !isRecurringOverheadCat(o.category));
+    const varRowsMonth = state.overheads.filter(o => (o.branch==="maadi"||o.branch===secondBranchForMonth(month)) && ((o.month||(o.date||"").slice(0,7))===month) && !isRecurringOverheadCat(o.category));
     const varMaadi = varRowsMonth.filter(o => o.branch==="maadi").reduce((s,o)=>s+(Number(o.amount)||0),0);
-    const varZawya = varRowsMonth.filter(o => o.branch==="zawya").reduce((s,o)=>s+(Number(o.amount)||0),0);
+    const varZawya = varRowsMonth.filter(o => o.branch===secondBranchForMonth(month)).reduce((s,o)=>s+(Number(o.amount)||0),0);
     if (varMaadi || varZawya) {
       // Name the row for what's in it: "Marketing fees" when every entry is marketing,
       // else the neutral "Variable" (same rule as the section header above).
@@ -13544,7 +13561,7 @@ routes.overheads = function (u) {
 
   function editMonthlyAmount(br, cat, current, mk) {
     openPrompt({
-      title: `${cat.label} (${br === "maadi" ? "Maadi" : "Zawya"}) — override for ${month}`,
+      title: `${cat.label} (${branchLabel(br)}) — override for ${month}`,
       fields: [
         { key: "amount", label: `Amount for ${month} only (EGP)`, type: "number", value: current != null ? current : getPresetAmtForMonth(presetKey(br, cat.value), month) },
         { key: "clear",  label: "Clear override (use default amount)", type: "select", options: [{ label: "No — keep this amount", value: "no" }, { label: "Yes — revert to default", value: "yes" }], value: "no" },
@@ -13581,7 +13598,7 @@ routes.overheads = function (u) {
       return;
     }
     openPrompt({
-      title: `Mark paid — ${cat.label} (${br === "maadi" ? "Maadi" : "Zawya"})`,
+      title: `Mark paid — ${cat.label} (${branchLabel(br)})`,
       fields: [
         { key: "amount",  label: "Amount paid (EGP)", type: "number", value: defaultAmount },
         { key: "paid_on", label: "Paid on (date)", type: "date", value: new Date().toISOString().slice(0,10) },
@@ -13666,7 +13683,7 @@ routes.overheads = function (u) {
     const branchOptions = [
       { label: "🏠 Maadi", value: "maadi" },
       ...(reportBranches().includes("ox") ? [{ label: "🏢 OX", value: "ox" }] : []),
-      { label: "🏢 Zawya", value: "zawya" },
+      { label: "🏢 OX", value: "ox" },
       { label: "🔀 Both branches — enter one amount, auto-split", value: "both" },
     ];
     const paidFromOptions = [
@@ -13684,7 +13701,7 @@ routes.overheads = function (u) {
         { key: "category", label: "Category", type: "select", options: catOptions, value: defaultCat || "marketing_fees" },
         { key: "label",    label: "Describe (required for Miscellaneous)", type: "text", value: "" },
         { key: "amount",   label: "Amount (EGP) — total; if 'Both', it's split across the two branches", type: "number", value: 0 },
-        { key: "split_zawya_pct", label: "'Both' only — Zawya's share % (Maadi gets the rest)", type: "number", value: 50 },
+        { key: "split_zawya_pct", label: "'Both' only — OX's share % (Maadi gets the rest)", type: "number", value: 50 },
         { key: "paid_from", label: "Paid from — draws the matching petty cash / bank record automatically", type: "select", options: paidFromOptions, value: "" },
         { key: "date",     label: "Date", type: "date", value: new Date().toISOString().slice(0,10) },
         { key: "note",     label: "Note", type: "text", value: "" },
@@ -13749,12 +13766,12 @@ routes.overheads = function (u) {
           const zAmt = Math.round(amt * zPct / 100);
           const mAmt = amt - zAmt;
           const link = uuid();
-          const zEntry = mkEntry("zawya", zAmt, { link_id: link });
+          const zEntry = mkEntry("ox", zAmt, { link_id: link });
           const mEntry = mkEntry("maadi", mAmt, { link_id: link });
           state.overheads.push(zEntry, mEntry);
           mkLedger(zEntry); mkLedger(mEntry);
           saveState();
-          toast(`Split · Zawya ${money(zAmt)} · Maadi ${money(mAmt)}`);
+          toast(`Split · OX ${money(zAmt)} · Maadi ${money(mAmt)}`);
           draw();
           return;
         }
@@ -13830,7 +13847,7 @@ routes.overhead_log_new = function (u) {
   } else {
     for (const o of mine) {
       const brLabel = o.branch === "maadi" ? T("🏠 Maadi","🏠 المعادي")
-                    : o.branch === "zawya" ? T("🏢 Zawya","🏢 زاوية") : o.branch;
+                    : o.branch === "zawya" ? T("🏢 Zawya (archive)","🏢 Zawya (أرشيف)") : o.branch === "ox" ? T("🏢 OX","🏢 OX") : o.branch;
       list.appendChild(el("div", { class: "kv" }, [
         el("div", { class: "k" }, [
           el("div", {}, `${overheadCatLabel(o.category)}${o.label ? " — " + o.label : ""}`),
@@ -13862,7 +13879,7 @@ routes.overhead_log_new = function (u) {
       .map(c => ({ label: c.label, value: c.value }));
     const branchOptions = [
       ...(myBranches.includes("maadi") ? [{ label: "🏠 Maadi", value: "maadi" }] : []),
-      ...(myBranches.includes("zawya") ? [{ label: "🏢 Zawya", value: "zawya" }] : []),
+      ...((myBranches.includes("ox") || myBranches.includes("zawya")) ? [{ label: "🏢 OX", value: "ox" }] : []),
       ...(myBranches.includes("ox") ? [{ label: "🛍️ OX", value: "ox" }] : []),
       ...(myBranches.length > 1
         ? [{ label: "🔀 Both branches — enter one amount, auto-split", value: "both" }] : []),
@@ -13881,7 +13898,7 @@ routes.overhead_log_new = function (u) {
         { key: "category", label: T("Category","التصنيف"), type: "select", options: catOptions, value: "marketing_fees" },
         { key: "label",    label: T("Describe (required for Miscellaneous)","الوصف (مطلوب للنثريات)"), type: "text", value: "" },
         { key: "amount",   label: T("Amount (EGP) — total; if 'Both', it's split across the two branches","المبلغ (ج.م) — الإجمالي؛ لو 'الاثنين' يتقسم على الفرعين"), type: "number", value: 0 },
-        { key: "split_zawya_pct", label: T("'Both' only — Zawya's share % (Maadi gets the rest)","'الاثنين' فقط — نسبة زاوية % (الباقي للمعادي)"), type: "number", value: 50 },
+        { key: "split_zawya_pct", label: T("'Both' only — OX's share % (Maadi gets the rest)","'الاثنين' فقط — نسبة OX % (الباقي للمعادي)"), type: "number", value: 50 },
         { key: "paid_from", label: T("Paid from — draws the matching petty cash record automatically","مدفوع من — يسجّل حركة العهدة تلقائياً"), type: "select", options: paidFromOptions, value: "" },
         { key: "date",     label: T("Date","التاريخ"), type: "date", value: new Date().toISOString().slice(0, 10) },
         { key: "note",     label: T("Note","ملاحظة"), type: "text", value: "" },
@@ -13940,12 +13957,12 @@ routes.overhead_log_new = function (u) {
           const zAmt = Math.round(amt * zPct / 100);
           const mAmt = amt - zAmt;
           const link = uuid();
-          const zEntry = mkEntry("zawya", zAmt, { link_id: link });
+          const zEntry = mkEntry("ox", zAmt, { link_id: link });
           const mEntry = mkEntry("maadi", mAmt, { link_id: link });
           state.overheads.push(zEntry, mEntry);
           mkLedger(zEntry); mkLedger(mEntry);
           saveState();
-          toast(T(`Split · Zawya ${money(zAmt)} · Maadi ${money(mAmt)}`, `تقسيم · زاوية ${money(zAmt)} · المعادي ${money(mAmt)}`));
+          toast(T(`Split · OX ${money(zAmt)} · Maadi ${money(mAmt)}`, `تقسيم · OX ${money(zAmt)} · المعادي ${money(mAmt)}`));
           go("overhead_log_new");
           return;
         }
@@ -14710,8 +14727,8 @@ routes.bank = function (u) {
 
   // ── Petty Cash Summary (completely separate from bank) ──────
   const pcMaadi   = pettyCashBalance("maadi");
-  const pcZawya   = pettyCashBalance("zawya");
-  const pcCombined = pcMaadi + pcZawya;
+  const pcZawya   = pettyCashBalance("ox");
+  const pcCombined = pcMaadi + pcZawya + pettyCashBalance("zawya"); // + leftover archived-Zawya float
   const pcCard = el("div", { class: "card", style: { borderColor: "var(--accent)", marginBottom: "16px" } });
   pcCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" } }, "💵 Petty Cash — both branches"));
   pcCard.appendChild(el("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "flex-end" } }, [
@@ -14721,7 +14738,7 @@ routes.bank = function (u) {
     ]),
     el("div", { style: { color: "var(--border)", fontSize: "20px", paddingBottom: "2px" } }, "+"),
     el("div", {}, [
-      el("div", { class: "muted small" }, "Zawya"),
+      el("div", { class: "muted small" }, "OX"),
       el("div", { style: { fontSize: "22px", fontWeight: "700", color: pcZawya < 0 ? "var(--bad)" : "var(--ink)" } }, money(pcZawya)),
     ]),
     el("div", { style: { color: "var(--border)", fontSize: "20px", paddingBottom: "2px" } }, "="),
@@ -16230,7 +16247,7 @@ function fmtHourLabel(h) {
 
 routes.roster = function (u) {
   const wrap = el("div", {});
-  wrap.appendChild(header(T("Weekly schedule","الجدول الأسبوعي"), T("Morning & night shifts for Maadi, Zawya (until 24 Nov), OX (from 24 Nov: morning 9–6, 2 baristas) and Coffee Beats Events.","شيفتات الصباح والمساء لمعادي وزاوية (حتى 24 نوفمبر) وOX (من 24 نوفمبر: صباح 9–6، بريستا اثنان) وفعاليات Coffee Beats.")));
+  wrap.appendChild(header(T("Weekly schedule","الجدول الأسبوعي"), T("Morning & night shifts for Maadi, OX (from 24 Nov: morning 9–6, 2 baristas) and Coffee Beats Events.","شيفتات الصباح والمساء لمعادي وOX (من 24 نوفمبر: صباح 9–6، بريستا اثنان) وفعاليات Coffee Beats.")));
 
   state.rosters = state.rosters || [];
   const _rosterMonth = new Date().toISOString().slice(0, 7);
@@ -16491,7 +16508,7 @@ routes.roster = function (u) {
   sdCard.appendChild(sdHeaderRow);
 
   sdCard.appendChild(el("div", { class: "muted small", style: { marginTop: "4px", marginBottom: "8px" } },
-    "Special screenings at Zawya, events in Maadi, or any date that affects demand. These appear as badges on day cards in the schedule below."));
+    "Special screenings, events in Maadi, or any date that affects demand. These appear as badges on day cards in the schedule below."));
 
   const sdBody = el("div", { style: { display: sdExpanded ? "block" : "none" } });
   sdToggleBtn.addEventListener("click", () => {
@@ -16574,10 +16591,10 @@ routes.roster = function (u) {
       const addForm = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "flex-end" } });
       const dateInp  = el("input",    { type: "date",   placeholder: "Date",   style: { maxWidth: "150px" } });
       const branchSel = el("select",  { style: { maxWidth: "150px" } });
-      for (const [v, l] of [["all","All branches"],["maadi","Maadi"],["zawya","Zawya"],["events","Coffee Beats Events"]]) {
+      for (const [v, l] of [["all","All branches"],["maadi","Maadi"],["ox","OX"],["zawya","Zawya (archive)"],["events","Coffee Beats Events"]]) {
         branchSel.appendChild(el("option", { value: v }, l));
       }
-      const titleInp = el("input",    { type: "text",   placeholder: "Title (e.g. Zawya Film Night)", style: { minWidth: "200px", flex: "1" } });
+      const titleInp = el("input",    { type: "text",   placeholder: "Title (e.g. OX Film Night)", style: { minWidth: "200px", flex: "1" } });
       const noteInp  = el("input",    { type: "text",   placeholder: "Note (optional)", style: { minWidth: "160px", flex: "1" } });
       const addBtn   = el("button",   { class: "btn", style: { flexShrink: "0" } }, "＋ Add");
       addBtn.addEventListener("click", () => {
@@ -16788,7 +16805,7 @@ routes.roster = function (u) {
           branchLabel = `🎪 ${calEv.summary}`;
           shiftsForBranch = [calShift];
         } else {
-          branchLabel = branch === "ox" ? "OX" : T(branch[0].toUpperCase() + branch.slice(1), branch === "maadi" ? "معادي" : "زاوية");
+          branchLabel = branch === "ox" ? "OX" : T(branch[0].toUpperCase() + branch.slice(1), branchLabelAr(branch));
           shiftsForBranch = branch === "ox" ? ["morning"] : ROSTER_SHIFTS;
         }
         const closedRec = branch === "events" ? null : (state.branch_closures || []).find(c => c.date === dayDateStr && c.branch === branch);
@@ -16906,7 +16923,7 @@ routes.roster = function (u) {
               const other = rosterConflict(o.value, branch, shift, day, slot);
               if (other && !o.selected) {
                 o.disabled = true;
-                o.textContent += T(` — already at ${other[0].toUpperCase() + other.slice(1)}`, ` — معيّن في ${other === "maadi" ? "معادي" : other === "zawya" ? "زاوية" : other}`);
+                o.textContent += T(` — already at ${other[0].toUpperCase() + other.slice(1)}`, ` — معيّن في ${branchLabelAr(other)}`);
               }
             }
             // If assigned person is now on leave, add them as a disabled option with warning
@@ -16924,7 +16941,7 @@ routes.roster = function (u) {
               }
               const _clash = rosterConflict(sel.value, branch, shift, day, slot);
               if (_clash) {
-                toast(T(`Already rostered at ${_clash[0].toUpperCase() + _clash.slice(1)} on this day and shift — cannot be in two branches at once.`, `معيّن بالفعل في فرع آخر (${_clash === "maadi" ? "معادي" : _clash === "zawya" ? "زاوية" : _clash}) في نفس اليوم والشيفت — لا يمكن التواجد في فرعين.`), "error");
+                toast(T(`Already rostered at ${_clash[0].toUpperCase() + _clash.slice(1)} on this day and shift — cannot be in two branches at once.`, `معيّن بالفعل في فرع آخر (${branchLabelAr(_clash)}) في نفس اليوم والشيفت — لا يمكن التواجد في فرعين.`), "error");
                 sel.value = entry ? entry.user_id : "";
                 return;
               }
@@ -17365,8 +17382,8 @@ routes.users = function (u) {
 
   function renderStaffRow(usr) {
     const branchLabel = (usr.branches && usr.branches.length)
-      ? usr.branches.join(", ")
-      : (["barista","head_barista"].includes(usr.role) ? "rotates (Maadi + Zawya)" : "\u2014");
+      ? usr.branches.map(branchLabel).join(", ")
+      : (["barista","head_barista"].includes(usr.role) ? "rotates (Maadi + OX)" : "\u2014");
     const extra = (usr.extra_access || []).length;
     const deny  = (usr.deny_access  || []).length;
     const rightsNote = (extra || deny) ? ` \xb7 +${extra}/-${deny} custom rights` : "";
@@ -17570,7 +17587,7 @@ routes.users = function (u) {
         return { wrap: lEl, cb };
       };
       const mP = mkCb("Maadi", cur.includes("maadi"));
-      const zP = mkCb("Zawya", cur.includes("zawya"));
+      const zP = mkCb("Zawya (archive)", cur.includes("zawya"));
       const oP = mkCb("OX", cur.includes("ox"));
       cbMaadi = mP.cb; cbZawya = zP.cb; cbOx = oP.cb;
       row.appendChild(mP.wrap); row.appendChild(zP.wrap); row.appendChild(oP.wrap);
@@ -18084,9 +18101,9 @@ routes.dashboard = function (u, params) {
   }
 
   const trendCard = el("div", { class: "card", style: { marginTop: "10px" } });
-  trendCard.appendChild(el("h2", {}, "Net profit % by month — Maadi, Zawya & combined"));
+  trendCard.appendChild(el("h2", {}, "Net profit % by month — Maadi, OX & combined"));
   const trendMonths = [...new Set([...salesIndex.keys()].map(k => k.slice(k.indexOf("|")+1)))]
-    .filter(m => salesIndex.has("maadi|"+m) || salesIndex.has("zawya|"+m))
+    .filter(m => salesIndex.has("maadi|"+m) || salesIndex.has("ox|"+m) || salesIndex.has("zawya|"+m))
     .sort().reverse();
   const combinedNetByMonth = new Map(); // month -> book net profit, reused by the cash reality-check card below
   if (!trendMonths.length) {
@@ -18180,7 +18197,7 @@ routes.dashboard = function (u, params) {
         el("tr", {}, [ el("td", {}, "Total revenue"), moneyCell(mGross), moneyCell(zGross), moneyCell(cGross || null) ]),
         el("tr", {}, [ el("td", { class: "muted" }, "Revenue after 14% VAT"), moneyCell(mAfterVat), moneyCell(zAfterVat), moneyCell(cAfterVat || null) ]),
         el("tr", {}, [ el("td", {}, "COGS % (on net price)"), cogsPctCell(maadiPnl ? maadiPnl.cogsPct : null), cogsPctCell(zawyaPnl ? zawyaPnl.cogsPct : null), cogsPctCell(cCogsPct) ]),
-        el("tr", {}, [ el("td", { class: "muted" }, "Venue revenue share — Zawya 10%"), dash(), negCell(zVenue), negCell(cVenue || null) ]),
+        el("tr", {}, [ el("td", { class: "muted" }, "Venue revenue share — OX 10%"), dash(), negCell(zVenue), negCell(cVenue || null) ]),
         el("tr", {}, [ el("td", {}, "EBITDA margin %"), pctCell(mMargin), pctCell(zMargin), pctCell(cOpMargin) ]),
         el("tr", {}, [ el("td", {}, "Operating margin %"), pctCell(mMargin), pctCell(zMargin), pctCell(cOpMargin) ]),
         el("tr", {}, [ el("td", { class: "muted" }, "Loan interest"), dash(), dash(), negCell(loan) ]),
@@ -18229,7 +18246,7 @@ routes.dashboard = function (u, params) {
       let yHasMaadi = false, yHasZawya = false, yLoan = 0;
       for (const m of monthsInYear) {
         const maadiPnl = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
-        const zawyaPnl = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
+        const zawyaPnl = salesIndex.has("ox|"+m) ? computeMonthPnL("ox", m) : salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
         const loan = loanForMonth(m);
         yLoan += loan;
         combinedNetByMonth.set(m, (maadiPnl ? maadiPnl.netProfit : 0) + (zawyaPnl ? zawyaPnl.netProfit : 0) - loan);
@@ -18249,11 +18266,11 @@ routes.dashboard = function (u, params) {
       pushBlock(`${y} total (Jan–Dec)`, yHasMaadi ? yMaadi : null, yHasZawya ? yZawya : null, { total: true, loan: yLoan });
     }
     trendCard.appendChild(el("table", {}, [
-      el("thead", {}, el("tr", {}, ["", "Maadi", "Zawya", "Combined"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
+      el("thead", {}, el("tr", {}, ["", "Maadi", "OX", "Combined"].map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
       el("tbody", {}, rows),
     ]));
     trendCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      `Each month is a mini P&L. Total revenue is POS net sales before any deduction; "Revenue after 14% VAT" divides it by 1.14 (both branches) — that is the single revenue base every margin below is measured against, so Maadi and Zawya compare directly to each other and to industry benchmarks. COGS % is item recipe cost ÷ item menu price (only items with both known) — a VAT-neutral ratio. "Venue revenue share — Zawya 10%" is Zawya's location cost: the venue takes 10% of its after-VAT sales. It's a real, already-paid operating expense (not a cut to the revenue line) and is inside every Zawya margin and its net profit below. EBITDA / operating / net margin per branch are (after-VAT revenue − COGS − paid overheads − per-barista salary share − Zawya venue share) ÷ after-VAT revenue and show the same figure (no depreciation, interest or profit tax tracked per branch). "Maadi profit-share owed (10%, never paid)" is a memo only — Maadi's deal is 10% of profit, but it has never been invoiced or paid because monthly profit was never formally recorded, so it does NOT reduce Maadi's net profit here; it just shows what would be owed. The company loan (borrowed 600K, repaying 750K in 12 quarterly payments) hits profit only as interest — 12,500/quarter ≈ 4,167/month — and only for quarters ticked paid in Monthly Overheads → Company loan. It's charged only to Combined, so Combined's net margin sits below its operating margin while the branches' don't. The principal half of each payment (50,000/quarter) never touches the P&L. Combined COGS % is cost-weighted; combined margin is Σ profit ÷ Σ after-VAT revenue — never an average of the two branch %s. Year total blocks accumulate Jan → Dec. Salaries are allocated per barista to the branch they work at (rotating staff split 50/50) — Monthly Overheads → Staff salaries.`));
+      `Each month is a mini P&L. Total revenue is POS net sales before any deduction; "Revenue after 14% VAT" divides it by 1.14 (both branches) — that is the single revenue base every margin below is measured against, so Maadi and OX compare directly to each other and to industry benchmarks. COGS % is item recipe cost ÷ item menu price (only items with both known) — a VAT-neutral ratio. "Venue revenue share — OX 10%" is OX's location cost: the venue takes 10% of its after-VAT sales. It's a real, already-paid operating expense (not a cut to the revenue line) and is inside every OX margin and its net profit below. EBITDA / operating / net margin per branch are (after-VAT revenue − COGS − paid overheads − per-barista salary share − OX venue share) ÷ after-VAT revenue and show the same figure (no depreciation, interest or profit tax tracked per branch). "Maadi profit-share owed (10%, never paid)" is a memo only — Maadi's deal is 10% of profit, but it has never been invoiced or paid because monthly profit was never formally recorded, so it does NOT reduce Maadi's net profit here; it just shows what would be owed. The company loan (borrowed 600K, repaying 750K in 12 quarterly payments) hits profit only as interest — 12,500/quarter ≈ 4,167/month — and only for quarters ticked paid in Monthly Overheads → Company loan. It's charged only to Combined, so Combined's net margin sits below its operating margin while the branches' don't. The principal half of each payment (50,000/quarter) never touches the P&L. Combined COGS % is cost-weighted; combined margin is Σ profit ÷ Σ after-VAT revenue — never an average of the two branch %s. Year total blocks accumulate Jan → Dec. Salaries are allocated per barista to the branch they work at (rotating staff split 50/50) — Monthly Overheads → Staff salaries.`));
   }
   secPnl.appendChild(trendCard);
 
@@ -18277,7 +18294,7 @@ routes.dashboard = function (u, params) {
       let aGross = 0, aMR = 0, aMN = 0, aZR = 0, aZN = 0, aLoan = 0;
       for (const m of monthsInYear) {
         const mp = salesIndex.has("maadi|"+m) ? computeMonthPnL("maadi", m) : null;
-        const zp = salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
+        const zp = salesIndex.has("ox|"+m) ? computeMonthPnL("ox", m) : salesIndex.has("zawya|"+m) ? computeMonthPnL("zawya", m) : null;
         const loan = loanForMonthS(m);
         const gross = (mp ? mp.grossRevenue : 0) + (zp ? zp.grossRevenue : 0);
         const mMar = (mp && mp.revenue) ? (mp.netProfit / mp.revenue) * 100 : null;
@@ -18305,12 +18322,12 @@ routes.dashboard = function (u, params) {
       ]));
     }
     summaryCard.appendChild(el("table", {}, [
-      el("thead", {}, el("tr", {}, ["Month", "Gross rev", "Maadi op%", "Maadi net%", "Zawya op%", "Zawya net%", "Comb op%", "Comb net%"]
+      el("thead", {}, el("tr", {}, ["Month", "Gross rev", "Maadi op%", "Maadi net%", "OX op%", "OX net%", "Comb op%", "Comb net%"]
         .map((h,i) => el("th", i > 0 ? { class: "num" } : {}, h)))),
       el("tbody", {}, sRows),
     ]));
     summaryCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-      `Gross rev is total POS net sales before any deduction (VAT, COGS, overheads, Zawya's venue share). "op%" is operating margin — before loan interest; "net%" is after it. The company loan (600K borrowed, 750K repaid in 12 quarterly payments) hits profit only as interest: 12,500/quarter ≈ 4,167/month, and only for quarters ticked paid in Monthly Overheads → Company loan. It's charged only to Combined — so each branch's op% and net% are identical and only the Combined pair differs. All margins are measured against after-VAT revenue (gross ÷ 1.14) — the same base for both branches. Zawya's 10% venue share is treated as an operating cost, so it's already inside Zawya's op% / net% and its net profit. Maadi's 10%-of-profit fee has never been paid or recorded and is not deducted here (see the memo line in the table above). Year total rows accumulate Jan → Dec, revenue-weighted.`));
+      `Gross rev is total POS net sales before any deduction (VAT, COGS, overheads, OX's venue share). "op%" is operating margin — before loan interest; "net%" is after it. The company loan (600K borrowed, 750K repaid in 12 quarterly payments) hits profit only as interest: 12,500/quarter ≈ 4,167/month, and only for quarters ticked paid in Monthly Overheads → Company loan. It's charged only to Combined — so each branch's op% and net% are identical and only the Combined pair differs. All margins are measured against after-VAT revenue (gross ÷ 1.14) — the same base for both branches. OX's 10% venue share is treated as an operating cost, so it's already inside OX's op% / net% and its net profit. Maadi's 10%-of-profit fee has never been paid or recorded and is not deducted here (see the memo line in the table above). Year total rows accumulate Jan → Dec, revenue-weighted.`));
   }
   secPnl.appendChild(summaryCard);
 
@@ -18393,7 +18410,7 @@ routes.dashboard = function (u, params) {
   let monthFrom = (params && params.month) || _defaultMonth;
   let monthTo   = (params && params.month) || _defaultMonth;
 
-  const nav = makeBranchPicker(["maadi","zawya","events"], () => branch, b => { branch = b; eventCard.style.display = b === "events" ? "" : "none"; draw(); });
+  const nav = makeBranchPicker(["maadi","ox","zawya","events"], () => branch, b => { branch = b; eventCard.style.display = b === "events" ? "" : "none"; draw(); });
   secBranch.appendChild(nav);
 
   // ---- Events config card (only visible when Events tab is active) ----
@@ -18840,8 +18857,8 @@ routes.dashboard = function (u, params) {
         ]),
       ]),
       el("div", { class: "muted small", style: { marginTop: "8px" } },
-        branch === "zawya"
-          ? `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)}${depreciation ? ` − Equipment ${money(depreciation)}` : ""} − Zawya venue share ${money(venueShare)} = Net ${money(netProfit)}. CB keeps ${money(revenueAfterShares)} of Zawya's after-VAT sales; the 10% venue cut is treated as an operating cost, not a reduction to revenue, so it's inside this net and every margin.`
+        hasVenueShare(branch)
+          ? `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)}${depreciation ? ` − Equipment ${money(depreciation)}` : ""} − OX venue share ${money(venueShare)} = Net ${money(netProfit)}. CB keeps ${money(revenueAfterShares)} of OX's after-VAT sales; the 10% venue cut is treated as an operating cost, not a reduction to revenue, so it's inside this net and every margin.`
           : `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)}${depreciation ? ` − Equipment ${money(depreciation)}` : ""} = Net ${money(netProfit)}. Maadi's deal is 10% of profit (${money(maadiProfitShareOwed)} for this period) — never invoiced or paid, so it is not deducted here.`),
     ]));
 
@@ -18884,7 +18901,7 @@ routes.dashboard = function (u, params) {
       if (venueShare > 0) {
         card.appendChild(el("div", { class: "kv" }, [
           el("div", { class: "k" }, [
-            el("span", {}, "Zawya venue revenue share — 10%"),
+            el("span", {}, "OX venue revenue share — 10%"),
             el("div", { class: "muted small" }, `10% of after-VAT sales ${money(revenueAfterVat)} · location cost`),
           ]),
           el("div", { class: "v" }, money(venueShare)),
@@ -19047,7 +19064,7 @@ routes.settings = function (u) {
   const pcb = el("div", { class: "card", style: { marginTop: "14px" } });
   pcb.appendChild(el("h2", {}, "Petty cash monthly budget & split"));
   pcb.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Estimated monthly petty cash across both branches, and the Zawya share used when the owner does an auto-split top-up. Petty cash starts each month at zero — any leftover is banked first from the Petty Cash screen."));
+    "Estimated monthly petty cash across both branches, and the OX share used when the owner does an auto-split top-up. Petty cash starts each month at zero — any leftover is banked first from the Petty Cash screen."));
   const pcbBudgetIn = el("input", { type: "number", value: pettyCashBudget(), style: { maxWidth: "160px" } });
   const pcbZawyaIn  = el("input", { type: "number", min: "0", max: "100", value: pettyCashZawyaPct(), style: { maxWidth: "90px" } });
   const pcbPreview  = el("div", { class: "muted small", style: { marginTop: "8px" } });
@@ -19055,7 +19072,7 @@ routes.settings = function (u) {
     const b = Math.max(0, Number(pcbBudgetIn.value) || 0);
     const z = Math.min(100, Math.max(0, Number(pcbZawyaIn.value) || 0));
     const zAmt = Math.round(b * z / 100);
-    pcbPreview.textContent = `Zawya ${money(zAmt)} (${z}%) · Maadi ${money(b - zAmt)} (${100 - z}%)`;
+    pcbPreview.textContent = `OX ${money(zAmt)} (${z}%) · Maadi ${money(b - zAmt)} (${100 - z}%)`;
   }
   pcbBudgetIn.addEventListener("input", pcbDraw);
   pcbZawyaIn.addEventListener("input", pcbDraw);
@@ -19065,7 +19082,7 @@ routes.settings = function (u) {
     el("div", { class: "v" }, pcbBudgetIn),
   ]));
   pcb.appendChild(el("div", { class: "kv" }, [
-    el("div", { class: "k" }, "Zawya share (%) — Maadi gets the rest"),
+    el("div", { class: "k" }, "OX share (%) — Maadi gets the rest"),
     el("div", { class: "v" }, pcbZawyaIn),
   ]));
   pcb.appendChild(pcbPreview);
@@ -19309,7 +19326,7 @@ routes.settings = function (u) {
       arRow.appendChild(arName);
       arRow.appendChild(arBtn);
       info.appendChild(arRow);
-      info.appendChild(el("div", { class: "muted small" }, `${roleLabel[s.role] || s.role}${s.branches?.length ? " · " + s.branches.join(", ") : ""}${!s.active ? " · inactive" : ""}`));
+      info.appendChild(el("div", { class: "muted small" }, `${roleLabel[s.role] || s.role}${s.branches?.length ? " · " + s.branches.map(branchLabel).join(", ") : ""}${!s.active ? " · inactive" : ""}`));
       row.appendChild(info);
 
       if (s.role === "barista" || s.role === "head_barista") {
@@ -19455,7 +19472,7 @@ routes.settings = function (u) {
     const cbMaadi = el("input", { type: "checkbox", id: "cb_maadi_new", checked: "true" });
     const cbZawya = el("input", { type: "checkbox", id: "cb_zawya_new" });
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbMaadi, document.createTextNode(" Maadi")]));
-    branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbZawya, document.createTextNode(" Zawya")]));
+    branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbZawya, document.createTextNode(" Zawya (archive)")]));
     const cbOxNew = el("input", { type: "checkbox", id: "cb_ox_new" });
     branchCheckboxes.appendChild(el("label", { style: { display: "flex", alignItems: "center", gap: "4px", margin: "0" } }, [cbOxNew, document.createTextNode(" OX")]));
     const dateLabel = el("div", { style: { fontSize: "12px", color: "var(--ink-dim)", marginBottom: "2px" } }, "Start date");
@@ -22598,7 +22615,7 @@ routes.handbook = function (u) {
       content: [
         { type: "para", text: "The shift close is completed in the Operations App at the end of every shift by the barista closing the branch. It is the end-of-shift money and handover report — never leave without submitting it." },
         { type: "subheader", text: "What you enter" },
-        { type: "bullets", items: ["<strong>Date</strong> and <strong>closing barista</strong> (your name).", "<strong>Money counted.</strong> <strong>Maadi</strong>: split by method — cash in the till, InstaPay, card/visa, Talabat (credit) and Talabat (cash). <strong>Zawya</strong>: cash only — the screen hides the other fields, because card, InstaPay and Talabat at Zawya are settled by the cinema, not Coffee Beats.", "<strong>Barista allowance drinks</strong> — any staff drinks taken during the shift, one row per drink (who + what).", "<strong>Hospitality / cinema free drinks</strong> — count and a short note. At Zawya, enter these per screening.", "<strong>Management drinks</strong> — comps given to Haïdi, Luke or Youssef.", "<strong>Extra money notes</strong> — explain any surplus or shortfall vs expected.", "<strong>Notes</strong> — waste, breakages, handover info, anything unusual."] },
+        { type: "bullets", items: ["<strong>Date</strong> and <strong>closing barista</strong> (your name).", "<strong>Money counted.</strong> <strong>Maadi</strong>: split by method — cash in the till, InstaPay, card/visa, Talabat (credit) and Talabat (cash). <strong>OX</strong>: same fields as Maadi. (The archived Zawya branch was cash only.)", "<strong>Barista allowance drinks</strong> — any staff drinks taken during the shift, one row per drink (who + what).", "<strong>Hospitality / cinema free drinks</strong> — count and a short note.", "<strong>Management drinks</strong> — comps given to Haïdi, Luke or Youssef.", "<strong>Extra money notes</strong> — explain any surplus or shortfall vs expected.", "<strong>Notes</strong> — waste, breakages, handover info, anything unusual."] },
         { type: "subheader", text: "Mandatory Photo Rule" },
         { type: "para", text: "If one or more drinks are added anywhere in the shift close (allowance, hospitality or management), at least one photo must be attached before you can submit. Multiple photos are allowed and encouraged." },
         { type: "subheader", text: "Submitting" },
@@ -22607,7 +22624,7 @@ routes.handbook = function (u) {
       ar_content: [
         { type: "para", text: "يُكمِل البريستا المُغلِق للفرع شاشة إغلاق الشيفت في تطبيق العمليات في نهاية كل شيفت. هي تقرير نهاية الشيفت للأموال والتسليم — لا تغادر أبداً دون تقديمها." },
         { type: "subheader", text: "ما الذي تُدخله" },
-        { type: "bullets", items: ["<strong>التاريخ</strong> و<strong>البريستا المُغلِق</strong> (اسمك).", "<strong>الأموال المعدودة.</strong> <strong>المعادي</strong>: مقسّمة حسب الطريقة — كاش في الدرج، إنستاباي، بطاقة/فيزا، طلبات (آجل) وطلبات (كاش). <strong>زاوية</strong>: كاش فقط — تُخفي الشاشة باقي الحقول، لأن البطاقة وإنستاباي وطلبات في زاوية تسوّيها السينما وليست Coffee Beats.", "<strong>مشروبات بدل البريستا</strong> — أي مشروبات موظفين أُخذت خلال الشيفت، صف لكل مشروب (من + ماذا).", "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد وملاحظة قصيرة. في زاوية، أدخلها لكل عرض.", "<strong>مشروبات الإدارة</strong> — المجانيات المقدَّمة لهايدي أو لوك أو يوسف.", "<strong>ملاحظات أموال إضافية</strong> — اشرح أي زيادة أو نقص عن المتوقع.", "<strong>ملاحظات</strong> — الهدر، الكسر، معلومات التسليم، أي شيء غير عادي."] },
+        { type: "bullets", items: ["<strong>التاريخ</strong> و<strong>البريستا المُغلِق</strong> (اسمك).", "<strong>الأموال المعدودة.</strong> <strong>المعادي</strong>: مقسّمة حسب الطريقة — كاش في الدرج، إنستاباي، بطاقة/فيزا، طلبات (آجل) وطلبات (كاش). <strong>OX</strong>: نفس حقول المعادي. (فرع Zawya المؤرشف كان كاش فقط.)", "<strong>مشروبات بدل البريستا</strong> — أي مشروبات موظفين أُخذت خلال الشيفت، صف لكل مشروب (من + ماذا).", "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد وملاحظة قصيرة.", "<strong>مشروبات الإدارة</strong> — المجانيات المقدَّمة لهايدي أو لوك أو يوسف.", "<strong>ملاحظات أموال إضافية</strong> — اشرح أي زيادة أو نقص عن المتوقع.", "<strong>ملاحظات</strong> — الهدر، الكسر، معلومات التسليم، أي شيء غير عادي."] },
         { type: "subheader", text: "قاعدة الصورة الإلزامية" },
         { type: "para", text: "إذا أُضيف مشروب واحد أو أكثر في أي مكان بإغلاق الشيفت (بدل، ضيافة أو إدارة)، يجب إرفاق صورة واحدة على الأقل قبل التقديم. يُسمح بأكثر من صورة ويُشجَّع عليه." },
         { type: "subheader", text: "التقديم" },
@@ -22670,7 +22687,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "What counts as \"on time\"" },
         { type: "para", text: "\"Late\" is measured against your branch's opening time for the current month — the same time shown on your Weekly Schedule. That time is set by management each month and can change, so all the rules below are written relative to it, never to a fixed clock time. Lateness is the number of minutes between your stamp and that opening time." },
         { type: "subheader", text: "How to Submit a Sign-In Stamp" },
-        { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or Zawya).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
+        { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or OX).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
         { type: "subheader", text: "Automatic Salary Deduction Tiers" },
         { type: "para", text: "Applied automatically the moment your stamp is uploaded. Each deduction is a share of one day's pay (monthly salary ÷ 30), so the EGP amount scales with your own salary." },
         { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "Lateness is measured from the time the clock photo was taken — take the photo the moment you arrive. If the app can't read the photo's time (e.g. a screenshot, an edited or forwarded picture) it counts as a no show: 3 days deducted.", "No stamp at all for an assigned morning shift counts as a no show: 3 days deducted, applied automatically the next day.", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points (see Shift Cover below)."] },
@@ -22690,7 +22707,7 @@ routes.handbook = function (u) {
         { type: "subheader", text: "ما الذي يُعتبر \"في الموعد\"" },
         { type: "para", text: "يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك للشهر الحالي — نفس الموعد الظاهر في جدولك الأسبوعي. تُحدده الإدارة كل شهر وقد يتغير، لذا كل القواعد أدناه مكتوبة نسبةً إليه وليس إلى وقت ثابت. التأخير هو عدد الدقائق بين بصمتك وموعد الفتح ذاك." },
         { type: "subheader", text: "كيفية تقديم بصمة الحضور" },
-        { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو زاوية).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
+        { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو OX).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
         { type: "subheader", text: "شرائح الخصم التلقائي من الراتب" },
         { type: "para", text: "تُطبَّق تلقائياً لحظة رفع البصمة. كل خصم هو جزء من أجر يوم واحد (الراتب الشهري ÷ 30)، فيتناسب المبلغ مع راتبك أنت." },
         { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "يُحتسب التأخير من وقت التقاط صورة الساعة — التقط الصورة فور وصولك. إذا لم يتمكن التطبيق من قراءة وقت الصورة (مثل لقطة شاشة أو صورة معدّلة أو مُعاد توجيهها) يُعتبر غياباً: خصم 3 أيام.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك يُعتبر غياباً (no show): خصم 3 أيام، يُطبَّق تلقائياً في اليوم التالي.", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط (راجع التغطية أدناه)."] },
@@ -23806,19 +23823,19 @@ const ROUTE_EXPORTS = {
       const sd_ = state.inv_engine_sales_data || [];
       const rc_ = state.inv_engine_recipes    || [];
       const mStock = (computeStock("maadi") || {})[it.id] || 0;
-      const zStock = (computeStock("zawya") || {})[it.id] || 0;
+      const zStock = (computeStock("ox") || {})[it.id] || 0;
       const mConsump = invAvgDailyConsumption(it.id, "maadi", 30, sd_, rc_);
-      const zConsump = invAvgDailyConsumption(it.id, "zawya", 30, sd_, rc_);
+      const zConsump = invAvgDailyConsumption(it.id, "ox", 30, sd_, rc_);
       const mDays  = invStockLongevity(it.id, "maadi", sd_, rc_);
-      const zDays  = invStockLongevity(it.id, "zawya", sd_, rc_);
+      const zDays  = invStockLongevity(it.id, "ox", sd_, rc_);
       const cfg_   = (state.inv_engine.thresholds || {})[it.id] || {};
       return {
         item: it.name, unit: it.unit, category: cfg_.category_rule || it.category || "",
         priority: cfg_.priority || "",
         maadi_stock: mStock.toFixed(3), maadi_avg_daily: mConsump.toFixed(4),
         maadi_days_remaining: isFinite(mDays) ? mDays.toFixed(1) : "∞",
-        zawya_stock: zStock.toFixed(3), zawya_avg_daily: zConsump.toFixed(4),
-        zawya_days_remaining: isFinite(zDays) ? zDays.toFixed(1) : "∞",
+        ox_stock: zStock.toFixed(3), ox_avg_daily: zConsump.toFixed(4),
+        ox_days_remaining: isFinite(zDays) ? zDays.toFixed(1) : "∞",
         reorder_threshold: invAdjustedReorderThreshold(it.id, "maadi", sd_, rc_).toFixed(3),
         protection_days: cfg_.protection_days || "",
       };
@@ -23973,7 +23990,7 @@ routes.app_guide = function (u) {
       ar_title: "بصمة الحضور (الوصول)",
       en_steps: [
         "Tap <strong>Sign-In Stamp</strong> from the home screen <em>as soon as you arrive</em>.",
-        "Select your branch: <strong>Maadi</strong> or <strong>Zawya</strong>.",
+        "Select your branch: <strong>Maadi</strong> or <strong>OX</strong>.",
         "Pick your <strong>shift</strong> (morning or evening) — it is pre-selected from your Weekly Schedule. <strong>Every shift, morning and evening, needs its own stamp, with exactly the same lateness, no-show and KPI rules.</strong> If you work both on the same day, stamp twice.",
         "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
         "Tap <strong>Submit clock-in</strong>.",
@@ -23986,7 +24003,7 @@ routes.app_guide = function (u) {
       ],
       ar_steps: [
         "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
-        "اختر الفرع: <strong>المعادي</strong> أو <strong>زاوية</strong>.",
+        "اختر الفرع: <strong>المعادي</strong> أو <strong>OX</strong>.",
         "اختر <strong>الشيفت</strong> (صباحي أو مسائي) — يُحدَّد تلقائياً من جدولك الأسبوعي. <strong>كل شيفت، صباحي ومسائي، يحتاج بصمة خاصة به بنفس قواعد التأخير وعدم الحضور ونقاط الأداء.</strong> إذا عملت الشيفتين في نفس اليوم، سجّل بصمتين.",
         "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك.",
         "اضغط <strong>تسجيل الحضور</strong>.",
@@ -24030,10 +24047,10 @@ routes.app_guide = function (u) {
       en_steps: [
         "At the end of your shift, tap <strong>Shift Close</strong>. The barista closing the branch fills it in.",
         "Select your <strong>branch</strong> and your name as <strong>closing barista</strong>.",
-        "<strong>Payments received.</strong> <strong>Maadi:</strong> enter each method separately — cash, InstaPay, customer credit card, Talabat (credit), Talabat (cash). <strong>Zawya:</strong> only a <strong>Cash</strong> field appears — card, InstaPay and Talabat there are settled by the cinema, not Coffee Beats.",
+        "<strong>Payments received.</strong> <strong>Maadi:</strong> enter each method separately — cash, InstaPay, customer credit card, Talabat (credit), Talabat (cash). <strong>OX:</strong> same fields as Maadi. (The archived Zawya branch was cash only.)",
         "<strong>Extra money notes</strong> — explain any surplus or shortfall vs what was expected.",
         "<strong>Complimentary drinks</strong> — add a row per staff drink (who + what), and enter them on Foodics with the right discount code.",
-        "<strong>Hospitality / cinema free drinks</strong> — count + note (per screening at Zawya).",
+        "<strong>Hospitality / cinema free drinks</strong> — count + note.",
         "<strong>Management drinks</strong> — one row per drink taken by Haïdi, Luke or Youssef.",
         "<strong>Discount receipts</strong> — attach a photo of any signed discount receipt.",
         "⚠ If any drink was added anywhere (allowance, hospitality or management), at least one <strong>photo</strong> is required before you can submit.",
@@ -24042,10 +24059,10 @@ routes.app_guide = function (u) {
       ar_steps: [
         "في نهاية شيفتك، اضغط على <strong>إغلاق الشيفت</strong>. يملؤه البريستا المُغلِق للفرع.",
         "اختر <strong>الفرع</strong> واسمك كـ <strong>بريستا مُغلِق</strong>.",
-        "<strong>المدفوعات المستلمة.</strong> <strong>المعادي:</strong> أدخل كل طريقة على حدة — كاش، إنستاباي، بطاقة ائتمان العميل، طلبات (آجل)، طلبات (كاش). <strong>زاوية:</strong> يظهر حقل <strong>الكاش</strong> فقط — البطاقة وإنستاباي وطلبات هناك تسوّيها السينما وليست Coffee Beats.",
+        "<strong>المدفوعات المستلمة.</strong> <strong>المعادي:</strong> أدخل كل طريقة على حدة — كاش، إنستاباي، بطاقة ائتمان العميل، طلبات (آجل)، طلبات (كاش). <strong>OX:</strong> نفس حقول المعادي. (فرع Zawya المؤرشف كان كاش فقط.)",
         "<strong>ملاحظات أموال إضافية</strong> — اشرح أي زيادة أو نقص عن المتوقع.",
         "<strong>المشروبات المجانية</strong> — أضف صفاً لكل مشروب موظف (من + ماذا)، وأدخلها على Foodics بكود الخصم الصحيح.",
-        "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد + ملاحظة (لكل عرض في زاوية).",
+        "<strong>مشروبات الضيافة / السينما المجانية</strong> — العدد + ملاحظة.",
         "<strong>مشروبات الإدارة</strong> — صف لكل مشروب أخذه هايدي أو لوك أو يوسف.",
         "<strong>إيصالات الخصم</strong> — أرفق صورة لأي إيصال خصم موقّع.",
         "⚠ إذا أُضيف أي مشروب في أي مكان (بدل، ضيافة أو إدارة)، يلزم إرفاق <strong>صورة</strong> واحدة على الأقل قبل التقديم.",
@@ -24079,7 +24096,7 @@ routes.app_guide = function (u) {
       ar_title: "الجدول الأسبوعي",
       en_steps: [
         "Tap <strong>Weekly Schedule</strong> to see your shifts for the week.",
-        "The schedule shows three tabs: <strong>Maadi</strong>, <strong>Zawya</strong>, and <strong>Coffee Beats Events</strong> — side by side, day by day.",
+        "The schedule shows three tabs: <strong>Maadi</strong>, <strong>OX</strong>, and <strong>Coffee Beats Events</strong> — side by side, day by day.",
         "The <strong>Events tab</strong> pulls live from the Coffee Beats Events Google Calendar. Only days with events appear. An events shift earns an automatic <strong>events bonus</strong> added to your overtime.",
         "You can see who's working the morning and night shifts each day.",
         "Owners can add <strong>Special Dates & Events</strong> directly in the schedule page — these appear as badges on day cards and signal high-demand days.",
@@ -24087,7 +24104,7 @@ routes.app_guide = function (u) {
       ],
       ar_steps: [
         "اضغط على <strong>الجدول الأسبوعي</strong> لمعرفة شيفتاتك خلال الأسبوع.",
-        "الجدول يُظهر ثلاثة تبويبات: <strong>المعادي</strong>، <strong>زاوية</strong>، و<strong>Coffee Beats Events</strong> — جنباً إلى جنب، يوماً بيوم.",
+        "الجدول يُظهر ثلاثة تبويبات: <strong>المعادي</strong>، <strong>OX</strong>، و<strong>Coffee Beats Events</strong> — جنباً إلى جنب، يوماً بيوم.",
         "تبويب <strong>الفعاليات</strong> يسحب البيانات مباشرةً من تقويم Google الخاص بالفعاليات. تظهر فقط أيام الفعاليات. تُضيف شيفت الفعاليات <strong>بونص تلقائي</strong> إلى الأوفر تايم.",
         "يمكنك رؤية من يعمل في الشيفت الصباحي والليلي كل يوم.",
         "يمكن للملاك إضافة <strong>تواريخ ومناسبات خاصة</strong> مباشرةً من صفحة الجدول — تظهر كشارات على بطاقات الأيام لتنبيه الفريق بأيام الطلب المرتفع.",
@@ -24389,7 +24406,7 @@ routes.app_guide = function (u) {
         "<strong>Pick the item from the dropdown — mandatory.</strong> Saving is blocked (with a big warning) until every inventory line has an item selected. Bought different coffee types in one purchase? Make a <strong>separate purchase item for each coffee type</strong> and upload the same receipt each time. Item not in the dropdown? Report it to the owner — don't record it another way.",
         "Add each item bought: purchase unit (e.g. bottle, carton), pack size (how many inventory units are in one purchase unit — e.g. 850 ml per bottle), quantity, and unit price. The app converts this automatically into inventory units and cost per unit, and remembers your last conversion for that item next time.",
         "For non-inventory costs (delivery fee, packaging, card charges) add an <strong>Other</strong> line with just a cost — it won't touch stock.",
-        "<strong>Both branches:</strong> for a shared cost like marketing or an agency retainer, pick the <strong>Both</strong> tab. Enter one amount and a Zawya/Maadi split (default 50/50). It saves as two linked purchases — one per branch — so each branch's P&L carries its share and each float/ledger is charged its part. Only Other lines are allowed here. Deleting one half offers to delete both.",
+        "<strong>Both branches:</strong> for a shared cost like marketing or an agency retainer, pick the <strong>Both</strong> tab. Enter one amount and a OX/Maadi split (default 50/50). It saves as two linked purchases — one per branch — so each branch's P&L carries its share and each float/ledger is charged its part. Only Other lines are allowed here. Deleting one half offers to delete both.",
         "Attach a photo of the receipt.",
         "Tap <strong>Save</strong>. Two things happen automatically: every item line adds to that branch's stock, and the money moves out of wherever you said it came from — Petty Cash balance drops by the total, or a matching negative entry appears in the Bank Ledger (bank/credit card). Unpaid purchases only affect stock, not any ledger.",
         "The purchase list shows your full history — tap any purchase to see the receipt and line items. <strong>📅 Monthly totals</strong> shows total money spent plus a card per month (receipt total, count, branch split); tap a month to filter to it.",
@@ -24402,7 +24419,7 @@ routes.app_guide = function (u) {
         "<strong>اختر الصنف من القائمة المنسدلة — إلزامي.</strong> يُمنع الحفظ (مع تحذير كبير) حتى يُختار صنف لكل بند مخزون. اشتريت أنواعاً مختلفة من القهوة في عملية شراء واحدة؟ سجّل <strong>بنداً منفصلاً لكل نوع قهوة</strong> وارفع نفس الفاتورة في كل مرة. الصنف غير موجود؟ أبلغ المالك — لا تسجله بطريقة أخرى.",
         "أضف كل صنف تم شراؤه: وحدة الشراء (مثل زجاجة، كرتونة)، حجم العبوة (كم وحدة مخزون في وحدة الشراء الواحدة — مثلاً 850 مل لكل زجاجة)، الكمية، وسعر الوحدة. يحوّل التطبيق هذا تلقائياً إلى وحدات المخزون وتكلفة الوحدة، ويتذكر آخر تحويل استخدمته لهذا الصنف.",
         "للتكاليف غير المخزونية (نقل، تغليف، رسوم بطاقة) أضف بنداً <strong>أخرى</strong> بتكلفة فقط — لن يؤثر على المخزون.",
-        "<strong>الفرعان معاً:</strong> لتكلفة مشتركة مثل التسويق أو وكالة، اختر تبويب <strong>Both</strong>. أدخل مبلغاً واحداً ونسبة تقسيم بين زاوية والمعادي (افتراضياً 50/50). يُحفظ كمشتريين مرتبطين — واحد لكل فرع — بحيث يتحمّل كل فرع نصيبه في الأرباح والخسائر وتُخصم حصته من العهدة/سجل البنك. يُسمح ببنود أخرى فقط. حذف أحد النصفين يعرض حذف كليهما.",
+        "<strong>الفرعان معاً:</strong> لتكلفة مشتركة مثل التسويق أو وكالة، اختر تبويب <strong>Both</strong>. أدخل مبلغاً واحداً ونسبة تقسيم بين OX والمعادي (افتراضياً 50/50). يُحفظ كمشتريين مرتبطين — واحد لكل فرع — بحيث يتحمّل كل فرع نصيبه في الأرباح والخسائر وتُخصم حصته من العهدة/سجل البنك. يُسمح ببنود أخرى فقط. حذف أحد النصفين يعرض حذف كليهما.",
         "أرفق صورة الفاتورة.",
         "اضغط <strong>حفظ</strong>. يحدث أمران تلقائياً: كل بند صنف يُضاف لمخزون الفرع، والمبلغ يُخصم من مصدر الدفع الذي حددته — رصيد النثرية ينقص بالإجمالي، أو يظهر قيد سالب مطابق في سجل البنك (بنك/بطاقة). المشتريات الآجلة تؤثر على المخزون فقط دون أي قيد مالي.",
         "قائمة المشتريات تعرض السجل الكامل — اضغط على أي مشترى لعرض الفاتورة والبنود. زر <strong>📅 إجمالي كل شهر</strong> يعرض إجمالي المصروف وبطاقة لكل شهر (إجمالي الإيصالات والعدد والتوزيع على الفروع)؛ اضغط على شهر لتصفية القائمة.",
@@ -24414,17 +24431,17 @@ routes.app_guide = function (u) {
       en_title: "Petty Cash",
       ar_title: "العهدة النثرية",
       en_steps: [
-        "Tap <strong>Petty Cash</strong> to see the cash float kept at Maadi and Zawya for small day-to-day spending.",
+        "Tap <strong>Petty Cash</strong> to see the cash float kept at Maadi and OX for small day-to-day spending.",
         "Every entry (a purchase paid from petty cash, a top-up, or an expenditure) stores its own <strong>balance after</strong> — the number you see is simply the most recent entry's balance, not a live sum of everything.",
-        "<strong>Owner:</strong> tap <strong>➕ Top-up</strong> on a branch to add cash to that float, or <strong>➕ Top-up (auto-split)</strong> on the combined card to enter one amount that is divided automatically — by default 60% Zawya / 40% Maadi (editable in Settings, along with the 20,000 EGP monthly estimate). Set <strong>Funded from</strong>: <em>Company bank</em> logs the matching outflow in the Bank Ledger; <em>Paid personally</em> instead adds the amount to “company owes you” on the Bank Ledger screen, to reimburse yourself later.",
+        "<strong>Owner:</strong> tap <strong>➕ Top-up</strong> on a branch to add cash to that float, or <strong>➕ Top-up (auto-split)</strong> on the combined card to enter one amount that is divided automatically — by default 60% OX / 40% Maadi (editable in Settings, along with the 20,000 EGP monthly estimate). Set <strong>Funded from</strong>: <em>Company bank</em> logs the matching outflow in the Bank Ledger; <em>Paid personally</em> instead adds the amount to “company owes you” on the Bank Ledger screen, to reimburse yourself later.",
         "<strong>Head barista:</strong> tap <strong>🧾 Expenditure</strong> to log cash spent from your branch's float that isn't a formal purchase.",
         "<strong>Fresh start every month:</strong> petty cash is meant to begin each month at zero. On the 1st, if cash is left over, the head barista is notified to bank it and a red banner appears with <strong>🏦 Deposit &amp; start fresh</strong> — this moves both floats to the Bank Ledger and resets the month. <strong>🏦 Bank balance</strong> on a single branch card does the same for just that branch.",
         "A red low-cash banner appears automatically once a branch's balance drops below 1,000 EGP.",
       ],
       ar_steps: [
-        "اضغط على <strong>العهدة النثرية</strong> لعرض الكاش المخصص للمعادي وزاوية للمصاريف اليومية الصغيرة.",
+        "اضغط على <strong>العهدة النثرية</strong> لعرض الكاش المخصص للمعادي وOX للمصاريف اليومية الصغيرة.",
         "كل قيد (مشترى مدفوع من النثرية، تعبئة، أو مصروف) يخزّن <strong>رصيده بعد القيد</strong> — الرقم الذي تراه هو رصيد آخر قيد فقط، وليس مجموعاً حياً لكل شيء.",
-        "<strong>المالك:</strong> اضغط <strong>➕ تعبئة</strong> على فرع لإضافة كاش لعهدته، أو <strong>➕ تعبئة (تقسيم تلقائي)</strong> على البطاقة المجمّعة لإدخال مبلغ واحد يُقسَّم تلقائياً — افتراضياً 60% زاوية / 40% معادي (قابل للتعديل في الإعدادات مع تقدير 20,000 جنيه الشهري). في الحالتين يُسجَّل قيد سالب مطابق في سجل البنك.",
+        "<strong>المالك:</strong> اضغط <strong>➕ تعبئة</strong> على فرع لإضافة كاش لعهدته، أو <strong>➕ تعبئة (تقسيم تلقائي)</strong> على البطاقة المجمّعة لإدخال مبلغ واحد يُقسَّم تلقائياً — افتراضياً 60% OX / 40% معادي (قابل للتعديل في الإعدادات مع تقدير 20,000 جنيه الشهري). في الحالتين يُسجَّل قيد سالب مطابق في سجل البنك.",
         "<strong>رئيس البريستا:</strong> اضغط <strong>🧾 مصروف</strong> لتسجيل كاش أُنفق من عهدة فرعك وليس مشترى رسمي.",
         "<strong>بداية جديدة كل شهر:</strong> يُفترض أن تبدأ العهدة كل شهر من الصفر. في اليوم الأول، إذا تبقّى كاش، يُنبَّه رئيس البريستا لإيداعه ويظهر شريط أحمر مع <strong>🏦 إيداع وبدء جديد</strong> — ينقل العهدتين إلى سجل البنك ويصفّر الشهر. زر <strong>🏦 إيداع الرصيد</strong> على بطاقة فرع واحد يفعل نفس الشيء لهذا الفرع فقط.",
         "يظهر شريط تحذير أحمر تلقائياً عندما يقل رصيد أي فرع عن 1,000 جنيه.",
@@ -24455,7 +24472,7 @@ routes.app_guide = function (u) {
         "Owner/accountant screen for tracking recurring monthly bills: electricity, internet, cleaner salary, accountant salary, POS fees, gardener salary, and loan payment — each with a preset amount per branch.",
         "Each month, tick a bill as <strong>paid</strong> and enter the actual amount and date. This creates a record for that month only — editing the preset amount affects the current and future months, but never rewrites a past month's history.",
         "One-off costs (marketing, sponsorships, uniforms, maintenance, pest control, miscellaneous) are logged manually with <strong>➕</strong> whenever they happen, instead of monthly. Anything that adds to <strong>stock</strong> goes in Record Purchase instead — not here.",
-        "<strong>Both branches:</strong> for a shared cost, pick <strong>🔀 Both branches</strong>, enter one total and Zawya's share % — it saves as two linked entries, one per branch, so each branch's P&L carries its part. Deleting one removes both.",
+        "<strong>Both branches:</strong> for a shared cost, pick <strong>🔀 Both branches</strong>, enter one total and OX's share % — it saves as two linked entries, one per branch, so each branch's P&L carries its part. Deleting one removes both.",
         "<strong>Paid from:</strong> choose Petty cash, Owner's bank, or Credit card and the app writes the matching drawdown automatically (petty-cash expense or bank-ledger entry). Leave it on <em>not tracked</em> if the cash movement is recorded elsewhere. The overhead line is always the expense in the P&L — the payment record is not double-counted.",
         "The page totals paid vs unpaid per branch — this total feeds directly into the Dashboard's profit calculation for that month.",
       ],
@@ -24463,7 +24480,7 @@ routes.app_guide = function (u) {
         "شاشة للمالك والمحاسب لمتابعة الفواتير الشهرية المتكررة: كهرباء، إنترنت، راتب العاملة، راتب المحاسب، رسوم نقاط البيع، راتب البستاني، وقسط القرض — لكل منها مبلغ مبدئي لكل فرع.",
         "كل شهر، حدد الفاتورة كـ <strong>مدفوعة</strong> وأدخل المبلغ الفعلي والتاريخ. هذا يُنشئ سجلاً لذلك الشهر فقط — تعديل المبلغ المبدئي يؤثر على الشهر الحالي والمقبل فقط، ولا يغيّر تاريخ الأشهر السابقة أبداً.",
         "التكاليف لمرة واحدة (تسويق، رعاية، يونيفورم، صيانة، مكافحة حشرات، متفرقات) تُسجَّل يدوياً بزر <strong>➕</strong> عند حدوثها. أي شيء يُضاف إلى <strong>المخزون</strong> يُسجَّل في تسجيل مشترى وليس هنا.",
-        "<strong>الفرعان معاً:</strong> للتكلفة المشتركة اختر <strong>🔀 الفرعان معاً</strong>، أدخل إجمالياً واحداً ونسبة زاوية — يُحفظ كقيدين مرتبطين، واحد لكل فرع، فيتحمّل كل فرع نصيبه. حذف أحدهما يحذف كليهما.",
+        "<strong>الفرعان معاً:</strong> للتكلفة المشتركة اختر <strong>🔀 الفرعان معاً</strong>، أدخل إجمالياً واحداً ونسبة OX — يُحفظ كقيدين مرتبطين، واحد لكل فرع، فيتحمّل كل فرع نصيبه. حذف أحدهما يحذف كليهما.",
         "<strong>مدفوع من:</strong> اختر النثرية أو بنك المالك أو بطاقة الائتمان فيسجّل التطبيق الخصم المقابل تلقائياً (مصروف نثرية أو قيد بنكي). اتركه على <em>غير متتبَّع</em> إذا كانت حركة الكاش مسجلة في مكان آخر. قيد المصروف الثابت هو دائماً المصروف في الأرباح والخسائر — سجل الدفع لا يُحتسب مرتين.",
         "الصفحة تجمع المدفوع مقابل غير المدفوع لكل فرع — هذا الإجمالي يُستخدم مباشرةً في حساب الربح على لوحة التقارير لذلك الشهر.",
       ],
@@ -24510,14 +24527,14 @@ routes.app_guide = function (u) {
         "Owner/accountant screen for importing sales data exported from the POS (Foodics).",
         "Choose the <strong>branch</strong> and a fallback month (used only if a row's own date can't be read), then upload <strong>File 1</strong> — the main sales export. The app recognizes standard column layouts automatically; if it doesn't, you map the columns yourself.",
         "Two optional files add more detail: <strong>File 2</strong> (order items) supplies real per-item quantities and cost/margin figures; <strong>File 3</strong> (orders) attributes each order to the barista who made it, feeding the Upselling KPI (ticket-size scoring).",
-        "For Zawya, Popcorn/Soft Drinks/Snacks/Merchandise rows are automatically excluded from Coffee Beats' own sales figures — since they're sold on behalf of the venue, not Coffee Beats — but their value is tracked separately so the dashboard can still show what % of total venue sales came from Coffee Beats.",
+        "For the archived Zawya branch, Popcorn/Soft Drinks/Snacks/Merchandise rows are automatically excluded from Coffee Beats' own sales figures — since they're sold on behalf of the venue, not Coffee Beats — but their value is tracked separately so the dashboard can still show what % of total venue sales came from Coffee Beats.",
         "Preview the parsed rows before committing, then tap <strong>Import</strong> to add them to the Dashboard for that branch/month. A previous import can be deleted from this screen if it was uploaded by mistake.",
       ],
       ar_steps: [
         "شاشة للمالك والمحاسب لاستيراد بيانات المبيعات المُصدَّرة من نقطة البيع (Foodics).",
         "اختر <strong>الفرع</strong> وشهراً احتياطياً (يُستخدم فقط إذا تعذّر قراءة تاريخ صف معين)، ثم ارفع <strong>الملف 1</strong> — تصدير المبيعات الرئيسي. يتعرف التطبيق على تنسيقات الأعمدة القياسية تلقائياً؛ وإن لم يتعرف عليها، تُحدد الأعمدة يدوياً.",
         "ملفان اختياريان يضيفان تفاصيل أكثر: <strong>الملف 2</strong> (بنود الطلبات) يوفر كميات وتكلفة/هامش ربح فعلية لكل صنف؛ <strong>الملف 3</strong> (الطلبات) ينسب كل طلب للبريستا الذي أنجزه، ويُغذي مؤشر البيع الإضافي (تقييم حجم الفاتورة).",
-        "بالنسبة لزاوية، تُستبعد تلقائياً بنود الفشار/المشروبات الغازية/السناكس/المنتجات من أرقام مبيعات Coffee Beats الخاصة — لأنها تُباع نيابة عن المكان وليست من Coffee Beats — لكن قيمتها تُتابع بشكل منفصل حتى تُظهر اللوحة نسبة مبيعات Coffee Beats من إجمالي مبيعات المكان.",
+        "بالنسبة لـOX، تُستبعد تلقائياً بنود الفشار/المشروبات الغازية/السناكس/المنتجات من أرقام مبيعات Coffee Beats الخاصة — لأنها تُباع نيابة عن المكان وليست من Coffee Beats — لكن قيمتها تُتابع بشكل منفصل حتى تُظهر اللوحة نسبة مبيعات Coffee Beats من إجمالي مبيعات المكان.",
         "عايِن الصفوف قبل الاعتماد، ثم اضغط <strong>استيراد</strong> لإضافتها إلى لوحة التقارير لذلك الفرع/الشهر. يمكن حذف استيراد سابق من هذه الشاشة إذا تم رفعه بالخطأ.",
       ],
     },
@@ -24549,7 +24566,7 @@ routes.app_guide = function (u) {
         "<strong>Overtime:</strong> hours beyond the standard 8-hour shift are paid at ×1.5 the hourly rate (monthly salary ÷ 30 ÷ 8). Eid Al-Fitr and Eid Al-Adha shifts pay ×2 instead. A double shift (covering two shifts in one day) counts the normal 8 hours in the base salary, plus 5 extra overtime hours at ×1.5.",
         "<strong>Sick Leave:</strong> every approved sick day deducts ¼ of a day's pay (monthly salary ÷ 30 ÷ 4) automatically — no manager approval needed.",
         "<strong>Loans:</strong> recorded with the month they should be deducted from, and subtracted from that month's Net Due.",
-        "<strong>Head barista incentive:</strong> an extra 1% of their branch's net sales once it clears a monthly target (owner-configurable), capped at a monthly maximum. For Zawya, sales are first reduced by 14% VAT, then Coffee Beats keeps 90% of what's left, before the 1% is calculated.",
+        "<strong>Head barista incentive:</strong> an extra 1% of their branch's net sales once it clears a monthly target (owner-configurable), capped at a monthly maximum. For OX, sales are first reduced by 14% VAT, then Coffee Beats keeps 90% of what's left, before the 1% is calculated.",
         "<strong>Log salary payout</strong> records an actual payment made — kept separate from the calculated Net Due so you can compare what should be paid vs what's actually gone out.",
         "The pay cycle runs the <strong>26th of one month to the 25th of the next</strong>, paid on the 1st.",
       ],
@@ -24560,7 +24577,7 @@ routes.app_guide = function (u) {
         "<strong>الأوفرتايم:</strong> الساعات بعد شيفت الـ 8 ساعات القياسي تُدفع بمعدل ×1.5 من الأجر بالساعة (الراتب الشهري ÷ 30 ÷ 8). شيفتات عيد الفطر وعيد الأضحى تُدفع ×2 بدلاً من ذلك. الشيفت المزدوج (تغطية شيفتين في يوم واحد) يُحتسب فيه 8 ساعات عادية ضمن الراتب الأساسي، بالإضافة إلى 5 ساعات أوفرتايم إضافية بمعدل ×1.5.",
         "<strong>الإجازة المرضية:</strong> كل يوم إجازة مرضية معتمد يُخصم منه ربع يوم أجر (الراتب الشهري ÷ 30 ÷ 4) تلقائياً — بدون موافقة إدارية.",
         "<strong>السلف:</strong> تُسجَّل مع تحديد الشهر الذي تُخصم منه، وتُطرح من صافي المستحق لذلك الشهر.",
-        "<strong>حافز رئيس البريستا:</strong> 1% إضافية من صافي مبيعات فرعه عند تحقيق هدف شهري (قابل للتعديل من المالك)، بحد أقصى شهري. بالنسبة لزاوية، تُخصم أولاً ضريبة القيمة المضافة 14%، ثم تحتفظ Coffee Beats بـ 90% مما تبقى، قبل حساب الـ 1%.",
+        "<strong>حافز رئيس البريستا:</strong> 1% إضافية من صافي مبيعات فرعه عند تحقيق هدف شهري (قابل للتعديل من المالك)، بحد أقصى شهري. بالنسبة لـOX، تُخصم أولاً ضريبة القيمة المضافة 14%، ثم تحتفظ Coffee Beats بـ 90% مما تبقى، قبل حساب الـ 1%.",
         "<strong>تسجيل صرف راتب</strong> يسجل دفعة فعلية تمت — منفصلة عن صافي المستحق المحسوب، حتى تقارن بين ما يجب صرفه وما صُرف فعلاً.",
         "دورة الصرف من <strong>26 الشهر إلى 25 الشهر التالي</strong>، وتُصرف يوم الأول.",
       ],
@@ -24623,18 +24640,18 @@ routes.app_guide = function (u) {
       en_title: "Dashboards & Reports",
       ar_title: "لوحات التقارير والأداء",
       en_steps: [
-        "Owner/accountant/head barista screen with three tabs: <strong>Maadi</strong>, <strong>Zawya</strong>, and <strong>Coffee Beats Events</strong>.",
+        "Owner/accountant/head barista screen with three tabs: <strong>Maadi</strong>, <strong>OX</strong>, and <strong>Coffee Beats Events</strong>.",
         "Pick a month range and the dashboard totals: Revenue (net sales), Discount given, Purchases, and Waste cost, straight from what's been uploaded/logged for that period.",
-        "<strong>Zawya sales</strong> pass through two extra steps before anything else is calculated: the raw number is divided by 1.14 to remove 14% VAT, then Coffee Beats keeps 90% of what's left (the other 10% goes to the Zawya venue) — both steps are shown on screen.",
+        "<strong>Zawya sales (archived branch)</strong> pass through two extra steps before anything else is calculated: the raw number is divided by 1.14 to remove 14% VAT, then Coffee Beats keeps 90% of what's left (the other 10% goes to the Zawya venue) — both steps are shown on screen.",
         "<strong>Profitability</strong> shows gross margin % (from menu cost data), and a <strong>P&L close</strong> section reconciles theoretical inventory usage (opening stock + purchases − closing stock) against what was actually sold, to sanity-check that COGS makes sense.",
         "Overheads + salaries for the period are pulled in automatically to show the full picture down to net profit.",
         "<strong>Top items by net revenue</strong> ranks menu items by how much money they brought in over the period.",
         "The <strong>Events tab</strong> only shows days with an actual Coffee Beats Events entry (synced from the shared events calendar), and pulls Maadi's sales for just those specific days.",
       ],
       ar_steps: [
-        "شاشة للمالك والمحاسب ورئيس البريستا بها ثلاثة تبويبات: <strong>المعادي</strong>، <strong>زاوية</strong>، و<strong>Coffee Beats Events</strong>.",
+        "شاشة للمالك والمحاسب ورئيس البريستا بها ثلاثة تبويبات: <strong>المعادي</strong>، <strong>OX</strong>، و<strong>Coffee Beats Events</strong>.",
         "اختر نطاق أشهر، وتعرض اللوحة الإجماليات: الإيرادات (صافي المبيعات)، الخصومات، المشتريات، وتكلفة الهدر، مباشرةً مما تم رفعه/تسجيله لتلك الفترة.",
-        "<strong>مبيعات زاوية</strong> تمر بخطوتين إضافيتين قبل أي حساب آخر: الرقم الخام يُقسَم على 1.14 لإزالة ضريبة القيمة المضافة 14%، ثم تحتفظ Coffee Beats بـ 90% مما تبقى (والـ 10% الباقية للمكان) — كلتا الخطوتين تظهران على الشاشة.",
+        "<strong>مبيعات OX</strong> تمر بخطوتين إضافيتين قبل أي حساب آخر: الرقم الخام يُقسَم على 1.14 لإزالة ضريبة القيمة المضافة 14%، ثم تحتفظ Coffee Beats بـ 90% مما تبقى (والـ 10% الباقية للمكان) — كلتا الخطوتين تظهران على الشاشة.",
         "<strong>الربحية</strong> تعرض نسبة الهامش الإجمالي (من بيانات تكلفة المنيو)، وقسم <strong>إغلاق الأرباح والخسائر</strong> يقارن الاستهلاك النظري للمخزون (المخزون الافتتاحي + المشتريات − المخزون الختامي) بما بيع فعلياً، للتأكد من منطقية تكلفة البضاعة المباعة.",
         "المصاريف الثابتة والرواتب لتلك الفترة تُدرج تلقائياً لإظهار الصورة الكاملة حتى صافي الربح.",
         "<strong>أفضل الأصناف حسب صافي الإيراد</strong> يرتب أصناف المنيو حسب المبلغ الذي حققته خلال الفترة.",
@@ -24887,8 +24904,8 @@ routes.app_guide = function (u) {
         "Key Rules — Must Follow"],
     },
     manager: {
-      en: { who: "You are a Manager (Zawya support).", intro: "A light account: your profile, the handbook, leave and messages. You don't run shift or money screens." },
-      ar: { who: "أنت مدير (دعم زاوية).", intro: "حساب محدود: ملفك، الدليل، الإجازات والرسائل. لا تدير شاشات الشيفت أو الأموال." },
+      en: { who: "You are a Manager (OX support).", intro: "A light account: your profile, the handbook, leave and messages. You don't run shift or money screens." },
+      ar: { who: "أنت مدير (دعم OX).", intro: "حساب محدود: ملفك، الدليل، الإجازات والرسائل. لا تدير شاشات الشيفت أو الأموال." },
       duties: {
         en: ["Keep your My ID and Emergency Contact current.", "Use the Barista Handbook as the operations reference.", "Submit leave requests in advance.", "Raise anything for attention through Suggestions & Complaints."],
         ar: ["حافظ على تحديث هويتي وجهة الطوارئ.", "استخدم دليل البريستا كمرجع تشغيلي.", "قدّم طلبات الإجازة مسبقاً.", "ارفع أي ملاحظة عبر الاقتراحات والشكاوى."],
@@ -24897,8 +24914,8 @@ routes.app_guide = function (u) {
         "Notifications & Alerts", "Suggestions & Complaints"],
     },
     helper: {
-      en: { who: "You are a Helper (Zawya support).", intro: "A light account: sign in, read the handbook, check notifications, send a suggestion." },
-      ar: { who: "أنت مساعد (دعم زاوية).", intro: "حساب محدود: تسجيل الدخول، قراءة الدليل، متابعة الإشعارات، إرسال اقتراح." },
+      en: { who: "You are a Helper (OX support).", intro: "A light account: sign in, read the handbook, check notifications, send a suggestion." },
+      ar: { who: "أنت مساعد (دعم OX).", intro: "حساب محدود: تسجيل الدخول، قراءة الدليل، متابعة الإشعارات، إرسال اقتراح." },
       duties: {
         en: ["Keep your My ID documents current.", "Use the Barista Handbook for recipes and standards.", "Check Notifications each shift.", "Send anything for attention via Suggestions & Complaints."],
         ar: ["حافظ على تحديث مستندات هويتي.", "استخدم دليل البريستا للوصفات والمعايير.", "تابع الإشعارات كل شيفت.", "أرسل أي ملاحظة عبر الاقتراحات والشكاوى."],
