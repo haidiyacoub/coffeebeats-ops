@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261124-238 -->
+<!-- CB_BUILD:20261124-245 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261124-238";
+  var BUILD = "20261124-245";
   (function() {
     function checkFresh() {
       try {
@@ -11909,6 +11909,9 @@ const OVERHEAD_CATEGORIES = [
   { value: "agency_design",     label: "Agency / design",    recurring: false },
   { value: "legal_fees",        label: "Legal fees",         recurring: false },
   { value: "equipment_repair",  label: "Equipment repair",   recurring: false },
+  { value: "renovation",        label: "Renovation / fit-out works", recurring: false },
+  { value: "transportation",    label: "Transportation / delivery",  recurring: false },
+  { value: "pre_opening",       label: "Pre-opening / setup costs",  recurring: false },
   { value: "misc",              label: "Miscellaneous (specify)", recurring: false },
   // Maintenance & pest control — logged through the dedicated Maintenance card
   // (see drawMaintenanceCard), never the generic "marketing/misc" prompt.
@@ -13111,6 +13114,9 @@ routes.overheads = function (u) {
     monthInput,
     el("button", { class:"btn secondary", style:{marginLeft:"auto"}, onClick:()=>addOverhead("marketing_fees","maadi") }, "➕ Maadi marketing/misc"),
     el("button", { class:"btn secondary", onClick:()=>addOverhead("marketing_fees","zawya") }, "➕ Zawya marketing/misc"),
+    ...(reportBranches().includes("ox") ? [
+      el("button", { class:"btn secondary", onClick:()=>addOverhead("renovation","ox") }, "➕ OX renovation / transport / setup"),
+    ] : []),
     el("div", { class:"muted small", style:{ flexBasis:"100%", marginTop:"2px" } },
       "Tip: inside the ➕ form, set Branch to 🔀 Both branches to split one amount across Maadi + Zawya, and pick a “Paid from” to auto-record the petty-cash / bank payment."),
   ]));
@@ -13659,6 +13665,7 @@ routes.overheads = function (u) {
       .map(c => ({ label: c.label, value: c.value }));
     const branchOptions = [
       { label: "🏠 Maadi", value: "maadi" },
+      ...(reportBranches().includes("ox") ? [{ label: "🏢 OX", value: "ox" }] : []),
       { label: "🏢 Zawya", value: "zawya" },
       { label: "🔀 Both branches — enter one amount, auto-split", value: "both" },
     ];
@@ -13961,7 +13968,7 @@ routes.overhead_log_new = function (u) {
 // FIXED-ASSET / EQUIPMENT REGISTER (owner / accountant)
 // ---
 // Capital items bought for the business, with purchase date and cost.
-// Capitalised here — NOT expensed in the monthly P&L. Straight-line
+// Capitalised here; items flagged in_pnl feed the P&L as monthly depreciation (equipmentDepForMonth). Straight-line
 // depreciation is shown for reference only; it is not posted to the dashboard.
 // "Paid from" mirrors the overhead form: it writes the matching petty-cash /
 // bank-ledger drawdown (ref = asset id) so the cash movement is tracked, and
@@ -14002,6 +14009,41 @@ function assetBookValue(a, asOf) {
   if (!cost || !a.purchase_date) return cost;
   const dep = Math.min(1, assetYears(a, asOf) / assetLife(a));
   return Math.max(0, Math.round(cost * (1 - dep)));
+}
+// ── Equipment → P&L (monthly depreciation) ───────────────────────────
+// Only assets flagged in_pnl === true feed the P&L (older Maadi/Zawya rows have no
+// flag, so their historic months are untouched). Cost ÷ (useful life × 12) per month,
+// from the purchase month — or the branch's opening month when that is later (so OX
+// pre-opening buys start hitting the P&L when it trades) — until the life is used up
+// or the asset is sold/retired. A "shared" asset is split evenly across the branches
+// trading on its purchase date.
+function _ymAdd(ym, n) { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m - 1 + n, 1); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
+function _ymDiff(a, b) { const [ay, am] = a.split("-").map(Number), [by, bm] = b.split("-").map(Number); return (by - ay) * 12 + (bm - am); }
+function equipmentShareForBranch(a, bKey) {
+  if (a.branch === "shared") {
+    const brs = activeBranches(a.purchase_date);
+    return brs.includes(bKey) && brs.length ? 1 / brs.length : 0;
+  }
+  return canonBranch(a.branch) === bKey ? 1 : 0;
+}
+function equipmentDepForMonth(bKey, month) {
+  let total = 0;
+  for (const a of (state.equipment || [])) {
+    if (!a || a.in_pnl !== true || !notTest(a)) continue;
+    const cost = Number(a.cost) || 0;
+    if (cost <= 0 || !a.purchase_date) continue;
+    const share = equipmentShareForBranch(a, bKey);
+    if (!share) continue;
+    let start = a.purchase_date.slice(0, 7);
+    const open = (BRANCH_LIFECYCLE[bKey] || {}).open;
+    if (open && open < "2090" && open.slice(0, 7) > start) start = open.slice(0, 7);
+    const months = Math.max(1, Math.round(assetLife(a) * 12));
+    const idx = _ymDiff(start, month);
+    if (idx < 0 || idx >= months) continue;
+    if ((a.status === "sold" || a.status === "retired") && a.updated_at && month > a.updated_at.slice(0, 7)) continue;
+    total += cost / months * share;
+  }
+  return Math.round(total);
 }
 function assetAgeText(a) {
   if (!a.purchase_date) return "—";
@@ -14381,14 +14423,13 @@ routes.equipment_register = function (u) {
   const canManage = u.role === "owner" || u.role === "accountant";
   const wrap = el("div", {});
   wrap.appendChild(header("Equipment & Asset Register",
-    "Capital items with purchase date & cost. Capitalised here — not expensed in the monthly P&L."));
+    "Capital items with bill no., bill amount & purchase date. Items marked “in P&L” are spread monthly (cost ÷ useful life) as an equipment line in that branch’s P&L."));
 
   const BRANCHES = [
-    { value: "maadi",  label: "🏠 Maadi" },
-    { value: "zawya",  label: "🏢 Zawya" },
-    { value: "shared", label: "🔀 Shared / both" },
+    ...reportBranches().map(b => ({ value: b, label: (b === "maadi" ? "🏠 " : "🏢 ") + branchLabel(b) })),
+    { value: "shared", label: "🔀 Shared / all branches" },
   ];
-  const branchLabel = (v) => (BRANCHES.find(b => b.value === v) || {}).label || v || "—";
+  const brLabel = (v) => (BRANCHES.find(b => b.value === v) || {}).label || v || "—";
 
   const list = (state.equipment || []).slice().sort((a, b) =>
     (b.purchase_date || "").localeCompare(a.purchase_date || "") || (b.at || "").localeCompare(a.at || ""));
@@ -14406,7 +14447,7 @@ routes.equipment_register = function (u) {
     el("div", {}, [el("div", { class: "muted small" }, "Book value now"), el("div", { style: { fontSize: "20px", fontWeight: "700", color: "var(--accent)" } }, money(totalBook))]),
   ]));
   sumCard.appendChild(el("div", { class: "muted small", style: { marginTop: "8px" } },
-    `Maadi ${money(byBranch("maadi"))} · Zawya ${money(byBranch("zawya"))} · Shared ${money(byBranch("shared"))} (at cost)`));
+    reportBranches().map(b => `${branchLabel(b)} ${money(byBranch(b))}`).join(" · ") + ` · Shared ${money(byBranch("shared"))} (at cost)`));
   wrap.appendChild(sumCard);
 
   if (canManage) {
@@ -14432,9 +14473,13 @@ routes.equipment_register = function (u) {
       el("div", { style: { flex: "1", minWidth: "0" } }, [
         el("div", { style: { fontWeight: "700", fontSize: "14px" } }, a.name || "Untitled asset"),
         el("div", { class: "muted small", style: { marginTop: "2px" } },
-          `${assetCatLabel(a.category)} · ${branchLabel(a.branch)} · ${assetStatusLabel(a.status)}`),
+          `${assetCatLabel(a.category)} · ${brLabel(a.branch)} · ${assetStatusLabel(a.status)}`),
         el("div", { class: "muted small", style: { marginTop: "2px" } },
-          `Bought ${a.purchase_date || "—"}${a.supplier ? " · " + a.supplier : ""}${a.model_serial ? " · " + a.model_serial : ""}`),
+          `Bought ${a.purchase_date || "—"}${a.supplier ? " · " + a.supplier : ""}${a.model_serial ? " · " + a.model_serial : ""}${a.bill_no ? " · Bill #" + a.bill_no : ""}`),
+        el("div", { class: "muted small", style: { marginTop: "2px" } },
+          a.in_pnl === true
+            ? `📉 In P&L: ${money(Math.round((Number(a.cost) || 0) / Math.max(1, assetLife(a) * 12)))}/month for ${assetLife(a)} yr`
+            : "Not in P&L (register only)"),
         a.note ? el("div", { class: "muted small", style: { marginTop: "2px", fontStyle: "italic" } }, a.note) : null,
         el("div", { class: "muted small", style: { marginTop: "2px" } },
           `by ${a.by_name || "—"}${a.paid_from ? " · paid from " + ({ petty_cash: "petty cash", owner_bank: "company bank", credit_card: "credit card", owner_personal: "personal funds (owed back)" }[a.paid_from] || a.paid_from) : ""}`),
@@ -14466,7 +14511,11 @@ routes.equipment_register = function (u) {
       { key: "category",         label: "Category", type: "select", options: catOptions, value: e.category || "machines" },
       { key: "branch",           label: "Branch", type: "select", options: BRANCHES, value: e.branch || "maadi" },
       { key: "purchase_date",    label: "Purchase date", type: "date", value: e.purchase_date || new Date().toISOString().slice(0, 10) },
-      { key: "cost",             label: "Cost (EGP)", type: "number", value: e.cost != null ? e.cost : 0 },
+      { key: "bill_no",          label: "Bill / invoice no. (optional)", type: "text", value: e.bill_no || "" },
+      { key: "cost",             label: "Bill amount (EGP)", type: "number", value: e.cost != null ? e.cost : 0 },
+      { key: "in_pnl",           label: "Deduct from P&L? (spread monthly over useful life)", type: "select",
+        options: [{ label: "Yes — spread monthly in the P&L", value: "yes" }, { label: "No — register only", value: "no" }],
+        value: isEdit ? (e.in_pnl === true ? "yes" : "no") : "yes" },
       { key: "supplier",         label: "Supplier (optional)", type: "text", value: e.supplier || "" },
       { key: "model_serial",     label: "Model / serial no. (optional)", type: "text", value: e.model_serial || "" },
       { key: "useful_life_years",label: "Useful life in years (blank = category default)", type: "number", value: e.useful_life_years != null ? e.useful_life_years : "" },
@@ -14500,6 +14549,7 @@ routes.equipment_register = function (u) {
           name, category: vals.category, branch: vals.branch,
           purchase_date: vals.purchase_date, cost,
           supplier: (vals.supplier || "").trim(), model_serial: (vals.model_serial || "").trim(),
+          bill_no: (vals.bill_no || "").trim(), in_pnl: vals.in_pnl === "yes",
           useful_life_years: life, status: vals.status, note: (vals.note || "").trim(),
         };
         if (isEdit) {
@@ -14538,7 +14588,7 @@ routes.equipment_register = function (u) {
     const desc = `${asset.name} (${assetCatLabel(asset.category)})`;
     if (pf === "petty_cash") {
       const targets = asset.branch === "shared"
-        ? [["maadi", Math.round(amt / 2)], ["zawya", amt - Math.round(amt / 2)]]
+        ? (() => { const brs = activeBranches(asset.purchase_date); const each = Math.round(amt / brs.length); return brs.map((b, i) => [b, i === brs.length - 1 ? amt - each * (brs.length - 1) : each]); })()
         : [[asset.branch, amt]];
       for (const [br, part] of targets) {
         const bal = pettyCashBalance(br);
@@ -17999,14 +18049,15 @@ routes.dashboard = function (u, params) {
     // Each barista's salary is charged to the branch they work at (rotating staff split 50/50)
     // — see branchSalaryForMonth / getStaffSalaryBranch. Set in Monthly Overheads → Staff salaries.
     const salariesTotal = branchSalaryForMonth(bKey, month, activeStaff);
-    const totalOpex = overheadsTotal + salariesTotal + venueShare;
+    const depreciation = equipmentDepForMonth(bKey, month);   // OX/new equipment spread monthly
+    const totalOpex = overheadsTotal + salariesTotal + venueShare + depreciation;
 
     const grossProfit = revenue - cogs;
     const netProfit = grossProfit - totalOpex;
     const npPct = revenue ? (netProfit / revenue) * 100 : null;
     // Maadi's 10%-of-profit location fee — accrued for visibility, never deducted (see above).
     const maadiProfitShareOwed = bKey === "maadi" ? Math.max(0, netProfit) * 0.10 : 0;
-    return { grossRevenue, afterVat, venueShare, maadiProfitShareOwed, revenue, cogs, cogsAtItemPrice, salesAtItemPrice, cogsPct, overheadsTotal, salariesTotal, totalOpex, grossProfit, netProfit, npPct };
+    return { grossRevenue, afterVat, venueShare, maadiProfitShareOwed, revenue, cogs, cogsAtItemPrice, salesAtItemPrice, cogsPct, overheadsTotal, salariesTotal, depreciation, totalOpex, grossProfit, netProfit, npPct };
   }
 
   const trendCard = el("div", { class: "card", style: { marginTop: "10px" } });
@@ -18699,7 +18750,8 @@ routes.dashboard = function (u, params) {
     // What Coffee Beats actually keeps from Zawya after the venue's cut — kept as its own
     // figure so it stays visible in the KPI cards even though it's not the margin base.
     const revenueAfterShares = hasVenueShare(branch) ? revenueAfterVat - venueShare : null;
-    const totalOpex = overheadsTotal + salariesTotal + venueShare;
+    const depreciation = branch === "events" ? 0 : rangeMonths.reduce((t, m) => t + equipmentDepForMonth(branch, m), 0);
+    const totalOpex = overheadsTotal + salariesTotal + venueShare + depreciation;
 
     // ---------- KEY METRICS ----------
     const cogs = cogsSales; // sales-derived (use theoretical if you prefer — see note on P&L card)
@@ -18766,8 +18818,8 @@ routes.dashboard = function (u, params) {
       ]),
       el("div", { class: "muted small", style: { marginTop: "8px" } },
         branch === "zawya"
-          ? `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} − Zawya venue share ${money(venueShare)} = Net ${money(netProfit)}. CB keeps ${money(revenueAfterShares)} of Zawya's after-VAT sales; the 10% venue cut is treated as an operating cost, not a reduction to revenue, so it's inside this net and every margin.`
-          : `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)} = Net ${money(netProfit)}. Maadi's deal is 10% of profit (${money(maadiProfitShareOwed)} for this period) — never invoiced or paid, so it is not deducted here.`),
+          ? `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)}${depreciation ? ` − Equipment ${money(depreciation)}` : ""} − Zawya venue share ${money(venueShare)} = Net ${money(netProfit)}. CB keeps ${money(revenueAfterShares)} of Zawya's after-VAT sales; the 10% venue cut is treated as an operating cost, not a reduction to revenue, so it's inside this net and every margin.`
+          : `Revenue ${money(revenue)} → after 14% VAT ${money(plRevenue)} (margin base) − COGS ${money(cogs)} − Overheads ${money(overheadsTotal)} − Salaries ${money(salariesTotal)}${depreciation ? ` − Equipment ${money(depreciation)}` : ""} = Net ${money(netProfit)}. Maadi's deal is 10% of profit (${money(maadiProfitShareOwed)} for this period) — never invoiced or paid, so it is not deducted here.`),
     ]));
 
     // ---------- P&L reconciliation ----------
@@ -18782,7 +18834,7 @@ routes.dashboard = function (u, params) {
     ]));
 
     // ---------- Overheads breakdown ----------
-    if (ohRows.length || salariesTotal > 0 || venueShare > 0) {
+    if (ohRows.length || salariesTotal > 0 || venueShare > 0 || depreciation > 0) {
       const card = el("div", { class: "card", style: { marginTop: "14px" } });
       card.appendChild(el("h2", {}, `Overheads + salaries — ${rangeLabel}`));
       for (const o of ohRows) {
@@ -18813,6 +18865,15 @@ routes.dashboard = function (u, params) {
             el("div", { class: "muted small" }, `10% of after-VAT sales ${money(revenueAfterVat)} · location cost`),
           ]),
           el("div", { class: "v" }, money(venueShare)),
+        ]));
+      }
+      if (depreciation > 0) {
+        card.appendChild(el("div", { class: "kv" }, [
+          el("div", { class: "k" }, [
+            el("span", {}, "Equipment — monthly depreciation"),
+            el("div", { class: "muted small" }, "Bill amount ÷ useful life, spread monthly (Finance → Equipment Register)"),
+          ]),
+          el("div", { class: "v" }, money(depreciation)),
         ]));
       }
       card.appendChild(el("div", { class: "hr" }));
@@ -24391,14 +24452,14 @@ routes.app_guide = function (u) {
       en_steps: [
         "Owner/accountant screen for tracking capital items — coffee machines, fridges, furniture, fit-out, IT — with the <strong>purchase date</strong>, cost, supplier, model/serial, and status (in use / in storage / retired / sold).",
         "Tap <strong>➕ Add equipment / asset</strong>. Pick a category (each carries a default useful life you can override), the branch it belongs to (or <strong>Shared</strong>), the purchase date and cost.",
-        "The register shows <strong>original cost</strong> and a reference <strong>book value</strong> — straight-line depreciation to zero over the useful life — plus the asset's age. This is capitalised, <strong>not</strong> expensed in the monthly P&L, and depreciation is not posted to the Dashboard.",
+        "The register shows <strong>original cost</strong> and a reference <strong>book value</strong> — straight-line depreciation to zero over the useful life — plus the asset's age. <strong>P&L:</strong> every new item has a <em>Deduct from P&L?</em> choice (Yes by default). When Yes, the bill amount is spread monthly — cost ÷ (useful life × 12) — as an <strong>Equipment — monthly depreciation</strong> line in that branch's P&L, starting in the purchase month (or the branch's opening month if later). Enter the <strong>Bill / invoice no.</strong> and the <strong>Bill amount</strong> for each purchase. Older rows stay register-only unless you edit them to Yes. <strong>Renovation, transport and set-up costs are not assets:</strong> log them in Monthly Overheads (➕ OX renovation / transport / setup) and they hit that month's P&L in full.",
         "<strong>Paid from:</strong> choose Petty cash, Owner's bank, or Credit card and the app writes the matching drawdown automatically (petty-cash expense — split 50/50 for a Shared asset — or a bank-ledger entry). Leave it on <em>not tracked</em> if recorded elsewhere.",
         "Edit or delete any row. Deleting an asset also removes its linked petty-cash / bank record. Export the whole register to CSV from the back bar.",
       ],
       ar_steps: [
         "شاشة للمالك والمحاسب لتتبّع الأصول الرأسمالية — ماكينات القهوة، الثلاجات، الأثاث، التشطيبات، أجهزة الكمبيوتر — مع <strong>تاريخ الشراء</strong> والتكلفة والمورد والموديل/الرقم التسلسلي والحالة (قيد الاستخدام / في المخزن / خارج الخدمة / مُباع).",
         "اضغط <strong>➕ إضافة معدة / أصل</strong>. اختر الفئة (لكل فئة عُمر افتراضي يمكن تعديله)، والفرع التابع له (أو <strong>مشترك</strong>)، وتاريخ الشراء والتكلفة.",
-        "يعرض السجل <strong>التكلفة الأصلية</strong> و<strong>القيمة الدفترية</strong> الاسترشادية — إهلاك بالقسط الثابت حتى الصفر على مدى العمر الإنتاجي — وعمر الأصل. هذا يُرسمَل ولا يُحتسب مصروفاً في الأرباح والخسائر الشهرية، والإهلاك لا يُدرَج في لوحة التقارير.",
+        "يعرض السجل <strong>التكلفة الأصلية</strong> و<strong>القيمة الدفترية</strong> الاسترشادية — إهلاك بالقسط الثابت حتى الصفر على مدى العمر الإنتاجي — وعمر الأصل. <strong>الأرباح والخسائر:</strong> لكل بند جديد خيار <em>خصم من الأرباح والخسائر؟</em> (نعم افتراضياً). عند «نعم» يُوزَّع مبلغ الفاتورة شهرياً — التكلفة ÷ (العمر الإنتاجي × 12) — كسطر <strong>المعدات — إهلاك شهري</strong> في أرباح وخسائر الفرع، بدءاً من شهر الشراء (أو شهر افتتاح الفرع إن كان أحدث). أدخل <strong>رقم الفاتورة</strong> و<strong>مبلغ الفاتورة</strong> لكل عملية شراء. البنود القديمة تبقى للسجل فقط ما لم تعدّلها إلى «نعم». <strong>التجديد والنقل والتجهيز ليست أصولاً:</strong> سجّلها في المصاريف الشهرية (➕ OX تجديد / نقل / تجهيز) فتُخصم كاملةً من أرباح ذلك الشهر.",
         "<strong>مدفوع من:</strong> اختر النثرية أو بنك المالك أو بطاقة الائتمان فيسجّل التطبيق الخصم المقابل تلقائياً (مصروف نثرية — يُقسَّم 50/50 للأصل المشترك — أو قيد بنكي). اتركه على <em>غير متتبَّع</em> إذا كان مسجلاً في مكان آخر.",
         "يمكن تعديل أو حذف أي بند. حذف الأصل يحذف أيضاً قيد النثرية/البنك المرتبط به. يمكن تصدير السجل كاملاً إلى CSV من شريط الرجوع.",
       ],
