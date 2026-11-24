@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261120-091 -->
+<!-- CB_BUILD:20261124-136 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261120-091";
+  var BUILD = "20261124-136";
   (function() {
     function checkFresh() {
       try {
@@ -875,10 +875,10 @@ const toast = (msg, kind="") => {
 // close = last trading day (branch stays in history/reports after closing).
 const BRANCH_LIFECYCLE = {
   maadi: {},
-  zawya: { close: "2026-11-24" },
-  ox:    { setup: "2026-11-11", open: "2026-11-25" }
+  zawya: { close: "2026-11-23" },
+  ox:    { setup: "2026-11-11", open: "2026-11-24" }
 };
-const ALL_BRANCHES = ["maadi", "zawya", "ox"];
+const ALL_BRANCHES = ["maadi", "ox", "zawya"];
 const BRANCH_LABELS = { maadi: "Maadi", zawya: "Zawya", ox: "OX" };
 function hasVenueShare(b) { b = String(b || "").toLowerCase(); return b === "zawya" || b === "ox"; }
 function canonBranch(raw) {
@@ -4341,7 +4341,7 @@ function pettyCashMonthReset(date, note) {
   const s = stamp();
   const n = note || `Month-end deposit — start ${month} fresh`;
   const done = [];
-  for (const b of ["zawya", "maadi"]) {
+  for (const b of reportBranches()) {
     const moved = _bankPettyCashBranch(b, s, date, n);
     if (moved > 0) done.push(`${b[0].toUpperCase() + b.slice(1)} ${money(moved)}`);
   }
@@ -7029,7 +7029,7 @@ routes.shift_close_list = function (u) {
   // Branch tabs — lets a head barista or owner view one branch's shift closes alone
   // instead of the combined feed. Only shown when the user can actually see more than
   // one branch (owner/accountant see both; everyone else only their assigned branches).
-  const viewableBranches = (u.role === "owner" || u.role === "accountant") ? ["zawya", "maadi"] : (u.branches || []);
+  const viewableBranches = (u.role === "owner" || u.role === "accountant") ? activeBranches() : (u.branches || []).filter(b => activeBranches().includes(b));
   let branchFilter = "all";
   if (viewableBranches.length > 1) {
     const branchTabs = el("div", { class: "tabs", style: { marginTop: "4px" } });
@@ -14121,7 +14121,7 @@ routes.counterpoint_stock = function (u) {
   const wrap = el("div", {});
   wrap.appendChild(header("Ops vs Counterpoint stock",
     "Each branch's stock as ops counts it, next to what that branch's till says it has. Differences can be matched manually here (ops is corrected, Counterpoint is not touched); the owner can also copy a count list to enter in Counterpoint."));
-  // Maadi and Ox (the new branch opening 25 Nov 2026, replacing Zawya which closes 24 Nov). Owner/accountant only page, so both are always offered.
+  // Maadi and Ox (the new branch opening 24 Nov 2026, replacing Zawya which closed 23 Nov). Owner/accountant only page, so both are always offered.
   let branch = "maadi";
   const BR = [["maadi", "🏠 Maadi"], ["ox", "🆕 Ox"]];
   const branchBar = el("div", { style: { display: "flex", gap: "8px", marginBottom: "10px" } });

@@ -744,8 +744,8 @@ exports.leaveAlert = onDocumentUpdated(
 //  • Close  = every branch needs at least one shift close dated today.
 //  • Waste  = every branch needs a waste-log entry today — "No waste" counts, silence doesn't.
 //  • Roster = the current week (Sunday-based week_of) needs rows for every branch.
-// Branches expected to trade on a date (ISO yyyy-mm-dd): Zawya closes after 2026-11-24, OX opens 2026-11-25.
-const BRANCH_TRADING = { maadi: {}, zawya: { close: "2026-11-24" }, ox: { open: "2026-11-25" } };
+// Branches expected to trade on a date (ISO yyyy-mm-dd): Zawya closed after 2026-11-23, OX opens 2026-11-24.
+const BRANCH_TRADING = { maadi: {}, zawya: { close: "2026-11-23" }, ox: { open: "2026-11-24" } };
 function complianceBranches(ds) {
   return Object.keys(BRANCH_TRADING).filter(b => {
     const l = BRANCH_TRADING[b];
