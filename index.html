@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261124-245 -->
+<!-- CB_BUILD:20261124-344 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261124-245";
+  var BUILD = "20261124-344";
   (function() {
     function checkFresh() {
       try {
@@ -14756,7 +14756,7 @@ routes.bank = function (u) {
         const rowEl = el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", padding: "8px 0", borderBottom: "1px solid var(--border)" } }, [
           el("div", { style: { flex: "1", minWidth: "0" } }, [
             el("div", { style: { fontWeight: "600", fontSize: "13px" } }, `${money(e.amount)} · ${e.label || (srcLabel[e.source] || e.source)}`),
-            el("div", { class: "muted small" }, `${srcLabel[e.source] || e.source} · ${e.date || "—"} · ${e.by_name || "—"}`),
+            el("div", { class: "muted small" }, `${srcLabel[e.source] || e.source} · ${e.date || "—"} · ${e.by_name || "—"}${e.partial_repaid ? ` · ${money(e.partial_repaid)} already repaid` : ""}`),
           ]),
           el("div", { style: { display: "flex", gap: "4px", flexShrink: "0" } }, [
             el("button", { class: "btn ghost", style: { fontSize: "11px", padding: "4px 8px", minHeight: "26px" }, onClick: () => markReimbursed(e) }, "✓ Mark reimbursed"),
@@ -14780,7 +14780,7 @@ routes.bank = function (u) {
       const doneWrap = el("div", { style: { display: "none", marginTop: "8px" } });
       for (const e of _owedDone) {
         doneWrap.appendChild(el("div", { class: "muted small", style: { padding: "3px 0" } },
-          `✓ ${money(e.amount)} · ${e.label || (srcLabel[e.source] || e.source)} · reimbursed ${fmtDate(e.reimbursed_at)} to ${e.by_name || "—"}`));
+          `✓ ${money(e.amount)}${e.split_from ? " (partial)" : ""} · ${e.label || (srcLabel[e.source] || e.source)} · reimbursed ${fmtDate(e.reimbursed_at)} to ${e.by_name || "—"}`));
       }
       const doneBtn = el("button", { class: "btn ghost small", style: { marginTop: "8px" }, onClick: () => {
         showDone = !showDone; doneWrap.style.display = showDone ? "" : "none";
@@ -14793,22 +14793,45 @@ routes.bank = function (u) {
   }
 
   function markReimbursed(target) {
-    const entries = Array.isArray(target) ? target : [target];
-    const total = entries.reduce((sm, e) => sm + (Number(e.amount) || 0), 0);
+    // Oldest first, so a partial repayment clears the oldest debts before newer ones.
+    const entries = (Array.isArray(target) ? target : [target]).slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const total = Math.round(entries.reduce((sm, e) => sm + (Number(e.amount) || 0), 0) * 100) / 100;
     openPrompt({
-      title: entries.length > 1 ? `Reimburse ${entries.length} entries — ${money(total)}` : `Mark reimbursed — ${money(total)}`,
+      title: entries.length > 1 ? `Reimburse ${entries.length} entries — ${money(total)} owed` : `Mark reimbursed — ${money(total)} owed`,
       fields: [
+        { key: "amount", label: `Amount reimbursed now (max ${money(total)}) — lower it for a partial repayment${entries.length > 1 ? "; applied oldest entry first" : ""}`, type: "number", value: total },
         { key: "date", label: "Repayment date", type: "date", value: new Date().toISOString().slice(0, 10) },
         { key: "note", label: "Note (optional)", type: "text", value: "" },
       ],
       onSubmit: (v) => {
+        let remaining = Math.round((Number(v.amount) || 0) * 100) / 100;
+        if (!(remaining > 0)) { toast("Enter an amount above 0", "error"); return; }
+        if (remaining > total + 0.005) { toast(`Amount can't be more than ${money(total)}`, "error"); return; }
+        const paidNow = remaining;
         const s = stamp();
         for (const e of entries) {
+          if (remaining <= 0.005) break;
           const live = (state.owner_account || []).find(x => x.id === e.id);
-          if (live && !live.reimbursed) reimbursePersonalPayment(live, { date: v.date, note: v.note }, s);
+          if (!live || live.reimbursed) continue;
+          const owed = Number(live.amount) || 0;
+          if (owed <= remaining + 0.005) {
+            reimbursePersonalPayment(live, { date: v.date, note: v.note }, s);
+            remaining = Math.round((remaining - owed) * 100) / 100;
+          } else {
+            // Partial: split off the repaid slice as its own reimbursed entry, keep the rest open.
+            const slice = { ...live, id: uuid(), amount: remaining, split_from: live.id, at: s.at, updated_at: s.at };
+            delete slice.reimbursed_at; delete slice.reimburse_ref;
+            reimbursePersonalPayment(slice, { date: v.date, note: v.note }, s);
+            state.owner_account.push(slice);
+            live.amount = Math.round((owed - remaining) * 100) / 100;
+            live.partial_repaid = Math.round(((Number(live.partial_repaid) || 0) + remaining) * 100) / 100;
+            live.updated_at = s.at;
+            remaining = 0;
+          }
         }
         saveState();
-        toast(entries.length > 1 ? `Reimbursed ${entries.length} · ${money(total)} logged to bank` : `Reimbursed · ${money(total)} logged to bank`);
+        const left = Math.round((total - paidNow) * 100) / 100;
+        toast(left > 0.005 ? `Reimbursed ${money(paidNow)} logged to bank · ${money(left)} still owed` : (entries.length > 1 ? `Reimbursed ${entries.length} · ${money(paidNow)} logged to bank` : `Reimbursed · ${money(paidNow)} logged to bank`));
         render();
       }
     });
@@ -24415,13 +24438,13 @@ routes.app_guide = function (u) {
         "Owner-only screen showing money that moved through the business bank account or credit card — separate from the cash floats in Petty Cash.",
         "Entries appear automatically from purchases paid by bank/card, petty cash top-ups (money leaving the bank to fund a float), and Maadi cash deposits (money entering the bank). Owner can also add a <strong>manual entry</strong> (payee, amount, note) for anything else — positive for money in, negative for money out.",
         "The total shown is the sum of every entry's amount over the last 200 records. Petty-cash top-ups are hidden from that headline total by default (a toggle can include them) since they're a transfer between accounts, not a real expense.",
-        "<strong>🙋 Personal funds — company owes:</strong> when you log an expense (overhead, purchase, salary, loan, equipment) and set <em>Paid from → Paid personally</em>, it appears here as money the company owes you. The expense still counts in the P&L through its own record — this panel only tracks the debt. Tap <strong>✓ Mark reimbursed</strong> (or <strong>Reimburse all</strong>) once the company pays you back: it posts the repayment as a bank outflow here — never a second expense.",
+        "<strong>🙋 Personal funds — company owes:</strong> when you log an expense (overhead, purchase, salary, loan, equipment) and set <em>Paid from → Paid personally</em>, it appears here as money the company owes you. The expense still counts in the P&L through its own record — this panel only tracks the debt. Tap <strong>✓ Mark reimbursed</strong> (or <strong>Reimburse all</strong>) once the company pays you back — the amount box defaults to the full debt; lower it for a <em>partial</em> repayment (the repaid part moves to history, the rest stays owed; with Reimburse all it is applied oldest entry first): it posts the repayment as a bank outflow here — never a second expense.",
       ],
       ar_steps: [
         "شاشة خاصة بالمالك فقط تعرض حركة الأموال عبر حساب البنك أو بطاقة الائتمان — منفصلة عن عُهد الكاش في النثرية.",
         "تظهر القيود تلقائياً من المشتريات المدفوعة بالبنك/البطاقة، وتعبئات النثرية (كاش خرج من البنك لتمويل عهدة)، وإيداعات المعادي (كاش دخل البنك). يمكن للمالك أيضاً إضافة <strong>قيد يدوي</strong> (الجهة، المبلغ، ملاحظة) — موجب للداخل وسالب للخارج.",
         "الإجمالي المعروض هو مجموع كل القيود في آخر 200 سجل. تعبئات النثرية مخفية من هذا الإجمالي افتراضياً (يمكن تفعيل إظهارها) لأنها تحويل بين حسابين وليست مصروفاً حقيقياً.",
-        "<strong>🙋 أموال شخصية — الشركة مدينة لك:</strong> عند تسجيل مصروف (مصروف ثابت، مشتريات، راتب، سلفة، معدات) واختيار <em>مدفوع من → دفعت شخصياً</em>، يظهر هنا كمبلغ تدين به الشركة لك. المصروف يبقى محتسباً في الأرباح والخسائر من خلال سجله — هذه اللوحة تتتبّع الدين فقط. اضغط <strong>✓ تم السداد</strong> (أو <strong>سداد الكل</strong>) عندما تسدد لك الشركة: يُسجَّل السداد كخصم بنكي هنا — وليس كمصروف ثانٍ.",
+        "<strong>🙋 أموال شخصية — الشركة مدينة لك:</strong> عند تسجيل مصروف (مصروف ثابت، مشتريات، راتب، سلفة، معدات) واختيار <em>مدفوع من → دفعت شخصياً</em>، يظهر هنا كمبلغ تدين به الشركة لك. المصروف يبقى محتسباً في الأرباح والخسائر من خلال سجله — هذه اللوحة تتتبّع الدين فقط. اضغط <strong>✓ تم السداد</strong> (أو <strong>سداد الكل</strong>) عندما تسدد لك الشركة — خانة المبلغ تبدأ بالدين كاملاً؛ خفّضها لسداد <em>جزئي</em> (الجزء المسدَّد ينتقل إلى السجل والباقي يبقى مستحقاً؛ مع سداد الكل يُطبَّق على الأقدم أولاً): يُسجَّل السداد كخصم بنكي هنا — وليس كمصروف ثانٍ.",
       ],
     },
     {
