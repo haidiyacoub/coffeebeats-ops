@@ -518,6 +518,92 @@ exports.sendOwnerPaidReportNow = onCall(
   }
 );
 
+// ─── Daily Counterpoint sales email ───────────────────────────────────────────
+// 23:59 Cairo every day: total sales per branch (Maadi, OX, …) from Counterpoint, net of refunds.
+// Reads Counterpoint directly for the freshest numbers; falls back to the counterpoint_sales
+// copy the worker keeps in Firestore (synced every 5 min) if the API call fails.
+function _cairoDayBoundsUTC(dateStr) {
+  // UTC offset of Cairo at noon that day (handles Egypt's summer time)
+  const noon = new Date(`${dateStr}T12:00:00Z`);
+  const local = new Date(noon.toLocaleString("en-US", { timeZone: "Africa/Cairo" }));
+  const utc   = new Date(noon.toLocaleString("en-US", { timeZone: "UTC" }));
+  const offMs = local - utc;
+  const start = new Date(Date.parse(`${dateStr}T00:00:00Z`) - offMs);
+  return { start: start.toISOString(), end: new Date(start.getTime() + 864e5).toISOString() };
+}
+
+async function _cpSalesSince(sinceISO) {
+  const out = [];
+  let cursor = null;
+  for (let page = 0; page < 25; page++) {
+    const q = new URLSearchParams({ paginate: "true", limit: "200", since: sinceISO });
+    if (cursor) q.set("cursor", cursor);
+    const res = await fetch(`${COUNTERPOINT_BASE}/sales?${q}`, { headers: { Authorization: "Bearer " + COUNTERPOINT_API_KEY.value() } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`Counterpoint ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+    const d = body.data !== undefined ? body.data : body;
+    out.push(...(d.sales || []));
+    cursor = d.nextCursor || null;
+    if (!cursor) return out;
+  }
+  throw new Error("too many sales pages");
+}
+
+async function _sendDailyCpSales(dateStr) {
+  const db = getDb();
+  const day = dateStr || localISODate(new Date());
+  const { start, end } = _cairoDayBoundsUTC(day);
+
+  let sales, source = "counterpoint";
+  try {
+    sales = await _cpSalesSince(start);
+  } catch (e) {
+    console.warn("CP direct read failed, using Firestore copy:", e.message);
+    source = "firestore";
+    const snap = await db.collection("counterpoint_sales").where("createdAt", ">=", start).where("createdAt", "<", end).get();
+    sales = snap.docs.map((d) => d.data());
+  }
+  sales = sales.filter((s) => s && s.createdAt >= start && s.createdAt < end && s.kind !== "refund.created");
+
+  const locSnap = await db.collection("counterpoint_locations").get();
+  const locName = Object.fromEntries(locSnap.docs.map((d) => [d.id, d.data().name || d.id]));
+
+  const byLoc = {};
+  for (const s of sales) {
+    const net = Number(s.total || 0) - Number(s.refundedTotal || 0);
+    const k = String(s.locationId || "unknown");
+    byLoc[k] = (byLoc[k] || 0) + net;
+  }
+  // Every known branch gets a line, even with 0 sales
+  Object.keys(locName).forEach((id) => { if (!(id in byLoc)) byLoc[id] = 0; });
+
+  const rows = Object.entries(byLoc).map(([id, amt]) => ({ name: locName[id] || "Unknown branch", amt }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const total = rows.reduce((t, r) => t + r.amt, 0);
+  const lines = [`Coffee Beats — Sales ${day}`, ""];
+  rows.forEach((r) => lines.push(`${r.name}: ${_fmt(r.amt)}`));
+  lines.push("", `Total: ${_fmt(total)}`);
+
+  await _sendEmail(`💰 Sales ${day} — ${_fmt(total)}`, lines.join("\n"));
+  console.log("Daily CP sales email sent", day, source, sales.length, "sales");
+  return { day, total, branches: rows, source, sales: sales.length };
+}
+
+exports.sendDailyCpSales = onSchedule(
+  { schedule: "59 23 * * *", timeZone: "Africa/Cairo", secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO, COUNTERPOINT_API_KEY] },
+  async () => { await _sendDailyCpSales(); }
+);
+
+// Owner-only manual trigger, optional { date: "YYYY-MM-DD" } to resend a past day.
+exports.sendDailyCpSalesNow = onCall(
+  { secrets: [GMAIL_USER, GMAIL_PASS, NOTIFY_TO, COUNTERPOINT_API_KEY] },
+  async (request) => {
+    _requireOwner(request);
+    const d = request.data && /^\d{4}-\d{2}-\d{2}$/.test(request.data.date || "") ? request.data.date : undefined;
+    return { ok: true, ...(await _sendDailyCpSales(d)) };
+  }
+);
+
 // ─── salesReconciliation ──────────────────────────────────────────────────────
 // Fires whenever sales data is saved to Firestore (i.e. when you upload a sales file).
 // Compares each month present in the new sales data against shift closes totals.
