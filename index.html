@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261125-330 -->
+<!-- CB_BUILD:20261125-355 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261125-330";
+  var BUILD = "20261125-355";
   (function() {
     function checkFresh() {
       try {
@@ -22586,6 +22586,9 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["Greet every customer within 5 seconds of their arrival.", "Confirm the order clearly before preparation begins.", "Deliver drinks with a warm smile and positive energy.", "Maintain a clean, organized counter at all times."] },
         { type: "subheader", text: "Customer Experience Rules" },
         { type: "bullets", items: ["Be welcoming and attentive to artists and creatives — they are our community.", "Encourage conversation and a sense of belonging in the space.", "Maintain calm and professionalism even during busy periods.", "Treat every customer as a guest in a creative home."] },
+        { type: "subheader", text: "Add-ons vs Extras on the till (Counterpoint)" },
+        { type: "para", text: "Both ways charge the customer the same price and take the same stock off the shelf (e.g. 20 ml syrup). The difference is only how it is rung up and how it shows on the receipt and in sales reports." },
+        { type: "bullets", items: ["<strong>Add-on — use this by default.</strong> Tap the drink (e.g. Latte); the till asks for add-ons; pick the option (Vanilla Syrup, Hazelnut Syrup, Honey, sauces, whipped cream, extra shot, milk). It is printed under the drink, not as its own line. Add-ons appear on coffee, matcha, hot chocolate and signature drinks.", "<strong>Extra — only when the add-on is not offered.</strong> A separate button in the <strong>Extras</strong> category (e.g. Extra Vanilla Syrup, Extra Honey, Extra Oat Milk). It prints as its own line. Use it for a tea, or when the customer asks for it after the drink was already paid.", "Never ring both for the same request — that charges the customer twice and takes the syrup off stock twice.", "Vanilla Syrup and Hazelnut Syrup: <strong>40 LE</strong> (incl. VAT), 20 ml per add-on."] },
       ],
       ar_content: [
         { type: "para", text: "الخدمة في كوفي بيتس يجب أن تعكس الدفء والاحترافية. كل تفاعل هو جزء من تجربة كوفي بيتس الإبداعية." },
@@ -22593,6 +22596,9 @@ routes.handbook = function (u) {
         { type: "bullets", items: ["رحّب بكل زبون خلال 5 ثوانٍ من وصوله.", "أكّد الطلب بوضوح قبل البدء في التحضير.", "قدّم المشروبات بابتسامة دافئة وطاقة إيجابية.", "حافظ على نظافة العداد وترتيبه في جميع الأوقات."] },
         { type: "subheader", text: "قواعد تجربة الزبون" },
         { type: "bullets", items: ["كن مرحباً ومنتبهاً للفنانين والمبدعين — هم مجتمعنا.", "شجّع الحوار وشعور الانتماء في المكان.", "حافظ على الهدوء والاحترافية حتى في أوقات الذروة.", "تعامل مع كل زبون كضيف في بيت إبداعي."] },
+        { type: "subheader", text: "الإضافات (Add-ons) مقابل الـ Extras على الكاشير (Counterpoint)" },
+        { type: "para", text: "الطريقتان تحاسبان الزبون نفس السعر وتخصمان نفس الكمية من المخزون (مثلاً 20 مل سيروب). الفرق فقط في طريقة التسجيل وكيف تظهر في الفاتورة وتقارير المبيعات." },
+        { type: "bullets", items: ["<strong>الإضافة (Add-on) — استخدمها دائماً كأساس.</strong> اضغط على المشروب (مثلاً لاتيه)؛ الكاشير يسأل عن الإضافات؛ اختر الإضافة (سيروب فانيليا، سيروب بندق، عسل، صوصات، كريمة، شوت إضافي، نوع الحليب). تُطبع تحت المشروب وليست سطراً منفصلاً. الإضافات تظهر على مشروبات القهوة والماتشا والشوكولاتة الساخنة والمشروبات المميزة.", "<strong>الـ Extra — فقط عندما لا تظهر الإضافة.</strong> زر منفصل في قسم <strong>Extras</strong> (مثلاً Extra Vanilla Syrup، Extra Honey، Extra Oat Milk). يُطبع كسطر منفصل. استخدمه مع الشاي، أو إذا طلب الزبون الإضافة بعد دفع ثمن المشروب.", "لا تسجّل الاثنين لنفس الطلب أبداً — هذا يحاسب الزبون مرتين ويخصم السيروب من المخزون مرتين.", "سيروب الفانيليا وسيروب البندق: <strong>40 جنيه</strong> (شامل الضريبة)، 20 مل لكل إضافة."] },
       ]
     },
     {
@@ -24858,6 +24864,7 @@ routes.app_guide = function (u) {
         "<strong>💳 Emergency Contact</strong>: Keep your emergency contact up to date in My HR.",
         "<strong>🪪 My ID</strong>: Upload and keep your ID documents current in the My ID section.",
         "<strong>🔐 PIN</strong>: Never share your PIN with anyone. Each person logs in with their own PIN only.",
+        "<strong>🧾 Add-ons vs Extras (till)</strong>: Syrups, honey, sauces, extra shots and milks go on the drink as an <strong>add-on</strong> (pick the drink → choose the add-on). Use the separate <strong>Extras</strong> button only when the drink doesn't offer that add-on (e.g. tea) or the drink was already paid. Never both — it charges twice. See Handbook Section 1.",
       ],
       ar_steps: [
         "<strong>🕐 بصمة الحضور</strong>: قم بالبصمة فور وصولك. لا تبصّم لأحد آخر. الخصومات تلقائية.",
@@ -24869,6 +24876,7 @@ routes.app_guide = function (u) {
         "<strong>💳 جهة الاتصال الطارئ</strong>: احرص على تحديث بيانات جهة الطوارئ في الموارد البشرية.",
         "<strong>🪪 هويتي</strong>: ارفع وثائق هويتك واحرص على تحديثها في قسم هويتي.",
         "<strong>🔐 الـ PIN</strong>: لا تشارك الـ PIN مع أحد. كل شخص يسجّل الدخول بـ PIN خاص به فقط.",
+        "<strong>🧾 الإضافات مقابل الـ Extras (الكاشير)</strong>: السيروب والعسل والصوصات والشوت الإضافي والحليب تُسجَّل على المشروب كـ <strong>إضافة</strong> (اختر المشروب ← اختر الإضافة). استخدم زر <strong>Extras</strong> المنفصل فقط إذا لم يعرض المشروب هذه الإضافة (مثل الشاي) أو إذا كان المشروب مدفوعاً بالفعل. لا تسجّل الاثنين أبداً — يُحاسَب الزبون مرتين. راجع الدليل القسم 1.",
       ],
     },
   ];
