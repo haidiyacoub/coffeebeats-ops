@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261126-069 -->
+<!-- CB_BUILD:20261126-635 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261126-069";
+  var BUILD = "20261126-635";
   (function() {
     function checkFresh() {
       try {
@@ -16317,7 +16317,7 @@ routes.roster = function (u) {
   const otCard = el("div", { class: "card", style: { marginTop: "12px" } });
   otCard.appendChild(el("div", { class: "muted small", style: { textTransform: "uppercase", letterSpacing: "1px", marginBottom: "6px" } }, "⏰ Attendance Opening Times"));
   otCard.appendChild(el("div", { class: "muted small", style: { marginBottom: "10px" } },
-    "Sign-in stamps are checked against these times — morning AND evening shift each need their own stamp, with the same rules (evening rule starts 20 Oct 2026). 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time or no stamp = no show = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
+    "Counterpoint Time clock clock-ins are checked against these times — morning AND evening shift each need their own clock-in. ≤10 min = no penalty (grace period) · 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · no clock-in = no show = 3 days. If the same barista is late 2+ times in a month, the penalty doubles. Log these from the Penalties screen until Counterpoint shares clock-in data with the app."));
   for (const otBranch of allBranches()) {
     if (otBranch === "ox" && !_otOxVisible) continue;
     if (otBranch === "zawya") continue; // closed — not on the weekly schedule
@@ -22605,7 +22605,7 @@ routes.handbook = function (u) {
         { type: "para", text: "Each branch has an official opening time that is set at the start of every month and can change month to month (seasonal hours, Ramadan, events). Your current opening time is always shown in the app — on the Weekly Schedule and, for management, on Staff HR → Attendance Opening Times. Never assume last month's time. If you are unsure, confirm with your head barista before the shift." },
         { type: "para", text: "You must arrive early enough to finish every step below and have the bar ready to serve at the published opening time — not to start opening at that time. Aim to be in the branch at least 30 minutes before opening." },
         { type: "subheader", text: "Before the first customer" },
-        { type: "bullets", items: ["Submit your Sign-In Stamp the moment you arrive (see Section 9).", "Turn on the espresso machine and allow it to reach operating temperature.", "Calibrate the grinder and verify espresso extraction is within the target profile.", "Prepare milk and all perishable ingredients.", "Check syrup, sauce, and topping levels — replenish as needed.", "Clean and prepare the workspace and bar area.", "Verify the POS system is running correctly.", "Prepare cups, lids, and all service items."] },
+        { type: "bullets", items: ["Clock in on the Counterpoint till with your PIN the moment you arrive (see Section 9).", "Turn on the espresso machine and allow it to reach operating temperature.", "Calibrate the grinder and verify espresso extraction is within the target profile.", "Prepare milk and all perishable ingredients.", "Check syrup, sauce, and topping levels — replenish as needed.", "Clean and prepare the workspace and bar area.", "Verify the POS system is running correctly.", "Prepare cups, lids, and all service items."] },
         { type: "subheader", text: "Cleaning Log — ¼ Day Deduction" },
         { type: "para", text: "From 1 November 2026, the daily cleaning log for each branch is the responsibility of the barista who STARTS the day (the morning shift). If no cleaning log is submitted for that branch and day, ¼ day of that barista's pay is deducted automatically the next day; if the log is added later the deduction is withdrawn." },
       ],
@@ -22614,7 +22614,7 @@ routes.handbook = function (u) {
         { type: "para", text: "لكل فرع موعد فتح رسمي يُحدَّد في بداية كل شهر وقد يتغير من شهر لآخر (مواعيد موسمية، رمضان، فعاليات). موعد فتح فرعك الحالي يظهر دائماً في التطبيق — في الجدول الأسبوعي، وللإدارة في الموارد البشرية ← مواعيد فتح الحضور. لا تفترض موعد الشهر الماضي. إذا لم تكن متأكداً، تأكد من رئيس البريستا قبل الشيفت." },
         { type: "para", text: "يجب أن تصل مبكراً بما يكفي لإنهاء كل الخطوات أدناه وأن يكون البار جاهزاً للخدمة عند موعد الفتح المعلن — وليس أن تبدأ الفتح في ذلك الوقت. احرص على التواجد في الفرع قبل الفتح بـ 30 دقيقة على الأقل." },
         { type: "subheader", text: "قبل أول زبون" },
-        { type: "bullets", items: ["سجّل بصمة الحضور فور وصولك (انظر القسم 9).", "شغّل ماكينة الإسبريسو واتركها تصل إلى درجة حرارة التشغيل.", "اضبط الطاحونة وتحقق من أن استخلاص الإسبريسو ضمن المواصفات المستهدفة.", "حضّر الحليب وجميع المكونات سريعة التلف.", "تحقق من مستويات الشراب والصوص والإضافات — أعد التعبئة عند الحاجة.", "نظّف مساحة العمل والبار وجهّزها.", "تحقق من تشغيل نظام نقاط البيع بشكل صحيح.", "حضّر الأكواب والأغطية وجميع أدوات الخدمة."] },
+        { type: "bullets", items: ["سجّل حضورك على كاشير Counterpoint برقم الـ PIN فور وصولك (انظر القسم 9).", "شغّل ماكينة الإسبريسو واتركها تصل إلى درجة حرارة التشغيل.", "اضبط الطاحونة وتحقق من أن استخلاص الإسبريسو ضمن المواصفات المستهدفة.", "حضّر الحليب وجميع المكونات سريعة التلف.", "تحقق من مستويات الشراب والصوص والإضافات — أعد التعبئة عند الحاجة.", "نظّف مساحة العمل والبار وجهّزها.", "تحقق من تشغيل نظام نقاط البيع بشكل صحيح.", "حضّر الأكواب والأغطية وجميع أدوات الخدمة."] },
         { type: "subheader", text: "سجل النظافة — خصم ربع يوم" },
         { type: "para", text: "اعتباراً من 1 نوفمبر 2026، سجل النظافة اليومي لكل فرع هو مسؤولية الباريستا الذي يبدأ اليوم (الشيفت الصباحي). إذا لم يُقدَّم سجل نظافة لذلك الفرع واليوم، يُخصم ربع يوم من أجر هذا الباريستا تلقائياً في اليوم التالي؛ وإذا أُضيف السجل لاحقاً يُسحب الخصم." },
       ]
@@ -22727,46 +22727,32 @@ routes.handbook = function (u) {
       ]
     },
     {
-      number: "9", title: "Sign-In Stamps", ar_title: "بصمة الحضور",
+      number: "9", title: "Clocking In (Counterpoint Time Clock)", ar_title: "تسجيل الحضور (ساعة Counterpoint)",
       content: [
-        { type: "para", text: "The Sign-In Stamp is the official attendance record for every shift. Every morning shift AND every evening shift must begin with its own clock-in photo submitted through the Operations App. A missed evening stamp carries exactly the same penalties as a missed morning stamp." },
+        { type: "para", text: "Attendance is recorded on the Counterpoint till's Time clock. The Operations App no longer has a Sign-In Stamp or clock-in photo. Every barista clocks in for every shift — morning AND evening — with their own 4-digit till PIN the moment they arrive, and clocks out when they leave. The Time clock is the official attendance record and is what payroll reads." },
+        { type: "subheader", text: "How to Clock In and Out" },
+        { type: "bullets", items: ["On the till, open Register → Time clock.", "Arriving: type your own 4-digit till PIN and tap \"Start shift with PIN\".", "Leaving: type your PIN and tap \"End shift with PIN\".", "Never clock in or out for anyone else — each PIN records only its owner's hours.", "Forgot your PIN, or the till is down? Tell your head barista straight away so your arrival time is noted."] },
         { type: "subheader", text: "What counts as \"on time\"" },
-        { type: "para", text: "\"Late\" is measured against your branch's opening time for the current month — the same time shown on your Weekly Schedule. That time is set by management each month and can change, so all the rules below are written relative to it, never to a fixed clock time. Lateness is the number of minutes between your stamp and that opening time." },
-        { type: "subheader", text: "How to Submit a Sign-In Stamp" },
-        { type: "bullets", items: ["Open the Operations App and log in with your PIN.", "Tap \"Sign-In Stamp\" from the home screen.", "Select your branch (Maadi or OX).", "Photograph the branch iPad or any clock — date and time must be visible.", "Upload the photo and tap \"Submit clock-in.\""] },
-        { type: "subheader", text: "Automatic Salary Deduction Tiers" },
-        { type: "para", text: "Applied automatically the moment your stamp is uploaded. Each deduction is a share of one day's pay (monthly salary ÷ 30), so the EGP amount scales with your own salary." },
-        { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "Lateness is measured from the time the clock photo was taken — take the photo the moment you arrive. If the app can't read the photo's time (e.g. a screenshot, an edited or forwarded picture) it counts as a no show: 3 days deducted.", "No stamp at all for an assigned morning shift counts as a no show: 3 days deducted, applied automatically the next day.", "Repeat-offender rule: from your 2nd late stamp in the same calendar month onward, every further late penalty that month is doubled automatically.", "Covering a shift that was not assigned to you: no penalty even if late, and +50 Punctuality KPI bonus points (see Shift Cover below)."] },
-        { type: "subheader", text: "Who Must Stamp — Shift Cover" },
-        { type: "para", text: "The barista named on the Weekly Schedule for a branch, day and shift is the one who must stamp for that shift." },
-        { type: "bullets", items: ["Nobody stamps the shift: the scheduled barista is a no show — 3 days deducted.", "Someone who is NOT on that shift's schedule stamps instead: their stamp turns green (🤝 Cover) and the scheduled barista is NOT a no show. Instead, 1 day is taken off the scheduled barista's annual-leave balance and 1 day is added to the balance of the barista who stamped, who also gets the +50 Punctuality bonus.", "The scheduled barista's Punctuality KPI is not hit with the −100 no-stamp score for a covered shift.", "If the scheduled barista is on approved leave that day, nothing is deducted or credited.", "A cover is worked out automatically from the schedule and the stamps once the day has passed; if the schedule or a stamp is later corrected, the result follows it.", "A barista cannot be on the schedule for the same day and shift at two branches."] },
+        { type: "para", text: "\"Late\" is the number of minutes between your Counterpoint clock-in and your branch's opening time for that shift — the same time shown on your Weekly Schedule. That time is set by management each month and can change, so the rules below are written relative to it, never to a fixed clock time." },
+        { type: "subheader", text: "Late Penalties" },
+        { type: "para", text: "The barista named on the Weekly Schedule for a branch, day and shift is the one checked. Each deduction is a share of one day's pay (monthly salary ÷ 30). For now the owner or head barista logs these from the Penalties screen after checking Counterpoint's clock-in times against the Weekly Schedule; they will be applied automatically once Counterpoint shares clock-in data with the Operations App." },
+        { type: "bullets", items: ["Within 10 min after opening: no penalty (grace period).", "10–60 min late: ½ day deducted.", "60–120 min late: 1 full day deducted.", "More than 120 min late: 2 days deducted.", "No clock-in at all for an assigned shift counts as a no show: 3 days deducted.", "Repeat-offender rule: from your 2nd late clock-in in the same calendar month onward, every further late penalty that month is doubled.", "If you are on approved leave that day, nothing is deducted."] },
         { type: "subheader", text: "Other Penalties" },
         { type: "para", text: "Logged manually by the owner or head barista from the Penalties screen — same ½-day-of-salary math as above (monthly salary ÷ 30 × 0.5)." },
-        { type: "bullets", items: ["Not following the rules, or not updating the app/site as required: ½ day deducted.", "Hygiene or uniform violation: ½ day deducted.", "No stamp (no show), logged manually rather than by the automatic missing-stamp check: 3 days deducted.", "Repeat-offender rule: from your 2nd \"no show\" this month onward, every further \"no show\" that month is doubled. Separately, from your 2nd conduct penalty (rules/site, hygiene, or uniform) this month onward, every further conduct penalty that month is doubled."] },
-        { type: "subheader", text: "Punctuality KPI Impact" },
-        { type: "para", text: "Separate from the salary deduction. Your Punctuality KPI starts at 100 each month and each morning shift adjusts it: 30+ min early = +10 pts · 15–30 min early = +5 pts · on time or within the 10-min grace = 0 · 11–120 min late = −20 pts · more than 120 min late = −50 pts · no stamp = −100 pts · covering an unassigned shift = +50 pts. If the deductions push your Punctuality score below 0, the overflow is taken off your overall KPI total." },
-        { type: "subheader", text: "Notifications" },
-        { type: "para", text: "Any stamp more than 10 minutes late sends an immediate in-app alert and email to the owner and head barista. If no stamp is recorded within one hour of opening, a second alert is sent automatically." },
+        { type: "bullets", items: ["Not following the rules, or not updating the app/site as required: ½ day deducted.", "Hygiene or uniform violation: ½ day deducted.", "Repeat-offender rule: from your 2nd \"no show\" this month onward, every further \"no show\" that month is doubled. Separately, from your 2nd conduct penalty (rules/site, hygiene, or uniform) this month onward, every further conduct penalty that month is doubled."] },
       ],
       ar_content: [
-        { type: "para", text: "بصمة الحضور هي سجل الحضور اليومي الرسمي لجميع بريستا الشيفت الصباحي. يجب أن يبدأ كل شيفت صباحي بصورة حضور مُقدَّمة عبر تطبيق العمليات." },
+        { type: "para", text: "يُسجَّل الحضور على ساعة الحضور (Time clock) في كاشير Counterpoint. لم يعد في تطبيق العمليات بصمة حضور أو صورة تسجيل حضور. يسجّل كل باريستا حضوره في كل شيفت — الصباحي والمسائي — برقم الـ PIN الخاص به (4 أرقام) فور وصوله، ويسجّل انصرافه عند المغادرة. ساعة الحضور هي سجل الحضور الرسمي وهي ما يعتمد عليه حساب الرواتب." },
+        { type: "subheader", text: "كيفية تسجيل الحضور والانصراف" },
+        { type: "bullets", items: ["على الكاشير، افتح Register ← Time clock.", "عند الوصول: اكتب رقم الـ PIN الخاص بك (4 أرقام) واضغط \"Start shift with PIN\".", "عند المغادرة: اكتب رقم الـ PIN واضغط \"End shift with PIN\".", "لا تسجّل حضور أو انصراف أي شخص آخر أبداً — كل PIN يسجّل ساعات صاحبه فقط.", "نسيت الـ PIN أو الكاشير لا يعمل؟ أبلغ رئيس البريستا فوراً ليُسجَّل وقت وصولك."] },
         { type: "subheader", text: "ما الذي يُعتبر \"في الموعد\"" },
-        { type: "para", text: "يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك للشهر الحالي — نفس الموعد الظاهر في جدولك الأسبوعي. تُحدده الإدارة كل شهر وقد يتغير، لذا كل القواعد أدناه مكتوبة نسبةً إليه وليس إلى وقت ثابت. التأخير هو عدد الدقائق بين بصمتك وموعد الفتح ذاك." },
-        { type: "subheader", text: "كيفية تقديم بصمة الحضور" },
-        { type: "bullets", items: ["افتح تطبيق العمليات وسجّل الدخول برقم الـ PIN.", "اضغط \"بصمة الحضور\" من الشاشة الرئيسية.", "اختر فرعك (المعادي أو OX).", "التقط صورة لـ iPad الفرع أو أي ساعة — يجب أن يظهر التاريخ والوقت.", "قم بتحميل الصورة واضغط \"تسجيل الحضور\"."] },
-        { type: "subheader", text: "شرائح الخصم التلقائي من الراتب" },
-        { type: "para", text: "تُطبَّق تلقائياً لحظة رفع البصمة. كل خصم هو جزء من أجر يوم واحد (الراتب الشهري ÷ 30)، فيتناسب المبلغ مع راتبك أنت." },
-        { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "يُحتسب التأخير من وقت التقاط صورة الساعة — التقط الصورة فور وصولك. إذا لم يتمكن التطبيق من قراءة وقت الصورة (مثل لقطة شاشة أو صورة معدّلة أو مُعاد توجيهها) يُعتبر غياباً: خصم 3 أيام.", "غياب بدون بصمة لشيفت صباحي مُخصَّص لك يُعتبر غياباً (no show): خصم 3 أيام، يُطبَّق تلقائياً في اليوم التالي.", "قاعدة التكرار: من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق في ذلك الشهر تلقائياً.", "تغطية شيفت غير مُخصَّص لك: لا خصم حتى لو تأخرت، و +50 نقطة مكافأة في مؤشر الانضباط (راجع التغطية أدناه)."] },
-        { type: "subheader", text: "من يجب أن يسجّل البصمة — تغطية الشيفت" },
-        { type: "para", text: "الباريستا المسجّل اسمه في الجدول الأسبوعي لفرع ويوم وشيفت معيّن هو من يجب أن يسجّل بصمة ذلك الشيفت." },
-        { type: "bullets", items: ["لم يسجّل أحد بصمة الشيفت: يُعتبر الباريستا المُجدول غياباً (no show) — خصم 3 أيام.", "إذا سجّل بصمة شخص غير مُجدول في ذلك الشيفت: تتحول بصمته إلى اللون الأخضر (🤝 تغطية) ولا يُعتبر الباريستا المُجدول غائباً بدون بصمة. بدلاً من ذلك يُخصم يوم من رصيد إجازته السنوية ويُضاف يوم إلى رصيد الباريستا الذي سجّل البصمة، ويحصل أيضاً على +50 نقطة انضباط.", "لا تُحتسب على الباريستا المُجدول نقاط −100 (بدون بصمة) في مؤشر الانضباط عن شيفت تمت تغطيته.", "إذا كان الباريستا المُجدول في إجازة معتمدة في ذلك اليوم: لا خصم ولا إضافة.", "تُحسب التغطية تلقائياً من الجدول والبصمات بعد انتهاء اليوم؛ وإذا عُدّل الجدول أو البصمة لاحقاً تتبعه النتيجة.", "لا يمكن وضع باريستا في نفس اليوم والشيفت في فرعين."] },
+        { type: "para", text: "\"التأخير\" هو عدد الدقائق بين تسجيل حضورك على Counterpoint وموعد فتح فرعك لذلك الشيفت — نفس الموعد الظاهر في جدولك الأسبوعي. تُحدده الإدارة كل شهر وقد يتغير، لذلك القواعد أدناه مكتوبة بالنسبة له وليس لساعة ثابتة." },
+        { type: "subheader", text: "خصومات التأخير" },
+        { type: "para", text: "الباريستا المسجّل في الجدول الأسبوعي لفرع ويوم وشيفت معيّن هو من تتم مراجعة حضوره. كل خصم هو جزء من أجر يوم واحد (الراتب الشهري ÷ 30). حالياً يسجّل المالك أو رئيس البريستا هذه الخصومات من شاشة الخصومات بعد مقارنة أوقات الحضور في Counterpoint بالجدول الأسبوعي، وستُطبَّق تلقائياً عندما يتيح Counterpoint بيانات الحضور لتطبيق العمليات." },
+        { type: "bullets", items: ["خلال 10 دقائق بعد الفتح: لا خصم (فترة سماح).", "تأخر 10–60 دقيقة: خصم نصف يوم.", "تأخر 60–120 دقيقة: خصم يوم كامل.", "تأخر أكثر من 120 دقيقة: خصم يومين.", "عدم تسجيل الحضور إطلاقاً في شيفت مُجدول لك يُعتبر غياباً (no show): خصم 3 أيام.", "قاعدة التكرار: ابتداءً من ثاني تأخير لك في نفس الشهر، يتضاعف كل خصم تأخير بعده في ذلك الشهر.", "إذا كنت في إجازة معتمدة ذلك اليوم، لا يُخصم شيء."] },
         { type: "subheader", text: "خصومات أخرى" },
         { type: "para", text: "يسجّلها المالك أو رئيس البريستا يدوياً من شاشة الخصومات — بنفس حساب نصف يوم من الراتب (الراتب الشهري ÷ 30 × 0.5)." },
-        { type: "bullets", items: ["عدم الالتزام بالقواعد، أو عدم تحديث التطبيق/الموقع كما هو مطلوب: خصم نصف يوم.", "مخالفة النظافة الشخصية أو الزي الموحد: خصم نصف يوم.", "غياب بدون بصمة (no show) مُسجَّل يدوياً وليس عبر فحص البصمات المفقودة التلقائي: خصم 3 أيام.", "قاعدة التكرار: من الغياب بدون بصمة الثاني في نفس الشهر فصاعداً، يُضاعَف كل خصم غياب لاحق في ذلك الشهر. وبشكل منفصل، من خصم السلوك الثاني (قواعد/موقع، نظافة، أو زي) في نفس الشهر فصاعداً، يُضاعَف كل خصم سلوك لاحق في ذلك الشهر."] },
-        { type: "subheader", text: "تأثير مؤشر الانضباط" },
-        { type: "para", text: "منفصل عن خصم الراتب. يبدأ مؤشر الانضباط من 100 كل شهر ويعدّله كل شيفت صباحي: مبكر 30 دقيقة أو أكثر = +10 · مبكر 15–30 دقيقة = +5 · في الموعد أو ضمن سماح الـ10 دقائق = 0 · تأخر 11–120 دقيقة = −20 · تأخر أكثر من 120 دقيقة = −50 · بدون بصمة = −100 · تغطية شيفت غير مخصص = +50. إذا دفعت الخصومات درجتك تحت الصفر، يُخصم الفائض من إجمالي مؤشر الأداء." },
-        { type: "subheader", text: "الإشعارات" },
-        { type: "para", text: "أي بصمة متأخرة أكثر من 10 دقائق ترسل تنبيهاً فورياً داخل التطبيق وبريداً إلكترونياً للمالك ورئيس البريستا. وإذا لم تُسجَّل بصمة خلال ساعة من الفتح، يُرسَل تنبيه ثانٍ تلقائياً." },
+        { type: "bullets", items: ["عدم الالتزام بالقواعد، أو عدم تحديث التطبيق/الموقع كما هو مطلوب: خصم نصف يوم.", "مخالفة النظافة الشخصية أو الزي الموحد: خصم نصف يوم.", "قاعدة التكرار: ابتداءً من ثاني \"غياب\" هذا الشهر، يتضاعف كل غياب بعده في ذلك الشهر. وبشكل منفصل، ابتداءً من ثاني مخالفة سلوكية (القواعد/الموقع، النظافة، أو الزي) هذا الشهر، تتضاعف كل مخالفة سلوكية بعدها."] },
       ]
     },
     {
@@ -22832,7 +22818,7 @@ routes.handbook = function (u) {
         { type: "para", text: "The KPI Scorecard is a monthly performance summary for every barista and head barista. Ten categories are each scored 0–100, then combined by weight into one total score out of 100. Almost everything is calculated automatically from what is recorded in the app during the month." },
         { type: "subheader", text: "The Ten KPI Categories" },
         { type: "bullets", items: [
-          "<strong>Punctuality (5%)</strong> — from sign-in stamp timing vs the branch opening time.",
+          "<strong>Punctuality (5%)</strong> — from your Counterpoint clock-in time vs the branch opening time.",
           "<strong>Waste Control (15%)</strong> — from the monthly waste log (a missing morning-shift entry costs points).",
           "<strong>Cleanliness (10%)</strong> — from the cleaning logs submitted that month.",
           "<strong>Coffee Craft (15%)</strong> — from customer reviews on the Coffee Beats website.",
@@ -22854,7 +22840,7 @@ routes.handbook = function (u) {
         { type: "para", text: "بطاقة مؤشرات الأداء هي ملخص أداء شهري لكل بريستا ورئيس بريستا. عشرة محاور، كل منها يُقيَّم من 0 إلى 100، ثم تُجمَع بالوزن في درجة إجمالية واحدة من 100. كل شيء تقريباً يُحسب تلقائياً مما يُسجَّل في التطبيق خلال الشهر." },
         { type: "subheader", text: "محاور مؤشر الأداء العشرة" },
         { type: "bullets", items: [
-          "<strong>الانضباط (5%)</strong> — من توقيت بصمة الحضور مقارنةً بموعد فتح الفرع.",
+          "<strong>الانضباط (5%)</strong> — من وقت تسجيل حضورك على Counterpoint مقارنةً بموعد فتح الفرع.",
           "<strong>ضبط الهدر (15%)</strong> — من سجل الهدر الشهري (غياب إدخال شيفت صباحي يخصم نقاطاً).",
           "<strong>النظافة (10%)</strong> — من سجلات النظافة المُقدَّمة ذلك الشهر.",
           "<strong>حرفة القهوة (15%)</strong> — من آراء الزبائن على موقع كوفي بيتس.",
@@ -24032,33 +24018,25 @@ routes.app_guide = function (u) {
     },
     {
       icon: "🕐",
-      en_title: "Sign-In Stamp (Clock In)",
-      ar_title: "بصمة الحضور (الوصول)",
+      en_title: "Clock In (Counterpoint Time Clock)",
+      ar_title: "تسجيل الحضور (ساعة Counterpoint)",
       en_steps: [
-        "Tap <strong>Sign-In Stamp</strong> from the home screen <em>as soon as you arrive</em>.",
-        "Select your branch: <strong>Maadi</strong> or <strong>OX</strong>.",
-        "Pick your <strong>shift</strong> (morning or evening) — it is pre-selected from your Weekly Schedule. <strong>Every shift, morning and evening, needs its own stamp, with exactly the same lateness, no-show and KPI rules.</strong> If you work both on the same day, stamp twice.",
-        "Take a <strong>selfie or photo</strong> — this is your proof of arrival.",
-        "Tap <strong>Submit clock-in</strong>.",
-        "<strong>\"Late\" is measured against your branch's opening time for the current month</strong> — the time on your Weekly Schedule. It is set by management each month and can change, so the rules below are always relative to it, never to a fixed clock time.",
-        "<strong>⚠ Automatic salary deduction:</strong> within 10 min after opening = <strong>no penalty</strong> (grace). 10–60 min late = <strong>½ day</strong>. 60–120 min late = <strong>1 full day</strong>. More than 120 min late = <strong>2 days</strong>. Lateness counts from when the clock photo was taken; a photo whose time can't be read = no show = <strong>3 days</strong>. No stamp for an assigned morning shift = no show = <strong>3 days</strong>, applied automatically. Each deduction is a share of one day's pay (monthly salary ÷ 30).",
-        "<strong>Repeat-offender rule:</strong> from your 2nd late stamp in one calendar month onward, every further late penalty that month is <strong>doubled automatically</strong>.",
-        "<strong>Substitute cover:</strong> stamping a shift not assigned to you (covering a colleague) = no penalty even if late, plus <strong>+50 Punctuality KPI</strong>.",
-        "<strong>Punctuality KPI</strong> (separate from the salary deduction): starts at 100 each month. 30+ min early = <strong>+10</strong>. 15–30 min early = <strong>+5</strong>. On time / within grace = 0. 11–120 min late = <strong>−20</strong>. 120+ min late = <strong>−50</strong>. No stamp = <strong>−100</strong>. Cover = <strong>+50</strong>. Anything past 0 spills into your overall KPI.",
-        "<strong>Notifications:</strong> any stamp more than 10 min late sends an immediate in-app alert + email to the owner and head barista. No stamp within 1 hour of opening sends a second alert automatically.",
+        "Clock in on the <strong>Counterpoint till</strong>, not in this app — the Sign-In Stamp and clock-in photo are retired.",
+        "On the till open <strong>Register → Time clock</strong>, type your own 4-digit till PIN and tap <strong>Start shift with PIN</strong> <em>as soon as you arrive</em>.",
+        "Before you leave, type your PIN and tap <strong>End shift with PIN</strong>.",
+        "<strong>Every shift, morning and evening, needs its own clock-in.</strong> Never clock in or out for someone else.",
+        "<strong>\"Late\" is measured against your branch's opening time for that shift</strong> — the time on your Weekly Schedule.",
+        "<strong>⚠ Salary deduction:</strong> within 10 min after opening = <strong>no penalty</strong> (grace). 10–60 min late = <strong>½ day</strong>. 60–120 min late = <strong>1 full day</strong>. More than 120 min late = <strong>2 days</strong>. No clock-in for an assigned shift = <strong>no show, 3 days</strong>. From your 2nd late clock-in in a month, further late penalties that month are <strong>doubled</strong>.",
+        "For now the owner or head barista logs these from the Penalties screen after checking Counterpoint's clock-ins against the Weekly Schedule. They will become automatic once Counterpoint shares clock-in data with this app.",
       ],
       ar_steps: [
-        "اضغط على <strong>بصمة الحضور</strong> من الشاشة الرئيسية <em>فور وصولك</em>.",
-        "اختر الفرع: <strong>المعادي</strong> أو <strong>OX</strong>.",
-        "اختر <strong>الشيفت</strong> (صباحي أو مسائي) — يُحدَّد تلقائياً من جدولك الأسبوعي. <strong>كل شيفت، صباحي ومسائي، يحتاج بصمة خاصة به بنفس قواعد التأخير وعدم الحضور ونقاط الأداء.</strong> إذا عملت الشيفتين في نفس اليوم، سجّل بصمتين.",
-        "التقط <strong>صورة سيلفي أو صورة</strong> — هذا دليل وصولك.",
-        "اضغط <strong>تسجيل الحضور</strong>.",
-        "<strong>يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك للشهر الحالي</strong> — الموعد الظاهر في جدولك الأسبوعي. تحدده الإدارة كل شهر وقد يتغير، لذا القواعد أدناه دائماً نسبةً إليه وليس إلى وقت ثابت.",
-        "<strong>⚠ الخصم التلقائي من الراتب:</strong> خلال 10 دقائق بعد الفتح = <strong>لا خصم</strong> (سماح). تأخر 10–60 دقيقة = <strong>نصف يوم</strong>. 60–120 دقيقة = <strong>يوم كامل</strong>. أكثر من 120 دقيقة = <strong>يومان</strong>. يُحتسب التأخير من وقت التقاط صورة الساعة؛ صورة لا يمكن قراءة وقتها = غياب = <strong>3 أيام</strong>. غياب بدون بصمة لشيفت صباحي مُخصَّص = غياب = <strong>3 أيام</strong>، يُطبَّق تلقائياً. كل خصم جزء من أجر يوم (الراتب الشهري ÷ 30).",
-        "<strong>قاعدة التكرار:</strong> من بصمتك المتأخرة الثانية في نفس الشهر الميلادي فصاعداً، يُضاعَف كل خصم تأخير لاحق تلقائياً.",
-        "<strong>تغطية شيفت:</strong> بصمة شيفت صباحي غير مُخصَّص لك (تغطية زميل) = لا خصم حتى لو تأخرت، و<strong>+50 نقطة انضباط</strong>.",
-        "<strong>مؤشر الانضباط</strong> (منفصل عن خصم الراتب): يبدأ من 100 كل شهر. مبكر 30 دقيقة+ = <strong>+10</strong>. مبكر 15–30 دقيقة = <strong>+5</strong>. في الموعد/ضمن السماح = 0. تأخر 11–120 دقيقة = <strong>−20</strong>. 120+ دقيقة = <strong>−50</strong>. بدون بصمة = <strong>−100</strong>. تغطية = <strong>+50</strong>. أي فائض تحت الصفر يُخصم من إجمالي المؤشر.",
-        "<strong>الإشعارات:</strong> أي بصمة متأخرة أكثر من 10 دقائق ترسل تنبيهاً فورياً وبريداً للمالك ورئيس البريستا. وبدون بصمة خلال ساعة من الفتح يُرسَل تنبيه ثانٍ تلقائياً.",
+        "سجّل حضورك على <strong>كاشير Counterpoint</strong> وليس في هذا التطبيق — تم إيقاف بصمة الحضور وصورة تسجيل الحضور.",
+        "على الكاشير افتح <strong>Register ← Time clock</strong>، اكتب رقم الـ PIN الخاص بك (4 أرقام) واضغط <strong>Start shift with PIN</strong> <em>فور وصولك</em>.",
+        "قبل المغادرة اكتب الـ PIN واضغط <strong>End shift with PIN</strong>.",
+        "<strong>كل شيفت، صباحي ومسائي، يحتاج تسجيل حضور خاص به.</strong> لا تسجّل حضور أو انصراف أي شخص آخر أبداً.",
+        "<strong>يُقاس \"التأخير\" مقارنةً بموعد فتح فرعك لذلك الشيفت</strong> — الموعد الظاهر في جدولك الأسبوعي.",
+        "<strong>⚠ الخصم من الراتب:</strong> خلال 10 دقائق بعد الفتح = <strong>لا خصم</strong> (سماح). تأخر 10–60 دقيقة = <strong>نصف يوم</strong>. 60–120 دقيقة = <strong>يوم كامل</strong>. أكثر من 120 دقيقة = <strong>يومان</strong>. عدم تسجيل الحضور في شيفت مُجدول لك = <strong>غياب، 3 أيام</strong>. من ثاني تأخير في الشهر، تتضاعف خصومات التأخير التالية في ذلك الشهر.",
+        "حالياً يسجّل المالك أو رئيس البريستا هذه الخصومات من شاشة الخصومات بعد مقارنة أوقات الحضور في Counterpoint بالجدول الأسبوعي، وستصبح تلقائية عندما يتيح Counterpoint بيانات الحضور لهذا التطبيق.",
       ],
     },
     {
@@ -24852,7 +24830,7 @@ routes.app_guide = function (u) {
       en_title: "Key Rules — Must Follow",
       ar_title: "قواعد أساسية — يجب الالتزام بها",
       en_steps: [
-        "<strong>🕐 Sign-In Stamp</strong>: Stamp the moment you arrive — for every shift, morning and evening. Never stamp for someone else. Penalties are automatic.",
+        "<strong>🕐 Clock in</strong>: Clock in on the Counterpoint till with your PIN the moment you arrive — every shift, morning and evening. Never clock in for someone else.",
         "<strong>🗑️ Waste Log</strong>: Log every waste entry during your shift — no matter how small. If nothing was wasted, tap No Waste. This is mandatory every shift — missing entries deduct −10 pts from your Waste Control KPI.",
         "<strong>🔒 Shift Close</strong>: Always complete the shift close before leaving. Never skip it.",
         "<strong>🧹 Cleaning Log</strong>: Log cleaning with a photo every shift.",
@@ -24864,7 +24842,7 @@ routes.app_guide = function (u) {
         "<strong>🧾 Add-ons vs Extras (till)</strong>: Syrups, honey, sauces, extra shots and milks go on the drink as an <strong>add-on</strong> (pick the drink → choose the add-on). Use the separate <strong>Extras</strong> button only when the drink doesn't offer that add-on (e.g. tea) or the drink was already paid. Never both — it charges twice. See Handbook Section 1.",
       ],
       ar_steps: [
-        "<strong>🕐 بصمة الحضور</strong>: قم بالبصمة فور وصولك. لا تبصّم لأحد آخر. الخصومات تلقائية.",
+        "<strong>🕐 تسجيل الحضور</strong>: سجّل حضورك على كاشير Counterpoint برقم الـ PIN فور وصولك — كل شيفت، صباحي ومسائي. لا تسجّل حضور أحد آخر.",
         "<strong>🗑️ سجل الهدر</strong>: سجّل كل هدر خلال شيفتك — بغض النظر عن الكمية.",
         "<strong>🔒 إغلاق الشيفت</strong>: أكمل إغلاق الشيفت دائماً قبل المغادرة. لا تتجاوزه أبداً.",
         "<strong>🧹 سجل النظافة</strong>: سجّل النظافة بصورة في كل شيفت.",
@@ -24882,7 +24860,7 @@ routes.app_guide = function (u) {
   // Which "area" each section belongs to, for the grouped reference view.
   const GUIDE_AREA = {
     "Signing In": "start", "Key Rules — Must Follow": "start", "Test Mode": "admin",
-    "Sign-In Stamp (Clock In)": "shift", "Record Waste": "shift", "Shift Close": "shift",
+    "Clock In (Counterpoint Time Clock)": "shift", "Record Waste": "shift", "Shift Close": "shift",
     "Cleaning Log": "shift", "Weekly Schedule": "shift", "Barista Handbook": "shift",
     "Request Leave": "shift", "Restock Alerts & Supplier Orders": "shift",
     "My HR": "me", "My Job Description": "me", "KPI Scorecard": "me",
@@ -24915,14 +24893,14 @@ routes.app_guide = function (u) {
       en: { who: "You are a Barista.", intro: "Everything you touch in the app, in the order of a normal day. Do the ⚠ items every single shift — they are scored automatically." },
       ar: { who: "أنت بريستا.", intro: "كل ما تستخدمه في التطبيق بترتيب يوم عادي. نفّذ بنود ⚠ في كل شيفت — تُقيَّم تلقائياً." },
       duties: {
-        en: ["<strong>Every shift:</strong> Sign-In Stamp on arrival · Record Waste (or No Waste) · Cleaning Log with photo · act on any Restock alert · Shift Close before you leave.",
+        en: ["<strong>Every shift:</strong> Clock in on the Counterpoint till on arrival · Record Waste (or No Waste) · Cleaning Log with photo · act on any Restock alert · Shift Close before you leave.",
              "<strong>Each month:</strong> finish your Training Quiz when it appears · check your KPI Scorecard.",
              "<strong>Keep current:</strong> your PIN private · Emergency Contact in My HR · documents in My ID."],
-        ar: ["<strong>كل شيفت:</strong> بصمة الحضور عند الوصول · تسجيل الهدر (أو لا هدر) · سجل النظافة بصورة · التصرف بأي تنبيه إعادة طلب · إغلاق الشيفت قبل المغادرة.",
+        ar: ["<strong>كل شيفت:</strong> تسجيل الحضور على كاشير Counterpoint عند الوصول · تسجيل الهدر (أو لا هدر) · سجل النظافة بصورة · التصرف بأي تنبيه إعادة طلب · إغلاق الشيفت قبل المغادرة.",
              "<strong>كل شهر:</strong> أنهِ اختبار التدريب عند ظهوره · راجع بطاقة تقييم أدائك.",
              "<strong>حافظ على التحديث:</strong> الـ PIN خاص بك · جهة الطوارئ في الموارد البشرية · مستنداتك في هويتي."],
       },
-      screens: ["Signing In", "Sign-In Stamp (Clock In)", "Record Waste", "Cleaning Log",
+      screens: ["Signing In", "Clock In (Counterpoint Time Clock)", "Record Waste", "Cleaning Log",
         "Restock Alerts & Supplier Orders", "Shift Close", "Weekly Schedule", "Barista Handbook",
         "Request Leave", "Monthly Training Quiz", "KPI Scorecard", "My Job Description",
         "My HR", "My ID", "Notifications & Alerts", "Suggestions & Complaints", "Leaderboard",
@@ -24936,12 +24914,12 @@ routes.app_guide = function (u) {
              "<strong>Weekly:</strong> publish/adjust the roster · log the Maadi ATM deposit · review petty cash.",
              "<strong>Monthly:</strong> submit the end-of-month Inventory Count · review Staff HR before payroll · run the Leadership End-of-Month Check.",
              "<strong>Ongoing:</strong> approve leave, enter penalties, keep menu costs and supplier data current."],
-        ar: ["<strong>كل واجبات شيفت البريستا</strong> (بصمة، هدر، نظافة، إعادة طلب، إغلاق شيفت).",
+        ar: ["<strong>كل واجبات شيفت البريستا</strong> (تسجيل الحضور، هدر، نظافة، إعادة طلب، إغلاق شيفت).",
              "<strong>أسبوعياً:</strong> نشر/تعديل الجدول · تسجيل إيداع الصراف بالمعادي · مراجعة النثرية.",
              "<strong>شهرياً:</strong> تقديم جرد نهاية الشهر · مراجعة الموارد البشرية قبل الرواتب · تشغيل فحص نهاية الشهر القيادي.",
              "<strong>مستمر:</strong> اعتماد الإجازات، إدخال العقوبات، تحديث تكاليف المنيو وبيانات الموردين."],
       },
-      screens: ["Signing In", "Sign-In Stamp (Clock In)", "Record Waste", "Cleaning Log",
+      screens: ["Signing In", "Clock In (Counterpoint Time Clock)", "Record Waste", "Cleaning Log",
         "Restock Alerts & Supplier Orders", "Shift Close", "Weekly Schedule", "Barista Handbook",
         "Inventory Count (Stock Take)", "Record Purchase", "Inventory Items & Suppliers",
         "Inventory Intelligence Engine", "Petty Cash", "Maadi Deposits", "Bank Ledger",
@@ -26006,7 +25984,7 @@ routes.leadership_roles = function(u) {
 
   const ROLES_META = [
     { key:"weekly_schedule",  label:"📅 Schedule Manager",
-      desc:"Accountable for weekly schedule and sign-in stamp compliance. Also manages leave requests — access to view and submit leaves is granted for the month. Gets alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from the Leadership KPI; a late stamp (>10 min) deducts 10 pts. The window to act is same-day — if the barista's stamp is submitted before the owner runs the missing-stamp check, no deduction applies. Head baristas: role counted in their Leadership KPI. Regular baristas: KPI unaffected — earns a 10% salary bonus for weeks on shift instead." },
+      desc:"Accountable for the weekly schedule and clock-in compliance: checks Counterpoint's Time clock against the schedule and logs late / no-show penalties from the Penalties screen. Also manages leave requests — access to view and submit leaves is granted for the month. Head baristas: role counted in their Leadership KPI. Regular baristas: KPI unaffected — earns a 10% salary bonus for weeks on shift instead." },
     { key:"budget_inventory", label:"💰 Budget & Inventory Manager",
       desc:"Responsible for managing petty cash, logging the weekly Maadi ATM cash deposit, and submitting the end-of-month inventory snapshot. Gets low-stock and reorder alerts. Full access to all inventory routes (items, suppliers, reorder, waste, purchases, snapshots) and cash routes (petty cash, ATM deposits). Penalty: half-day if end-of-month snapshot is missing (no penalty for a missed weekly deposit). Head baristas: role counted in their Leadership KPI. Regular baristas: KPI unaffected — earns a 10% salary bonus for weeks on shift instead." },
   ];
@@ -26561,8 +26539,8 @@ routes.my_scorecard = function(u) {
     const ROLE_KEYS = ["weekly_schedule","inventory_management","cash_status"];
     const ROLE_INFO = {
       weekly_schedule:      { en:"📅 Schedule Manager",  ar:"📅 مدير الجداول",
-        descEn:"You are accountable for the weekly schedule and sign-in stamp compliance. You are alerted when stamps are late or missing. Each unresolved missing stamp deducts 15 pts from your Leadership KPI; a late stamp (>10 min) deducts 10 pts. Act on alerts the same day — a stamp submitted before the owner's missing-stamp check avoids the deduction.",
-        descAr:"أنت مسؤول عن الجدول الأسبوعي وبصمات الحضور هذا الشهر. ستتلقى تنبيهاً عند غياب أو تأخر البصمة. كل بصمة مفقودة غير معالجة تحسم 15 نقطة من نقاط قيادتك، والتأخر أكثر من 15 دقيقة يحسم 10 نقاط. تصرف في نفس اليوم — البصمة المسجّلة قبل فحص المدير لا تُحسب عليك." },
+        descEn:"You are accountable for the weekly schedule and clock-in compliance. Check Counterpoint's Time clock against the schedule every day and log late or no-show penalties from the Penalties screen.",
+        descAr:"أنت مسؤول عن الجدول الأسبوعي والتزام الفريق بتسجيل الحضور هذا الشهر. راجع ساعة حضور Counterpoint مقابل الجدول يومياً وسجّل خصومات التأخير أو الغياب من شاشة الخصومات." },
       inventory_management: { en:"📦 Inventory Manager", ar:"📦 مدير المخزون",
         descEn:"You must submit the end-of-month inventory snapshot. You receive all low-stock alerts.",
         descAr:"عليك تسليم جرد المخزون في آخر الشهر. ستتلقى تنبيهات نقص البضاعة." },
@@ -26593,7 +26571,7 @@ routes.my_scorecard = function(u) {
   const catCard = el("div",{class:"card",style:{marginBottom:"12px"}});
   catCard.appendChild(el("div",{style:{fontWeight:"700",fontSize:"14px",marginBottom:"4px"}},isAR?"تفصيل النقاط":"Score Breakdown"));
   const SRC_LABELS = {
-    punctuality: isAR?"تلقائي: بصمة الحضور":"Auto: Sign-In Stamp",
+    punctuality: isAR?"ساعة حضور Counterpoint":"Counterpoint Time clock",
     waste:       isAR?"تلقائي: سجل الهدر":"Auto: Waste Log",
     cleanliness: isAR?"تلقائي: سجل النظافة":"Auto: Cleaning Log",
     craft:       isAR?"شهري: تقييمات coffeebeats.art":"Monthly: coffeebeats.art Reviews",
@@ -27338,7 +27316,7 @@ routes.my_jd = function(u) {
         icon:"⏱️",
         en:"Punctuality & Attendance",ar:"الانضباط والحضور",
         items_en:[
-          "Arrive and clock in on time — measured daily via Sign-In Stamp · KPI: Punctuality Score ≥ 80 (auto-calculated)",
+          "Arrive and clock in on time — measured daily via the Counterpoint Time clock · KPI: Punctuality Score ≥ 80",
           "Grace period: ≤10 min late = no penalty. 10–60 min = ½ day deducted. 60–120 min = 1 day. >120 min = 2 days. Photo with no readable time or no stamp = no show = 3 days.",
           "Late 2+ times in same month: every further penalty that month is doubled automatically",
           "Covering a shift not assigned to you earns +50 punctuality KPI bonus points automatically",
@@ -27347,7 +27325,7 @@ routes.my_jd = function(u) {
           "Submit Cleaning Log and Waste Log by end of every shift — completion tracked automatically · KPI: Shift Compliance ≥ 90%",
         ],
         items_ar:[
-          "الحضور والبصمة في الوقت المحدد — قياس يومي عبر بصمة الحضور · الهدف: نقاط الانضباط ≥ ٨٠ (حساب تلقائي)",
+          "الحضور في الوقت المحدد — قياس يومي عبر ساعة حضور Counterpoint · الهدف: نقاط الانضباط ≥ ٨٠",
           "فترة سماح: ≤١٠ دقائق لا خصم. ١٠–٦٠ دقيقة = خصم نصف يوم. ٦٠–١٢٠ دقيقة = يوم كامل. أكثر من ١٢٠ دقيقة = يومان. غياب بدون بصمة = ٣ أيام.",
           "التأخر مرتين أو أكثر في نفس الشهر: يُضاعَف كل خصم لاحق في ذلك الشهر تلقائياً",
           "تغطية شيفت غير مُخصَّص لك تمنحك +٥٠ نقطة مكافأة في مؤشر الانضباط تلقائياً",
