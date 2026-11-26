@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- CB_BUILD:20261125-355 -->
+<!-- CB_BUILD:20261126-069 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -396,7 +396,7 @@
   // busted, bypassing any HTTP/PWA cache) and read the build marker out of the
   // server's copy. If the server is newer than what we're running, hard-reload
   // once (localStorage loop-guard so a fetch quirk can't reload-loop the app).
-  var BUILD = "20261125-355";
+  var BUILD = "20261126-069";
   (function() {
     function checkFresh() {
       try {
@@ -5581,14 +5581,14 @@ function loginView() {
     userList.innerHTML = "";
     for (const u of people) {
       const icon = u.role === "owner" ? "🗝️" : u.role === "accountant" ? "🧮" : u.role === "head_barista" ? "⭐" : "👤";
-      const branchLabel = u.role === "accountant" ? "all branches"
+      const brText = u.role === "accountant" ? "all branches"
         : (u.branches && u.branches.length) ? u.branches.map(branchLabel).join(", ")
         : (["barista","head_barista"].includes(u.role) ? "rotates" : "");
       userList.appendChild(el("div", { class: "row", onClick: () => selectUser(u) }, [
         el("div", { class: "icon", style: { fontSize: "22px" } }, icon),
         el("div", { class: "grow" }, [
           el("div", { class: "title" }, u.name),
-          el("div", { class: "sub" }, `${roleMap[u.role] || u.role} · ${branchLabel}`),
+          el("div", { class: "sub" }, `${roleMap[u.role] || u.role} · ${brText}`),
         ]),
         el("div", { class: "pill" }, "Tap"),
       ]));
@@ -6811,7 +6811,7 @@ routes.shift_close_new = function (u) {
         (() => {
           const sel = el("select", { style: { flex: "0 0 auto", width: "130px" } },
             [el("option", { value: "" }, T("— who? —","— من؟ —")),
-             ...[...new Set([...staffDir.shiftStaff().map(x => x.name), "Mohamed", "Bakr"])].map(b => el("option", { value: b, selected: b === row.who ? "true" : null }, b))]);
+             ...[...new Set([...staffDir.shiftStaff().map(x => x.name), ...(row.who ? [row.who] : [])])].map(b => el("option", { value: b, selected: b === row.who ? "true" : null }, b))]);
           sel.addEventListener("change", () => { row.who = sel.value; });
           return sel;
         })(),
@@ -16320,6 +16320,7 @@ routes.roster = function (u) {
     "Sign-in stamps are checked against these times — morning AND evening shift each need their own stamp, with the same rules (evening rule starts 20 Oct 2026). 10–60 min late = ½ day · 60–120 min = 1 day · >120 min = 2 days · Photo with no readable time or no stamp = no show = 3 days (applied automatically). ≤10 min = no penalty (grace period). If the same barista is late 2+ times in a month, the penalty doubles. Covering a shift not assigned to you = +50 KPI bonus. Deductions show automatically in each barista's salary."));
   for (const otBranch of allBranches()) {
     if (otBranch === "ox" && !_otOxVisible) continue;
+    if (otBranch === "zawya") continue; // closed — not on the weekly schedule
     const brLabel = branchLabel(otBranch);
     otCard.appendChild(el("div", { style: { fontWeight: "600", marginTop: "10px", marginBottom: "4px", fontSize: "13px" } }, brLabel));
     const otMetaEl = el("div", { class: "muted small", style: { marginBottom: "4px" } });
@@ -16369,9 +16370,6 @@ routes.roster = function (u) {
     { key: "small_studio",  label: "🎬 Small Studio",  icon: "🎬", color: "#0ea5e9",
       calId: "36tgil07g61tskionpia7d0tuc@group.calendar.google.com",
       src: "https://calendar.google.com/calendar/embed?src=36tgil07g61tskionpia7d0tuc%40group.calendar.google.com&ctz=Africa%2FCairo" },
-    { key: "zawya",         label: "🎞 Zawya Cinema",  icon: "🎞", color: "#f59e0b",
-      calId: "37f8d281d892c7428e34906c5d4e42e716af83092630654898f9cf5035836fde@group.calendar.google.com",
-      src: "https://calendar.google.com/calendar/embed?src=37f8d281d892c7428e34906c5d4e42e716af83092630654898f9cf5035836fde%40group.calendar.google.com&ctz=Africa%2FCairo" },
     { key: "events",        label: "🎪 CB Events",     icon: "🎪", color: "#e11d48",
       calId: "c_2f564847884c6daa36066faf75962669f717c476550c0e8acc94c19120aa8c6b@group.calendar.google.com",
       src: "https://calendar.google.com/calendar/embed?src=c_2f564847884c6daa36066faf75962669f717c476550c0e8acc94c19120aa8c6b%40group.calendar.google.com&ctz=Africa%2FCairo" },
@@ -16389,7 +16387,7 @@ routes.roster = function (u) {
     el("span", { style: { fontSize: "18px" } }, "📆"),
     el("div", {}, [
       el("div", { style: { fontWeight: "700", fontSize: "14px" } }, "Live Calendars"),
-      el("div", { class: "muted small" }, "Big Studio · Small Studio · Zawya Cinema · CB Events"),
+      el("div", { class: "muted small" }, "Big Studio · Small Studio · CB Events"),
     ]),
   ]);
 
@@ -16611,7 +16609,7 @@ routes.roster = function (u) {
       const addForm = el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "flex-end" } });
       const dateInp  = el("input",    { type: "date",   placeholder: "Date",   style: { maxWidth: "150px" } });
       const branchSel = el("select",  { style: { maxWidth: "150px" } });
-      for (const [v, l] of [["all","All branches"],["maadi","Maadi"],["ox","OX"],["zawya","Zawya (archive)"],["events","Coffee Beats Events"]]) {
+      for (const [v, l] of [["all","All branches"],["maadi","Maadi"],["ox","OX"],["events","Coffee Beats Events"]]) {
         branchSel.appendChild(el("option", { value: v }, l));
       }
       const titleInp = el("input",    { type: "text",   placeholder: "Title (e.g. OX Film Night)", style: { minWidth: "200px", flex: "1" } });
@@ -16753,7 +16751,7 @@ routes.roster = function (u) {
     // Week start as local noon — avoids UTC-offset shifts when we reformat
     const weekStart = new Date(weekOf + "T12:00:00");
 
-    // Group by DAY → then branch+shift (Mon → Maadi Morning / Night, Zawya Morning / Night)
+    // Group by DAY → then branch+shift (Mon → Maadi Morning / Night, OX Morning)
     for (let di = 0; di < ROSTER_DAYS.length; di++) {
       const day = ROSTER_DAYS[di];
       // Compute the actual calendar date for this roster day using local time
@@ -16805,9 +16803,8 @@ routes.roster = function (u) {
       // External baristas (active only) — for events shifts
       const activeExtBaristas = (state.external_baristas || []).filter(b => b.active !== false);
 
-      // Zawya drops off after its last trading day; OX appears from 24 Nov 2026.
+      // Zawya is closed and no longer shown on the schedule (old rosters stay in state.rosters); OX appears from its opening date.
       const _rosterBranches = ["maadi"];
-      if (!BRANCH_LIFECYCLE.zawya.close || dayDateStr <= BRANCH_LIFECYCLE.zawya.close) _rosterBranches.push("zawya");
       if (dayDateStr >= OX_SCHEDULE_FROM) _rosterBranches.push("ox");
       _rosterBranches.push("events");
       for (const branch of _rosterBranches) {
@@ -17401,7 +17398,7 @@ routes.users = function (u) {
     .sort((a,b) => a.name.localeCompare(b.name));
 
   function renderStaffRow(usr) {
-    const branchLabel = (usr.branches && usr.branches.length)
+    const brText = (usr.branches && usr.branches.length)
       ? usr.branches.map(branchLabel).join(", ")
       : (["barista","head_barista"].includes(usr.role) ? "rotates (Maadi + OX)" : "\u2014");
     const extra = (usr.extra_access || []).length;
@@ -17419,7 +17416,7 @@ routes.users = function (u) {
     const rowChildren = [
       el("div", { class: "grow" }, [
         el("div", { class: "title" }, usr.name),
-        el("div", { class: "sub" }, `${usr.role} \xb7 ${branchLabel}${rightsNote}`),
+        el("div", { class: "sub" }, `${usr.role} \xb7 ${brText}${rightsNote}`),
       ]),
       el("span", { class: "pill " + (usr.active ? "ok" : "bad") }, usr.active ? "active" : "disabled"),
     ];
