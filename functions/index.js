@@ -248,6 +248,28 @@ exports.setStaffActive = onCall(async (request) => {
   return { ok: true };
 });
 
+// ─── deleteStaffUser ──────────────────────────────────────────────────────────
+// Owner-only, permanent. Removes the Auth account and both staff docs.
+// Only allowed for staff who are already deactivated (archived), so an active
+// team member can never be wiped by a mis-tap.
+exports.deleteStaffUser = onCall(async (request) => {
+  _requireOwner(request);
+  const { targetUid } = request.data || {};
+  if (!targetUid) throw new HttpsError("invalid-argument", "targetUid is required.");
+  if (targetUid === request.auth.uid) throw new HttpsError("failed-precondition", "You can't delete your own account.");
+
+  const db = getDb();
+  const pub = await db.collection("staff_public").doc(targetUid).get();
+  if (!pub.exists) throw new HttpsError("not-found", "Staff member not found.");
+  if (pub.data().active !== false) throw new HttpsError("failed-precondition", "Deactivate this staff member before deleting them.");
+
+  try { await getAuth().deleteUser(targetUid); }
+  catch (e) { if (e.code !== "auth/user-not-found") throw e; }
+  await db.collection("staff").doc(targetUid).delete();
+  await db.collection("staff_public").doc(targetUid).delete();
+  return { ok: true, name: pub.data().name || "" };
+});
+
 // ─── updateStaffProfile ───────────────────────────────────────────────────────
 // Any signed-in user can update their own emergency_number.
 // Owners can additionally update name, role, branches, active, and emergency_number for anyone.
